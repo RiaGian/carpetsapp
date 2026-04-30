@@ -882,6 +882,7 @@ const itemsByOrderAll = React.useMemo(() => {
   return groupItemsByOrder(histItems); 
 }, [histItems]);
 
+
 // helper: group items by order once
 function groupItemsByOrder(items: any[]) {
   const map = new Map<string, any[]>()
@@ -2037,6 +2038,17 @@ const [returnsPrompt, setReturnsPrompt] = useState<{ customerId: string; orderId
 const [pendingReturnsByCustomer, setPendingReturnsByCustomer] = useState<Record<string, string[]>>({})
 
 
+function removePendingReturn(customerId: string, orderId: string) {
+  setPendingReturnsByCustomer(prev => {
+    const list = (prev[customerId] || []).filter(oid => oid !== orderId)
+    if (list.length === 0) {
+      const { [customerId]: _drop, ...rest } = prev
+      return rest
+    }
+    return { ...prev, [customerId]: list }
+  })
+}
+
 const [cities, setCities] = useState([''])
 
 const updateCity = (index: number, value: string) => {
@@ -3157,49 +3169,56 @@ function ReadyForceConfirmModal({
                           status={item.status || 'Νέα'}
                           hasDebt={!!item.hasDebt} 
                           onChangeStatus={async (v) => {
+                              if (v === 'Παραδόθηκε') {
+                                setConfirmDelivered({ orderId: item.id })
+                                return
+                              }
 
-                            if (v === 'Παραδόθηκε') {
-                              setConfirmDelivered({ orderId: item.id })
-                              return
-                            }
+                              if (v === 'Έτοιμη') {
+                                try {
+                                  if (!selectedCustomer) {
+                                    setOrders(prev =>
+                                      prev.map(o => (o.id === item.id ? { ...o, status: 'Έτοιμη', hasDebt: false } : o))
+                                    )
+                                    await updateOrder(item.id, { orderStatus: 'Έτοιμη', hasDebt: false }, userId)
+                                    // καθάρισε pending-returns αν υπάρχει selectedCustomer
+                                    //if (selectedCustomer) removePendingReturn(selectedCustomer.id, item.id)
+                                    return
+                                  }
 
-                            if (v === 'Έτοιμη') {
+                                  const allWashed = await allItemsWashedForOrder(selectedCustomer.id, item.id)
+                                  if (allWashed) {
+                                    setOrders(prev =>
+                                      prev.map(o => (o.id === item.id ? { ...o, status: 'Έτοιμη', hasDebt: false } : o))
+                                    )
+                                    await updateOrder(item.id, { orderStatus: 'Έτοιμη', hasDebt: false }, userId)
+                                    // clear
+                                    if (selectedCustomer) removePendingReturn(selectedCustomer.id, item.id)
+                                  } else {
+                                    setConfirmReadyForce({ orderId: item.id })
+                                  }
+                                } catch (e) {
+                                  console.error('updateOrder status failed', e)
+                                  Alert.alert('Σφάλμα', 'Η ενημέρωση κατάστασης απέτυχε.')
+                                }
+                                return
+                              }
+
+                              // «Νέα» ή «Σε επεξεργασία»
+                              setOrders(prev =>
+                                prev.map(o => (o.id === item.id ? { ...o, status: v, hasDebt: false } : o))
+                              )
+
                               try {
-                                if (!selectedCustomer) {
-
-                                  setOrders(prev =>
-                                    prev.map(o => (o.id === item.id ? { ...o, status: 'Έτοιμη', hasDebt: false } : o))
-                                  )
-                                  await updateOrder(item.id, { orderStatus: 'Έτοιμη', hasDebt: false }, userId)
-                                  return
-                                }
-
-                                const allWashed = await allItemsWashedForOrder(selectedCustomer.id, item.id)
-                                if (allWashed) {
-
-                                  setOrders(prev =>
-                                    prev.map(o => (o.id === item.id ? { ...o, status: 'Έτοιμη', hasDebt: false } : o))
-                                  )
-                                  await updateOrder(item.id, { orderStatus: 'Έτοιμη', hasDebt: false }, userId)
-                                } else {
-                                  // υπάρχουν "Άπλυτα" -> άνοιξε modal επιβεβαίωσης
-                                  setConfirmReadyForce({ orderId: item.id })
-                                }
+                                await updateOrder(item.id, { orderStatus: v, hasDebt: false }, userId)
+                                // ✅ ΜΕΤΑ την επιτυχή ενημέρωση
+                                if (selectedCustomer) removePendingReturn(selectedCustomer.id, item.id)
                               } catch (e) {
                                 console.error('updateOrder status failed', e)
                                 Alert.alert('Σφάλμα', 'Η ενημέρωση κατάστασης απέτυχε.')
                               }
-                              return
-                            }
+                            }}
 
-                            setOrders(prev =>
-                              prev.map(o => (o.id === item.id ? { ...o, status: v, hasDebt: false } : o))
-                            )
-                            updateOrder(item.id, { orderStatus: v, hasDebt: false }, userId).catch((e) => {
-                              console.error('updateOrder status failed', e)
-                              Alert.alert('Σφάλμα', 'Η ενημέρωση κατάστασης απέτυχε.')
-                            })
-                          }}
 
                           onDeletePress={() => askDeleteOrder(item)}
                           receiptNumber={item.receiptNumber}
@@ -3686,6 +3705,7 @@ function ReadyForceConfirmModal({
         setOrders(prev => prev.map(o => (o.id === orderId ? { ...o, status: 'Έτοιμη', hasDebt: false } : o)))
         try {
           await updateOrder(orderId, { orderStatus: 'Έτοιμη', hasDebt: false }, userId)
+          if (selectedCustomer) removePendingReturn(selectedCustomer.id, orderId)
         } catch (e) {
           console.error('updateOrder status failed', e)
           Alert.alert('Σφάλμα', 'Η ενημέρωση κατάστασης απέτυχε.')

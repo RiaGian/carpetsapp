@@ -296,8 +296,8 @@ export default function HistoryScreen() {
 
   // filter UI
   const [search, setSearch] = React.useState('')
-  const [yearFrom, setYearFrom] = React.useState('Όλα')
-  const [yearTo, setYearTo] = React.useState('Όλα')
+  const [dateFromInput, setDateFromInput] = React.useState('') 
+const [dateToInput, setDateToInput] = React.useState('') 
   const [status, setStatus] = React.useState('Όλα')
   const [category, setCategory] = React.useState('Όλες')
   const [storageStatus, setStorageStatus] = React.useState('Όλες')
@@ -371,6 +371,78 @@ const matchesAnyItemCodeToken = (it: HistoryItem, tokens: string[]) => {
 }
 
 
+// === Date helpers ===
+// parser που πιάνει ISO, dd/MM/yyyy, dd-MM-yyyy, timestamps, Date
+const parseDateFlexible = (v?: any): number => {
+  if (v == null) return NaN
+  if (v instanceof Date) return v.getTime()
+  if (typeof v === 'number') return Number.isFinite(v) ? v : NaN
+  const s = String(v).trim()
+  if (!s) return NaN
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+    const iso = s.replace(' ', 'T')
+    const t = Date.parse(iso)
+    return Number.isNaN(t) ? NaN : t
+  }
+  const m = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/)
+  if (m) {
+    const [, dStr, mStr, yStr, hhStr, mmStr, ssStr] = m
+    const d  = parseInt(dStr, 10)
+    const mo = parseInt(mStr, 10) - 1
+    const y  = parseInt(yStr, 10)
+    const hh = hhStr ? parseInt(hhStr, 10) : 0
+    const mm = mmStr ? parseInt(mmStr, 10) : 0
+    const ss = ssStr ? parseInt(ssStr, 10) : 0
+    const dt = new Date(y, mo, d, hh, mm, ss).getTime()
+    return Number.isNaN(dt) ? NaN : dt
+  }
+  const t = Date.parse(s)
+  return Number.isNaN(t) ? NaN : t
+}
+
+// παίρνει σειρά πιθανών πεδίων ημερομηνίας και επιστρέφει όποιο κάνει parse
+const coalesceDate = (obj: any, fields: string[]): number => {
+  for (const f of fields) {
+    const t = parseDateFlexible(obj?.[f])
+    if (!Number.isNaN(t)) return t
+  }
+  return NaN
+}
+
+// έλεγχος αν ts ∈ [from, to)
+const inRangeTs = (ts: number, from?: string | null, to?: string | null) => {
+  if (Number.isNaN(ts)) return false
+  const f = from ? Date.parse(from) : -Infinity
+  const t = to   ? Date.parse(to)   : +Infinity
+  return ts >= f && ts < t
+}
+
+// 'YYYY-MM-DDTHH:mm:ss' σε ΤΟΠΙΚΗ ώρα (όχι UTC)
+const formatLocalISO = (d: Date) => {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const y = d.getFullYear()
+  const m = pad(d.getMonth() + 1)
+  const day = pad(d.getDate())
+  const hh = pad(d.getHours())
+  const mm = pad(d.getMinutes())
+  const ss = pad(d.getSeconds())
+  return `${y}-${m}-${day}T${hh}:${mm}:${ss}`
+}
+
+// inclusive αρχή μέρας (local)
+const toStartOfDayLocal = (t: number) => {
+  const d = new Date(t); d.setHours(0,0,0,0)
+  return formatLocalISO(d)
+}
+
+// exclusive τέλος (επόμενη μέρα @ 00:00 local)
+const toExclusiveEndLocal = (t: number) => {
+  const d = new Date(t); d.setHours(0,0,0,0); d.setDate(d.getDate() + 1)
+  return formatLocalISO(d)
+}
+
+
+
   // delivered + no dept
   const deliveredRevenue = React.useMemo(() => {
   const norm = (s?: string) =>
@@ -395,22 +467,28 @@ const matchesAnyItemCodeToken = (it: HistoryItem, tokens: string[]) => {
 }, [rowsOrders])
 
   const filters = React.useMemo<HistoryFilters>(() => {
-    const yf = yearFrom !== 'Όλα' ? Number(yearFrom) : null
-    const yt = yearTo !== 'Όλα' ? Number(yearTo) : null
-    return {
-      search: search.trim() || undefined,
-      yearFrom: yf,
-      yearTo: yt,
-      category: category !== 'Όλες' ? category : null,
-      status: status !== 'Όλα' ? status : null,
-      customerId: customerId,
-      storageStatus: storageStatus !== 'Όλες' ? storageStatus : null,
+  const tsFrom = parseDateFlexible(dateFromInput)
+  const tsTo   = parseDateFlexible(dateToInput)
 
-      dateFrom: dateRange.start || undefined,
-      dateTo:   dateRange.end   || undefined,
-      limit: 200,
-    }
-  }, [search, yearFrom, yearTo, category, status, storageStatus, customerId, dateRange])
+  // Χρησιμοποιούμε τα ΤΟΠΙΚΑ helpers για inclusive start & exclusive end
+  const effFrom = Number.isFinite(tsFrom) ? toStartOfDayLocal(tsFrom)   : undefined
+  const effTo   = Number.isFinite(tsTo)   ? toExclusiveEndLocal(tsTo)   : undefined
+
+  // Αν το εύρος είναι ανάποδο, άσε μόνο το from
+  const badRange = effFrom && effTo && new Date(effTo) <= new Date(effFrom)
+
+  return {
+    search: (search || undefined),
+    category: category !== 'Όλες' ? category : null,
+    status: status !== 'Όλα' ? status : null,
+    customerId,
+    storageStatus: storageStatus !== 'Όλες' ? storageStatus : null,
+    dateFrom: effFrom,
+    dateTo: badRange ? undefined : effTo,
+    limit: 1000,
+  } as HistoryFilters
+}, [search, category, status, storageStatus, customerId, dateFromInput, dateToInput])
+
 
 
     // Σπάει το query σε “code-like” tokens (#, γράμματα/αριθμοί)
@@ -648,6 +726,34 @@ const matchesAnyItemCodeToken = (it: HistoryItem, tokens: string[]) => {
           }
         }
 
+        const effFrom = (filters as any).dateFrom
+        const effTo   = (filters as any).dateTo
+
+        if (effFrom || effTo) {
+          ordersUniverse = ordersUniverse.filter(o => {
+            const ts = coalesceDate(o, ['orderDate', 'createdAt', 'order_date', 'date'])
+            return inRangeTs(ts, effFrom, effTo)
+          })
+
+          itemsUniverse = itemsUniverse.filter(i => {
+            const ts = coalesceDate(i, ['order_date', 'createdAt', 'date'])
+            return inRangeTs(ts, effFrom, effTo)
+          })
+        }
+
+        if (!rawQ) {
+          orders = ordersUniverse
+          items  = itemsUniverse
+
+          const orderCustomerIdsAfterDate = new Set(
+            orders
+              .map(o => (o as any).customerId || (o as any).customer_id)
+              .filter(Boolean) as string[]
+          )
+          customers = allCustomers.filter(c => orderCustomerIdsAfterDate.has(c.id))
+        }
+
+
 
 
        // ---- Συνδυαστικό SEARCH (closure) ----
@@ -750,6 +856,8 @@ const matchesAnyItemCodeToken = (it: HistoryItem, tokens: string[]) => {
       }
 
 
+
+
         // Περιορισμός σε συγκεκριμένο πελάτη (ΤΕΛΕΥΤΑΙΟ)
         if (customerId) {
           customers = customers.filter(c => c.id === customerId)
@@ -845,24 +953,59 @@ const matchesAnyItemCodeToken = (it: HistoryItem, tokens: string[]) => {
           />
         </View>
 
-        {/* Row: Από Χρονιά / Μέχρι Χρονιά */}
+        {/* Row: Από Ημερομηνία / Μέχρι Ημερομηνία */}
         <View style={styles.row2}>
           <View style={[styles.inputWrap, styles.flex1]}>
             <Text style={styles.labelRowTitle}>
               <Ionicons name="calendar-outline" size={16} color={colors.primary} /> {'  '}
-              Από Χρονιά
+              Από Ημερομηνία
             </Text>
-            <SimpleDropdown value={yearFrom} options={yearOptions} onChange={setYearFrom} placeholder="Όλα" />
+            <View style={styles.dropdownWrap}>
+              <TextInput
+                value={dateFromInput}
+                onChangeText={setDateFromInput}
+                placeholder=" dd/mm/yyyy"
+                placeholderTextColor={colors.muted}
+                style={[styles.filledInputText, Platform.OS === 'web' && ({ outlineStyle: 'none' } as any)]}
+                keyboardType={Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'default'}
+                returnKeyType="done"
+              />
+            </View>
           </View>
 
           <View style={[styles.inputWrap, styles.flex1]}>
             <Text style={styles.labelRowTitle}>
               <Ionicons name="calendar-outline" size={16} color={colors.primary} /> {'  '}
-              Μέχρι Χρονιά
+              Μέχρι Ημερομηνία
             </Text>
-            <SimpleDropdown value={yearTo} options={yearOptions} onChange={setYearTo} placeholder="Όλα" />
+            <View style={styles.dropdownWrap}>
+              <TextInput
+                value={dateToInput}
+                onChangeText={setDateToInput}
+                placeholder="dd/mm/yyyy"
+                placeholderTextColor={colors.muted}
+                style={[styles.filledInputText, Platform.OS === 'web' && ({ outlineStyle: 'none' } as any)]}
+                keyboardType={Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'default'}
+                returnKeyType="done"
+              />
+            </View>
           </View>
         </View>
+
+        {/* Optional μικρό hint/validation */}
+        {(() => {
+          const f = parseDateFlexible(dateFromInput)
+          const t = parseDateFlexible(dateToInput)
+          const bad = (dateFromInput && Number.isNaN(f)) || (dateToInput && Number.isNaN(t))
+          if (!bad) return null
+          return (
+            <Text style={{ color: '#B91C1C', marginTop: 6,fontSize: 12 }}>
+              Δώσε ημερομηνίες μορφής dd/MM/yyyy (π.χ. 02/03/2024)
+            </Text>
+          )
+        })()}
+
+        
 
         {/* Row: Κατάσταση Τεμαχίων / Κατάσταση Αποθήκης */}
         <View style={styles.row2}>

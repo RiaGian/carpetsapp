@@ -227,6 +227,11 @@ export default function EditOrderScreen() {
   const isRugCategory = (c?: string | null) =>
   c === 'Χαλί' || c === 'Μοκέτα' || c === 'Διαδρομάκι';
 
+  const [confirmReadyOpen, setConfirmReadyOpen] = useState(false)
+
+  const [pieceDimensions, setPieceDimensions] = useState<Record<string, { lengthM: string, widthM: string }>>({})
+
+
   // ADD — λίστα από orderIds ανά πελάτη, με persist
 const [pendingReturnsByCustomer, setPendingReturnsByCustomer] = useState<Record<string, string[]>>({})
 
@@ -434,6 +439,12 @@ const isReturnsPending = useMemo(() => {
     return sum.toFixed(2)
   }, [pieces])
 
+  const clearPendingIfLeavingDelivered = () => {
+    if (orderStatus === 'delivered' && selectedCustomer && orderId) {
+      clearReturnsPending(selectedCustomer, String(orderId))
+    }
+  }
+
 
 
   const [pricePerSqmByCustomer, setPricePerSqmByCustomer] =
@@ -458,6 +469,21 @@ const isReturnsPending = useMemo(() => {
   }, [pricePerSqmByCustomer, selectedCustomer])
 
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const saved = await AsyncStorage.getItem('pieceDimensions')
+        if (saved) setPieceDimensions(JSON.parse(saved))
+      } catch (err) {
+        console.error('Failed to load pieceDimensions', err)
+      }
+    })()
+  }, [])
+
+  useEffect(() => {
+    AsyncStorage.setItem('pieceDimensions', JSON.stringify(pieceDimensions))
+      .catch(err => console.error('Failed to save pieceDimensions', err))
+  }, [pieceDimensions])
 
   const onChangeDeposit = (t: string) => {
     const cleaned = t.replace(/[^\d.,]/g, '')
@@ -635,6 +661,8 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
 
     const perM2 = isRugCategory(p.category)
 
+    const savedDims = p.id ? pieceDimensions[p.id] : undefined
+
     setPieceForm({
       color: p.color ?? '',
       code: p.code ?? '',
@@ -642,8 +670,8 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
       status: p.status ?? 'άπλυτο',
       workType: p.workType ?? 'Επιστροφή',
       pricingType: perM2 ? 'perM2' : (p.pricingType ?? 'perPiece'),
-      lengthM: p.lengthM ?? '',
-      widthM: p.widthM ?? '',
+      lengthM: savedDims?.lengthM ?? p.lengthM ?? '',
+      widthM:  savedDims?.widthM  ?? p.widthM  ?? '',
       pricePerM2: perM2
       ? (p.pricePerM2 && p.pricePerM2 !== '' ? p.pricePerM2 : defaultPricePerM2)
       : '',
@@ -665,46 +693,52 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
     return up === '' || /^[A-ZΑ-Ω]{3}\d{3}$/.test(up)
   }
 
+
   // not saved in db yes
-  const savePieceModal = () => {
+const savePieceModal = () => {
   if (pieceModalIndex === null) return
   const active = pieces[pieceModalIndex]
   if (!active) return
 
+  // Υποχρεωτικό μόνο το Χρώμα
   if (!pieceForm.color.trim()) {
     Alert.alert('Προσοχή', 'Το πεδίο Χρώμα είναι υποχρεωτικό.')
     return
   }
 
+  // Προαιρετικός κωδικός, έλεγχος μόνο αν δόθηκε
   const upCode = (pieceForm.code || '').toUpperCase()
   if (upCode && !/^[A-ZΑ-Ω]{3}\d{3}$/.test(upCode)) {
     Alert.alert('Προσοχή', 'Ο Κωδικός πρέπει να είναι της μορφής XXX999 (π.χ. CHR001).')
     return
   }
 
-  // ➜ per m² μόνο για Χαλί/Μοκέτα/Διαδρομάκι
-  const perM2 = isRugCategory(active.category)  // helper: Χαλί/Μοκέτα/Διαδρομάκι
+  const perM2 = isRugCategory(active.category)
 
-  // Αν είναι per m², κάνε validations & υπολογισμούς
-  let nextArea = ''
+  // Μήκος/Πλάτος: ΠΡΟΑΙΡΕΤΙΚΑ
+  const Lfilled = !!(pieceForm.lengthM && pieceForm.lengthM.trim() !== '')
+  const Wfilled = !!(pieceForm.widthM  && pieceForm.widthM.trim()  !== '')
+
+  // default → δεν αλλάζουμε κόστος/τετρ. αν δεν έχουμε πλήρη στοιχεία
+  let nextArea = active.areaM2 || ''
   let nextCost = active.cost || '0.00'
 
-  if (perM2) {
-    const L = toNum(pieceForm.lengthM)      
-    const W = toNum(pieceForm.widthM)      
-    const P = toNum(pieceForm.pricePerM2)  
+  // Υπολόγισε ΜΟΝΟ αν έχουν δοθεί ΚΑΙ τα δύο
+  if (perM2 && Lfilled && Wfilled) {
+    const L = toNum(pieceForm.lengthM)
+    const W = toNum(pieceForm.widthM)
+    const P = toNum(pieceForm.pricePerM2)  // ΔΕΝ το πειράζουμε, απλώς το διαβάζουμε
 
-    if (L <= 0 || W <= 0 || P <= 0) {
-      Alert.alert('Προσοχή', 'Συμπλήρωσε θετικές τιμές σε Μήκος, Πλάτος και Τιμή ανά τ.μ.')
-      return
+    if (L > 0 && W > 0 && P > 0) {
+      const area = L * W
+      const cost = P * area
+      nextArea = fix2(area)
+      nextCost = fix2(cost)
     }
-
-    const area = L * W
-    const cost = P * area
-    nextArea = fix2(area)     // π.χ. "4.32"
-    nextCost = fix2(cost)     // π.χ. "25.92"
+    // αν κάποιο από L/W <=0 ή P<=0, δεν μπλοκάρουμε: απλώς δεν υπολογίζουμε
   }
 
+  // Ενημέρωση state του τεμαχίου (length/width πάντα ό,τι έγραψε ο χρήστης, ακόμη κι αν είναι κενά)
   updatePiece(pieceModalIndex, {
     color: pieceForm.color.trim(),
     code: upCode,
@@ -712,19 +746,32 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
     status: pieceForm.status,
     workType: pieceForm.workType,
 
-    // --- ΝΕΑ πεδία / τιμολόγηση ανά τ.μ. μόνο για χαλί/μοκέτα/διαδρομάκι ---
-    pricingType: perM2 ? 'perM2' : 'perPiece',
-    lengthM: perM2 ? (pieceForm.lengthM || '') : undefined,
-    widthM:  perM2 ? (pieceForm.widthM  || '') : undefined,
-    pricePerM2: perM2 ? (pieceForm.pricePerM2 || '') : undefined,
-    areaM2: perM2 ? nextArea : undefined,
-    cost: perM2 ? nextCost : (active.cost || '0.00'),
+    // αφήνουμε να αποθηκευτούν όπως είναι (και κενά)
+    lengthM: pieceForm.lengthM ?? '',
+    widthM:  pieceForm.widthM  ?? '',
+
+    // μόνο αν υπολογίστηκαν αλλάζουν area/cost, αλλιώς κρατάμε τα προηγούμενα
+    areaM2: nextArea,
+    cost: nextCost,
 
     dirty: true,
   })
 
+  // Προαιρετικά: επίμονη αποθήκευση μόνο για Μήκος/Πλάτος (όπως είπαμε)
+  if (active.id) {
+    const l = pieceForm.lengthM?.trim() ?? ''
+    const w = pieceForm.widthM?.trim() ?? ''
+    setPieceDimensions(prev => {
+      const copy = { ...prev }
+      if (!l && !w) delete copy[active.id!]           // άδειασες και τα δύο → σβήστα από storage
+      else copy[active.id!] = { lengthM: l, widthM: w }
+      return copy
+    })
+  }
+
   closePieceModal()
 }
+
 
 
   /**  Save Order */
@@ -1407,27 +1454,51 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
                 {Object.entries(orderStatusLabels).map(([key, label], i) => (
                   <View key={key}>
                     {i > 0 && <View style={styles.dropdownDivider} />}
-                    <Pressable
-                      style={styles.dropdownItem}
-                      onPress={() => {
-                        if (key === 'delivered') {
-                          // ordered --> payed or not
-                          setOrderStatusOpen(false)
-                          setConfirmDeliveredOpen(true)
-                        } else {
-                          // else hasDept false
-                          setOrderStatus(key as typeof key)
-                          setHasDebt(false)
-                          setOrderStatusOpen(false)
-                        }
-                      }}
-                    >
-                      <Text style={styles.dropdownItemText}>{label}</Text>
-                    </Pressable>
+
+                    {key === 'ready' ? (
+                      //  "Έτοιμη" 
+                      <Pressable
+                        style={styles.dropdownItem}
+                        onPress={() => {
+                          const hasUnwashed = pieces.some(p => (p.status || 'άπλυτο') === 'άπλυτο')
+                          if (hasUnwashed) {
+                            setOrderStatusOpen(false)
+                            setConfirmReadyOpen(true)   //  modal
+                          } else {
+                            clearPendingIfLeavingDelivered() 
+                            setOrderStatus('ready')     // όλα πλυμένα -> ορισμός κανονικά
+                            setOrderStatusOpen(false)
+                          }
+                        }}
+                      >
+                        <Text style={styles.dropdownItemText}>{label}</Text>
+                      </Pressable>
+                    ) : (
+                      //  ΓΙΑ ΟΛΑ ΤΑ ΑΛΛΑ 
+                      <Pressable
+                        style={styles.dropdownItem}
+                        onPress={() => {
+                          if (key === 'delivered') {
+                            // ordered --> payed or not
+                            setOrderStatusOpen(false)
+                            setConfirmDeliveredOpen(true)
+                          } else {
+                            // else hasDept false
+                            clearPendingIfLeavingDelivered()
+                            setOrderStatus(key as typeof key)
+                            setHasDebt(false)
+                            setOrderStatusOpen(false)
+                          }
+                        }}
+                      >
+                        <Text style={styles.dropdownItemText}>{label}</Text>
+                      </Pressable>
+                    )}
                   </View>
                 ))}
               </View>
             )}
+
 
           </View>
         </View>
@@ -1976,6 +2047,96 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
                 <Text style={{ color: '#374151', fontWeight: '600' }}>Όχι</Text>
               </Pressable>
 
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      
+      <Modal
+        visible={confirmReadyOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setConfirmReadyOpen(false)}
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.4)',
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: 24,
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: '#fff',
+              borderRadius: 12,
+              padding: 24,
+              width: '90%',
+              maxWidth: 400,
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 18,
+                fontWeight: '600',
+                textAlign: 'center',
+                marginBottom: 10,
+              }}
+            >
+              Μη πλυμένα τεμάχια
+            </Text>
+            <Text
+              style={{
+                textAlign: 'center',
+                color: '#374151',
+                marginBottom: 20,
+              }}
+            >
+              Δεν είναι όλα τα τεμάχια της παραγγελίας πλυμμένα. Είστε σίγουρος ότι θέλετε να την θέσετε σε «Έτοιμη»;
+            </Text>
+
+            <View
+              style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                paddingHorizontal: 40,
+              }}
+            >
+              {/*  Ναι */}
+              <Pressable
+                onPress={() => {
+                  clearPendingIfLeavingDelivered()
+                  setOrderStatus('ready')
+                  setConfirmReadyOpen(false)
+                }}
+                style={{
+                  backgroundColor: '#3B82F6',
+                  paddingVertical: 10,
+                  paddingHorizontal: 20,
+                  borderRadius: 8,
+                  minWidth: 90,
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{ color: 'white', fontWeight: '600' }}>Ναι</Text>
+              </Pressable>
+
+              {/*  Όχι  */}
+              <Pressable
+                onPress={() => setConfirmReadyOpen(false)}
+                style={{
+                  backgroundColor: '#F3F4F6',
+                  paddingVertical: 10,
+                  paddingHorizontal: 20,
+                  borderRadius: 8,
+                  minWidth: 90,
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{ color: '#374151', fontWeight: '600' }}>Όχι</Text>
+              </Pressable>
             </View>
           </View>
         </View>

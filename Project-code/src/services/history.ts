@@ -10,7 +10,9 @@ export type HistoryFilters = {
   storageStatus?: string|null  // items
   customerId?: string|null
   orderIds?: string[]           
-  limit?: number       
+  limit?: number     
+
+  
 }
 
 /* Helpers */

@@ -592,6 +592,21 @@ function ShelfModal({
     }
   }, [shelf]);
 
+
+  useEffect(() => {
+    const isEdit = !!shelf;
+    if (visible && !isEdit) {
+      setShelfName('');
+      setBarcodeCode('');
+      setFloor(1);
+      setCapacity(0);
+      setNotes('');
+      // προαιρετικά:
+      setShowSuccessMessage(false);
+      onClearError();
+    }
+  }, [visible, shelf, onClearError]);
+
   // Clear errors when modal closes
   useEffect(() => {
     if (!visible) {
@@ -633,14 +648,22 @@ function ShelfModal({
       const success = await onSave(shelfData);
       
       // Only show success message and close modal if save was successful
+      // Only show success message and close modal if save was successful
       if (success) {
+        // 
+        if (!isEdit) {
+          setShelfName('');
+          setBarcodeCode('');
+          setFloor(1);
+          setCapacity(0);
+          setNotes('');
+        }
+
         setShowSuccessMessage(true);
-        
-        // Auto-close modal after 2.5 seconds
         setTimeout(() => {
           setShowSuccessMessage(false);
           onClose();
-        }, 2500);
+        }, 2000);
       }
     } catch (error) {
       console.error('Error saving shelf:', error);
