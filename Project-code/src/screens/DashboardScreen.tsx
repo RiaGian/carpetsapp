@@ -2,7 +2,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { Q } from '@nozbe/watermelondb';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -20,7 +20,9 @@ import { logLogout } from '../services/activitylog';
 import { usePreview } from '../state/PreviewProvider';
 
 import { useFocusEffect } from '@react-navigation/native';
+import { Calendar } from 'react-native-calendars';
 import { observeCustomers } from '../services/customer';
+import { observeActiveOrders, observeReadyForDeliveryOrders } from '../services/orders';
 
 type CustomersPreview = { count: number; names: string[] };
 type ShelfPreview = { code: string; count: number };
@@ -45,7 +47,11 @@ export default function DashboardScreen() {
 
   const [historyItemsPreview, setHistoryItemsPreview] = useState<HistoryItem[]>([]);
   const [historyOrdersPreview, setHistoryOrdersPreview] = useState<HistoryOrder[]>([]);
-
+  const [activeOrdersPreview, setActiveOrdersPreview] = useState<any[]>([]);
+  const [readyForDeliveryOrders, setReadyForDeliveryOrders] = useState<any[]>([]);
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState<string>(
+    new Date().toISOString().split('T')[0] // Today's date by default
+  );
 
   const [warehousePreview, setWarehousePreview] = useState<WarehousePreview | null>(null);
 
@@ -101,6 +107,67 @@ export default function DashboardScreen() {
           return `${first} ${last}`.trim() || '—';
         });
         setCustomersPreviewLocal({ count, names });
+      });
+      return () => sub.unsubscribe();
+    }, [])
+  );
+
+  // Live observe active orders (not delivered)
+  useFocusEffect(
+    useCallback(() => {
+      const sub = observeActiveOrders(50).subscribe((rows: any[]) => {
+        // Transform to preview format with customer names
+        const ordersPreview = rows.slice(0, 10).map((r: any) => {
+          const customer = r.customer?._raw || r.customer || {};
+          const customerName = customer.first_name && customer.last_name
+            ? `${customer.first_name} ${customer.last_name}`.trim()
+            : customer.first_name || customer.last_name || '—';
+          
+          return {
+            id: r.id,
+            orderId: r.id,
+            customerName,
+            orderDate: r.orderDate || r.order_date || '—',
+            status: r.orderStatus || r.order_status || 'Νέα',
+            totalAmount: r.totalAmount || r.total_amount || 0,
+            hasDebt: r.hasDebt || r.has_debt || false,
+          };
+        });
+        setActiveOrdersPreview(ordersPreview);
+      });
+      return () => sub.unsubscribe();
+    }, [])
+  );
+
+  // Live observe ready for delivery orders (for calendar)
+  useFocusEffect(
+    useCallback(() => {
+      const sub = observeReadyForDeliveryOrders(1000).subscribe((rows: any[]) => {
+        // Transform orders with customer names and delivery dates
+        // Filter out orders without delivery_date
+        const ordersWithDelivery = rows
+          .filter((r: any) => {
+            const deliveryDate = r.deliveryDate || r.delivery_date;
+            return deliveryDate != null && deliveryDate !== '';
+          })
+          .map((r: any) => {
+            const customer = r.customer?._raw || r.customer || {};
+            const customerName = customer.first_name && customer.last_name
+              ? `${customer.first_name} ${customer.last_name}`.trim()
+              : customer.first_name || customer.last_name || '—';
+            
+            return {
+              id: r.id,
+              orderId: r.id,
+              customerName,
+              orderDate: r.orderDate || r.order_date || '—',
+              deliveryDate: r.deliveryDate || r.delivery_date || null,
+              status: r.orderStatus || r.order_status || 'Προς παράδοση',
+              totalAmount: r.totalAmount || r.total_amount || 0,
+              hasDebt: r.hasDebt || r.has_debt || false,
+            };
+          });
+        setReadyForDeliveryOrders(ordersWithDelivery);
       });
       return () => sub.unsubscribe();
     }, [])
@@ -236,18 +303,25 @@ export default function DashboardScreen() {
   const goWarehouse   = () => router.push({ pathname: '/warehouse', params: { name: displayName, email: fromParams.email } });
   const goActivityLog = () => router.push('/activitylog');
   const goHistory     = () => router.push('/history');
+  const goActiveOrders = () => router.push('/activeorders' as any);
 
   const CARDS = [
     { key: 'customers', title: 'Πελάτες', bg: '#E9F2FF', icon: 'people-outline', onPress: goCustomers },
     { key: 'warehouse', title: 'Αποθήκη', bg: '#FFE9F2', icon: 'cube-outline', onPress: goWarehouse },
     { key: 'activity', title: 'Log Δραστηριοτήτων', bg: '#E9F9EF', icon: 'pulse-outline', onPress: goActivityLog },
     { key: 'history', title: 'Ιστορικό', bg: '#F0E9FF', icon: 'time-outline', onPress: goHistory },
+    { key: 'activeorders', title: 'Ενεργές Παραγγελίες', bg: '#FFF4E6', icon: 'cart-outline', onPress: goActiveOrders },
   ];
 
   return (
     
     <Page>
       <AppHeader onLogout={logout} />
+      <ScrollView 
+        style={{ flex: 1 }} 
+        contentContainerStyle={{ paddingBottom: 20 }}
+        showsVerticalScrollIndicator={true}
+      >
 
       <View ref={ref} style={styles.content}>
         {/* Πάνω 4 κάρτες */}
@@ -266,10 +340,10 @@ export default function DashboardScreen() {
               historyOrdersPreview={c.key === 'history' ? historyOrdersPreview : null}
               warehousePreview={c.key === 'warehouse' ? warehousePreview : null}
               activityCounts={activityCounts}
+              activeOrdersPreview={c.key === 'activeorders' ? activeOrdersPreview : null}
             />
           ))}
         </View>
-
 
         {/* Κάτω mini cards  */}
         <View style={styles.statsRow}>
@@ -280,7 +354,243 @@ export default function DashboardScreen() {
           <StatCard title="Σύνολο Δεδομένων" value={String(totalData)} color="#C3B2F7" />
 
         </View>
+
+        {/* Calendar for Ready to Deliver Orders */}
+        <View style={styles.calendarSection}>
+            <View style={styles.calendarHeader}>
+              <Ionicons name="calendar-outline" size={24} color={colors.primary} style={{ marginRight: 8 }} />
+              <Text style={styles.calendarTitle}>Ημερολόγιο Παραδόσεων</Text>
+              <View style={styles.calendarBadge}>
+                <Text style={styles.calendarBadgeText}>{readyForDeliveryOrders.length}</Text>
+              </View>
+            </View>
+            
+            <Calendar
+              current={new Date().toISOString().split('T')[0]} // Set current month to today
+              markingType={'custom'}
+              markedDates={(() => {
+                const today = new Date().toISOString().split('T')[0];
+                const marked: any = {};
+                
+                // Mark today as selected and current
+                marked[today] = {
+                  selected: true,
+                  selectedColor: '#3B82F6',
+                  selectedTextColor: '#FFFFFF',
+                  customStyles: {
+                    container: {
+                      backgroundColor: '#3B82F6',
+                      borderRadius: 8,
+                    },
+                    text: {
+                      color: '#FFFFFF',
+                      fontWeight: '700',
+                    },
+                  },
+                };
+                
+                // Mark dates with delivery orders
+                readyForDeliveryOrders.forEach((order) => {
+                  if (order.deliveryDate) {
+                    const dateStr = new Date(order.deliveryDate).toISOString().split('T')[0];
+                    const ordersForDate = readyForDeliveryOrders.filter((o) => {
+                      if (!o.deliveryDate) return false;
+                      return new Date(o.deliveryDate).toISOString().split('T')[0] === dateStr;
+                    }).length;
+                    
+                    if (marked[dateStr]) {
+                      // If already marked (e.g., today), add dots
+                      marked[dateStr].dots = marked[dateStr].dots || [];
+                      marked[dateStr].dots.push({
+                        color: dateStr === today ? '#FFFFFF' : '#3B82F6',
+                        selectedDotColor: '#FFFFFF',
+                      });
+                      marked[dateStr].count = ordersForDate;
+                    } else {
+                      // New date with orders
+                      marked[dateStr] = {
+                        selected: dateStr === selectedCalendarDate,
+                        selectedColor: dateStr === selectedCalendarDate ? '#3B82F6' : 'transparent',
+                        marked: true,
+                        customStyles: {
+                          container: {
+                            backgroundColor: dateStr === selectedCalendarDate ? '#3B82F6' : '#EFF6FF',
+                            borderColor: '#3B82F6',
+                            borderWidth: dateStr === selectedCalendarDate ? 0 : 1,
+                            borderRadius: 8,
+                          },
+                          text: {
+                            color: dateStr === selectedCalendarDate ? '#FFFFFF' : '#1E40AF',
+                            fontWeight: dateStr === selectedCalendarDate ? '700' : '600',
+                          },
+                        },
+                        dots: [{
+                          color: '#3B82F6',
+                          selectedDotColor: '#FFFFFF',
+                        }],
+                        count: ordersForDate,
+                      };
+                    }
+                  }
+                });
+                
+                return marked;
+              })()}
+              onDayPress={(day) => {
+                setSelectedCalendarDate(day.dateString);
+              }}
+              style={styles.calendar}
+              theme={{
+                todayTextColor: '#3B82F6',
+                selectedDayBackgroundColor: '#3B82F6',
+                selectedDayTextColor: '#FFFFFF',
+                arrowColor: '#3B82F6',
+                monthTextColor: '#1F2A44',
+                textDayFontWeight: '500',
+                textMonthFontWeight: '700',
+                textDayHeaderFontWeight: '600',
+                textDayFontSize: 14,
+                textMonthFontSize: 18,
+                textDayHeaderFontSize: 14,
+                calendarBackground: '#FFFFFF',
+                dayTextColor: '#1F2A44',
+                textDisabledColor: '#D1D5DB',
+                dotColor: '#3B82F6',
+                selectedDotColor: '#FFFFFF',
+                indicatorColor: '#3B82F6',
+                textDayFontFamily: 'System',
+                textMonthFontFamily: 'System',
+                textDayHeaderFontFamily: 'System',
+                'stylesheet.calendar.main': {
+                  container: {
+                    paddingLeft: 0,
+                    paddingRight: 0,
+                  },
+                  week: {
+                    marginTop: 6,
+                    marginBottom: 6,
+                    flexDirection: 'row',
+                    justifyContent: 'space-around',
+                  },
+                },
+                'stylesheet.day.basic': {
+                  today: {
+                    borderRadius: 10,
+                    backgroundColor: '#3B82F6',
+                  },
+                  todayText: {
+                    color: '#FFFFFF',
+                    fontWeight: '700',
+                    fontSize: 14,
+                  },
+                  selected: {
+                    borderRadius: 10,
+                    backgroundColor: '#3B82F6',
+                  },
+                  base: {
+                    width: 35,
+                    height: 35,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  },
+                  text: {
+                    marginTop: 0,
+                    fontSize: 14,
+                    fontWeight: '600',
+                    color: '#1F2A44',
+                  },
+                },
+              } as any}
+            />
+            
+            {/* Events List for Selected Date */}
+            {(() => {
+              const ordersForSelectedDate = readyForDeliveryOrders.filter((o) => {
+                if (!o.deliveryDate) return false;
+                const orderDate = new Date(o.deliveryDate).toISOString().split('T')[0];
+                return orderDate === selectedCalendarDate;
+              }).sort((a, b) => {
+                // Sort by time
+                const timeA = new Date(a.deliveryDate).getTime();
+                const timeB = new Date(b.deliveryDate).getTime();
+                return timeA - timeB;
+              });
+
+              if (ordersForSelectedDate.length === 0) {
+                return (
+                  <View style={styles.eventsContainer}>
+                    <Text style={styles.noEventsText}>
+                      Δεν υπάρχουν παραγγελίες για {new Date(selectedCalendarDate).toLocaleDateString('el-GR', { 
+                        weekday: 'long', 
+                        day: 'numeric', 
+                        month: 'long',
+                        year: 'numeric'
+                      })}
+                    </Text>
+                  </View>
+                );
+              }
+
+              return (
+                <View style={styles.eventsContainer}>
+                  <View style={styles.eventsHeader}>
+                    <Ionicons name="list-outline" size={20} color={colors.primary} style={{ marginRight: 8 }} />
+                    <Text style={styles.eventsTitle}>
+                      {ordersForSelectedDate.length} {ordersForSelectedDate.length === 1 ? 'Παραγγελία' : 'Παραγγελίες'} - {new Date(selectedCalendarDate).toLocaleDateString('el-GR', { 
+                        weekday: 'long', 
+                        day: 'numeric', 
+                        month: 'long'
+                      })}
+                    </Text>
+                  </View>
+                  <ScrollView style={styles.eventsList} showsVerticalScrollIndicator={false}>
+                    {ordersForSelectedDate.map((order) => {
+                      const deliveryTime = new Date(order.deliveryDate).toLocaleTimeString('el-GR', { 
+                        hour: '2-digit', 
+                        minute: '2-digit' 
+                      });
+                      return (
+                        <Pressable
+                          key={order.id}
+                          onPress={() => router.push(`/editorder?orderId=${order.id}` as any)}
+                          style={styles.eventCard}
+                        >
+                          <View style={styles.eventTimeContainer}>
+                            <Ionicons name="time-outline" size={16} color="#3B82F6" />
+                            <Text style={styles.eventTime}>{deliveryTime}</Text>
+                          </View>
+                          <View style={styles.eventContent}>
+                            <View style={styles.eventHeader}>
+                              <Text style={styles.eventOrderId}>
+                                #{order.orderId.slice(0, 6).toUpperCase()}
+                              </Text>
+                              {order.hasDebt && (
+                                <View style={styles.debtBadge}>
+                                  <Text style={styles.debtBadgeText}>Χρέος</Text>
+                                </View>
+                              )}
+                            </View>
+                            <Text style={styles.eventCustomerName} numberOfLines={1}>
+                              {order.customerName}
+                            </Text>
+                            <View style={styles.eventFooter}>
+                              <Text style={styles.eventAmount}>
+                                {order.totalAmount.toFixed(2)} €
+                              </Text>
+                            </View>
+                          </View>
+                          <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+                        </Pressable>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              );
+            })()}
+          </View>
       </View>
+
+      </ScrollView>
 
       {/* Floating κουμπί  */}
       <Pressable
@@ -295,7 +605,7 @@ export default function DashboardScreen() {
 }
 
 // dashboard card
-function DashboardCard({ kind, title, bg, icon, onPress, isWide, customersPreview, historyItemsPreview, historyOrdersPreview, activityCounts,warehousePreview, }: any) {
+function DashboardCard({ kind, title, bg, icon, onPress, isWide, customersPreview, historyItemsPreview, historyOrdersPreview, activityCounts, warehousePreview, activeOrdersPreview }: any) {
   const { previews } = usePreview();
   const effectivePreview = customersPreview ?? previews.customers;
   const [hovered, setHovered] = useState(false);
@@ -309,7 +619,8 @@ function DashboardCard({ kind, title, bg, icon, onPress, isWide, customersPrevie
         styles.card,
         {
           backgroundColor: bg,
-          width: isWide ? '23%' : '100%',
+          width: isWide ? '18%' : '100%', // Adjusted for 5 cards
+          marginHorizontal: isWide ? 8 : 12, // Reduced margin for 5 cards
           transform: [{ scale: hovered ? 1.04 : 1 }],
           ...getShadow('rgba(59,130,246,0.12)'),
           ...(Platform.OS === 'web'
@@ -396,6 +707,15 @@ function DashboardCard({ kind, title, bg, icon, onPress, isWide, customersPrevie
             <ActivityMiniCard
               onPressOpenLog={onPress}
               counts={activityCounts}
+            />
+          </View>
+        )}
+
+        {kind === 'activeorders' && (
+          <View style={styles.hminiClip}>
+            <ActiveOrdersMiniCard
+              onPressOpenOrders={onPress}
+              ordersPreview={activeOrdersPreview || []}
             />
           </View>
         )}
@@ -533,6 +853,66 @@ function ActivityMiniCard({
   );
 }
 
+function ActiveOrdersMiniCard({
+  onPressOpenOrders,
+  ordersPreview,
+}: {
+  onPressOpenOrders?: () => void;
+  ordersPreview: any[];
+}) {
+  const statusCounts = React.useMemo(() => {
+    const counts: Record<string, number> = {};
+    ordersPreview.forEach((o: any) => {
+      const status = o.status || 'Νέα';
+      counts[status] = (counts[status] || 0) + 1;
+    });
+    return counts;
+  }, [ordersPreview]);
+
+  return (
+    <View style={styles.wminiWrap}>
+      {/* Header με badge */}
+      <View style={styles.wminiHeader}>
+        <View style={{ flex: 1 }} />
+        <View style={styles.wminiBadge}>
+          <Text style={styles.wminiBadgeText}>{ordersPreview.length} παραγγελίες</Text>
+        </View>
+      </View>
+
+      {/* Search bar */}
+      <Pressable style={styles.hminiSearch} onPress={onPressOpenOrders}>
+        <Ionicons name="search-outline" size={16} color="#6B7280" style={{ marginRight: 6 }} />
+        <Text style={styles.hminiSearchText} numberOfLines={1}>
+          Αναζήτηση παραγγελιών...
+        </Text>
+      </Pressable>
+
+      {/* Status breakdown */}
+      <View style={styles.hminiAnalysis}>
+        <Text style={styles.hminiAnalysisTitle}>Κατάσταση</Text>
+        {Object.entries(statusCounts).map(([status, count]) => (
+          <View key={status} style={styles.hminiStatRow}>
+            <View style={styles.hminiStatBadge}>
+              <Ionicons name="cart-outline" size={14} color="#1F2A44" />
+            </View>
+            <Text style={styles.hminiStatLabel}>{status}</Text>
+            <View style={{ flex: 1 }} />
+            <Text style={styles.hminiStatValue}>{count}</Text>
+          </View>
+        ))}
+        {Object.keys(statusCounts).length === 0 && (
+          <Text style={styles.hminiStatLabel}>Δεν υπάρχουν ενεργές παραγγελίες</Text>
+        )}
+      </View>
+
+      {/* CTA */}
+      <Pressable style={styles.hminiCTA} onPress={onPressOpenOrders}>
+        <Text style={styles.hminiCTAText}>Κλικ για διαχείριση παραγγελιών</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 function WarehouseMiniCard({
   onPressOpenWarehouse,
   preview,
@@ -641,9 +1021,7 @@ const styles = StyleSheet.create({
   gridWide: { flexDirection: 'row', justifyContent: 'space-between', flexWrap: 'nowrap' },
   card: {
   borderRadius: 18, // λίγο πιο μεγάλο για smooth καμπύλη
-  width: '20%',
   minHeight: 340,
-  marginHorizontal: 12,
   padding: 0, // επειδή έχουμε cardInner για padding
   alignItems: 'stretch',
   justifyContent: 'flex-start',
@@ -1061,6 +1439,142 @@ wminiShelfCode: { fontSize: 15, color: '#1F2A44' },
 wminiShelfCount: { fontSize: 13, color: '#1F2A44' },
 wminiShelfEmptyText: { color: '#6B7280' },
 
-
+  /* Calendar Section */
+  calendarSection: {
+    width: '100%',
+    marginTop: 30,
+    marginBottom: 20,
+    paddingHorizontal: 40,
+  },
+  calendarHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  calendarTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1F2A44',
+    flex: 1,
+  },
+  calendarBadge: {
+    backgroundColor: '#E9F2FF',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  calendarBadgeText: {
+    color: '#3B82F6',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  calendar: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    ...(Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 3 } },
+      android: { elevation: 2 },
+      web: { boxShadow: '0 3px 8px rgba(0,0,0,0.08)' } as any,
+    }) as object),
+  },
+  /* Events List */
+  eventsContainer: {
+    marginTop: 20,
+    width: '100%',
+  },
+  eventsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  eventsTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2A44',
+    flex: 1,
+  },
+  eventsList: {
+    maxHeight: 300,
+  },
+  eventCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    ...(Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
+      android: { elevation: 1 },
+      web: { boxShadow: '0 2px 4px rgba(0,0,0,0.05)' } as any,
+    }) as object),
+  },
+  eventTimeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 16,
+    paddingRight: 16,
+    borderRightWidth: 1,
+    borderRightColor: '#E5E7EB',
+    minWidth: 60,
+  },
+  eventTime: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#3B82F6',
+    marginLeft: 6,
+  },
+  eventContent: {
+    flex: 1,
+  },
+  eventHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  eventOrderId: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#1F2A44',
+    marginRight: 8,
+  },
+  debtBadge: {
+    backgroundColor: '#FEE2E2',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  debtBadgeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#DC2626',
+  },
+  eventCustomerName: {
+    fontSize: 14,
+    color: '#6B7280',
+    marginBottom: 6,
+  },
+  eventFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  eventAmount: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#10B981',
+  },
+  noEventsText: {
+    fontSize: 14,
+    color: '#6B7280',
+    textAlign: 'center',
+    paddingVertical: 20,
+    fontStyle: 'italic',
+  },
 
 });

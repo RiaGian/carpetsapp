@@ -121,12 +121,12 @@ const generateSequentialCodes = async (
   let n = startNum; //counter (+1)
 
   while (codes.length < count) {
-    if (n > 999) {
+    if (n > 99999) {
       // limit
-      throw new Error('Ξεπέρασες το όριο κωδικών XXX999.');
+      throw new Error('Ξεπέρασες το όριο κωδικών X99999.');
     }
     // create candidate item's code (new)
-    const candidate = `${prefix}${String(n).padStart(3, '0')}`;
+    const candidate = `${prefix}${String(n).padStart(5, '0')}`;
     // check in DB if already code exists
     const taken = await existsItemCode(candidate);
     
@@ -292,7 +292,7 @@ export default function OrdersScreen() {
 
   const ERR_MSG: Record<FieldErr, string> = {
     required: 'Απαιτείται.',
-    format: 'Μη έγκυρη μορφή (XXX999).',
+    format: 'Μη έγκυρη μορφή (X99999).',
     max: 'Υπερβαίνει το μέγιστο (200).',
     nan: 'Μη έγκυρη αριθμητική τιμή.',
   };
@@ -330,7 +330,7 @@ export default function OrdersScreen() {
     }
 
     // --- Κωδικός (μορφή + μοναδικότητα) ---
-    const CODE_RE = /^[A-ZΑ-Ω]{3}\d{3}$/;
+    const CODE_RE = /^[A-ZΑ-Ω]{1}\d{5}$/;
     const baseCode = (ord.itemCode ?? '').trim().toUpperCase();
 
     if (!baseCode) {
@@ -373,8 +373,8 @@ export default function OrdersScreen() {
     // --- Αν περάσει ο έλεγχος, προχώρα όπως πριν ---
     const qtyNum = Math.max(1, qtyParsed);
 
-    const prefix = baseCode.slice(0, 3);
-    const baseNum = parseInt(baseCode.slice(3), 10);
+    const prefix = baseCode.slice(0, 1);
+    const baseNum = parseInt(baseCode.slice(1), 10);
     let codes: string[] = [];
 
     try {
@@ -643,10 +643,10 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
       // code check
       const badCode = pieces.find(p =>
         (p.code ?? '').trim() &&
-        !/^[A-ZΑ-Ω]{3}\d{3}$/.test((p.code ?? '').trim().toUpperCase())
+        !/^[A-ZΑ-Ω]{1}\d{5}$/.test((p.code ?? '').trim().toUpperCase())
       );
       if (badCode) {
-        Alert.alert('Προσοχή', 'Ο Κωδικός τεμαχίου πρέπει να είναι της μορφής XXX999 (π.χ. CHR001).');
+        Alert.alert('Προσοχή', 'Ο Κωδικός τεμαχίου πρέπει να είναι της μορφής X99999 (π.χ. T22222).');
         return;
       }
 
@@ -1174,7 +1174,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                           }
 
                           // live check
-                          const CODE_RE = /^[A-ZΑ-Ω]{3}\d{3}$/;
+                          const CODE_RE = /^[A-ZΑ-Ω]{1}\d{5}$/;
                           if (CODE_RE.test(clean)) {
                             const taken = await existsItemCode(clean);
                             setCodeErrors(prev => ({ ...prev, [idx]: taken }));

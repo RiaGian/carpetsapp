@@ -38,6 +38,10 @@ export type NewOrderItem = {
   status: string
   storage_status?: string
   order_date?: string
+  length_m?: string
+  width_m?: string
+  area_m2?: string
+  price_per_m2?: string
   created_at?: number
 }
 
@@ -73,6 +77,10 @@ export async function createOrderItem(data: NewOrderItem, userIdForLog: string =
       rec.status         = data.status ?? ''
       rec.storage_status = data.storage_status ?? ''
       rec.order_date     = finalOrderDate  // lock date
+      rec.length_m       = data.length_m ?? ''
+      rec.width_m        = data.width_m ?? ''
+      rec.area_m2        = data.area_m2 ?? ''
+      rec.price_per_m2   = data.price_per_m2 ?? ''
       rec.created_at     = data.created_at ?? Date.now()
     })
   })
@@ -166,6 +174,10 @@ export async function updateOrderItem(
       if (data.status !== undefined)         r.status = data.status
       if (data.storage_status !== undefined) r.storage_status = data.storage_status
       if (data.order_date !== undefined)     r.order_date = data.order_date
+      if (data.length_m !== undefined)       r.length_m = data.length_m
+      if (data.width_m !== undefined)        r.width_m = data.width_m
+      if (data.area_m2 !== undefined)        r.area_m2 = data.area_m2
+      if (data.price_per_m2 !== undefined)  r.price_per_m2 = data.price_per_m2
     })
 
     // after
