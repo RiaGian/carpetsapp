@@ -26,7 +26,7 @@ type CustomerRow = {
   address: string;
 };
 
-//  orderes (πάνω blocks)
+//  orderes (above blocks)
 type OrderItem = {
   categoryOpen: boolean;
   category: string | null;
@@ -53,7 +53,7 @@ type PieceItem = {
   code?: string;
   shelf?: string;
   status?: 'άπλυτο' | 'πλυμένο';
-  workType?: 'Επιστροφή' | 'Φύλλαξη';
+  workType?: 'Επιστροφή' | 'Φύλαξη';
   saved?: boolean; 
 };
 
@@ -82,7 +82,7 @@ export default function OrdersScreen() {
   const [depositAmount, setDepositAmount] = useState<string>('');
 
   // types of pieces
-  const categoryLabels = ['Χαλί', 'Μοκέτα', 'Πάπλωμα', 'Κουβέρτα', 'Διαδρομάκι', 'Φλοκάτι'];
+  const categoryLabels = ['Χαλί', 'Μοκέτα', 'Πάπλωμα', 'Κουβέρτα', 'Κουρτίνα', 'Διαδρομάκι', 'Φλοκάτι'];
   const colorLabels = ['Κόκκινο', 'Μπλε', 'Πράσινο', 'Κίτρινο', 'Μαύρο', 'Άσπρο', 'Γκρι', 'Καφέ', 'Μπεζ', 'Ροζ'];
 
   const [orders, setOrders] = useState<OrderItem[]>([makeEmptyOrder()]);
@@ -106,12 +106,19 @@ export default function OrdersScreen() {
   const onChangeOrderDateAt = (index: number, txt: string) => {
     const digits = txt.replace(/\D/g, '').slice(0, 8);
     let out = '';
+
     for (let i = 0; i < digits.length; i++) {
       out += digits[i];
       if (i === 1 || i === 3) out += '/';
     }
+
+    if (!out.trim()) {
+      out = ddmmyyyy();
+    }
+
     updateOrder(index, { date: out });
   };
+
 
   // pieces
   const [piecesVisible, setPiecesVisible] = useState(false);
@@ -180,26 +187,41 @@ export default function OrdersScreen() {
   }
 };
 
-  // STATE : modal τεμαχίου 
+  // STATE :item's modal
   const [pieceModalOpen, setPieceModalOpen] = useState(false)
-  const [pieceModalIndex, setPieceModalIndex] = useState<number | null>(null) // null = νέο τεμάχιο
+  const [pieceModalIndex, setPieceModalIndex] = useState<number | null>(null) // null = new item
 
-  // === ΝΕΟ: φόρμα & helpers για modal τεμαχίου ===
+  //  φόρμα & helpers for item's modal
   const [pieceForm, setPieceForm] = useState({
     color: '',
     code: '',
     shelf: '',
     status: 'άπλυτο' as 'άπλυτο' | 'πλυμένο',
-    workType: 'Επιστροφή' as 'Επιστροφή' | 'Φύλλαξη',
+    workType: 'Επιστροφή' as 'Επιστροφή' | 'Φύλαξη',
+    lengthM: '', 
+    widthM: '',
   });
   const [statusOpen, setStatusOpen] = useState(false);
 
   const activePiece = pieceModalIndex !== null ? pieces[pieceModalIndex] : null;
   const activeCategory = activePiece?.category ?? null;
+
+  const dimensionsCategories = useMemo(
+    () => new Set(['Μοκέτα', 'Χαλί', 'Φλοκάτι', 'Διαδρομάκι']),
+    []
+  );
+  const needsDimensions = dimensionsCategories.has(activeCategory ?? '');
+
+  const lengthVal = parseFloat((pieceForm.lengthM || '').replace(',', '.'));
+  const widthVal  = parseFloat((pieceForm.widthM  || '').replace(',', '.'));
+  const hasBoth   = Number.isFinite(lengthVal) && Number.isFinite(widthVal);
+  const areaSqm   = hasBoth ? (lengthVal * widthVal) : 0;
+
+
   const selectedCustomer = useMemo(() => customers.find(c => c.id === selectedId) || null, [customers, selectedId]);
   const customerFullName = selectedCustomer ? `${selectedCustomer.firstName} ${selectedCustomer.lastName}`.trim() : '—';
 
-  //helpers για άνοιγμα / κλείσιμο modal (με prefill)
+  //helpers open/close modal (prefill)
   const openPieceModalFor = (index: number | null) => {
     setPieceModalIndex(index);
     if (index !== null && pieces[index]) {
@@ -210,9 +232,11 @@ export default function OrdersScreen() {
         shelf: p.shelf ?? '',
         status: p.status ?? 'άπλυτο',
         workType: p.workType ?? 'Επιστροφή',
+        lengthM: '', 
+        widthM: '', 
       });
     } else {
-      setPieceForm({ color: '', code: '', shelf: '', status: 'άπλυτο', workType: 'Επιστροφή' });
+      setPieceForm({ color: '', code: '', shelf: '', status: 'άπλυτο', workType: 'Επιστροφή', lengthM: '',  widthM: '',   });
     }
     setPieceModalOpen(true);
   };
@@ -228,29 +252,64 @@ export default function OrdersScreen() {
     return /^[A-ZΑ-Ω]{3}\d{3}$/.test(up);
   };
 
+  const [errors, setErrors] = useState({
+    color: false,
+    code: false,
+    status: false,
+    workType: false,
+  });
+
+
   const savePieceModal = () => {
     if (!activePiece || pieceModalIndex === null) return;
 
+    // έλεγχος σφαλμάτων
+    const newErrors = {
+      color: !pieceForm.color.trim(),
+      code: !isCodeValid(),
+      status: !pieceForm.status,
+      workType: !pieceForm.workType,
+    };
+
+    setErrors(newErrors); // ενημέρωση state για κόκκινο περίγραμμα
+
+    // Έλεγχοι με alerts
     if (!pieceForm.color.trim()) {
       Alert.alert('Προσοχή', 'Το πεδίο Χρώμα είναι υποχρεωτικό.');
       return;
     }
+
     if (!isCodeValid()) {
-      Alert.alert('Προσοχή', 'Ο Κωδικός τεμαχίου πρέπει να είναι της μορφής XXX999 (π.χ. CHR001).');
+      Alert.alert(
+        'Προσοχή',
+        'Ο Κωδικός τεμαχίου πρέπει να είναι της μορφής XXX999 (π.χ. CHR001).'
+      );
       return;
     }
 
+    if (!pieceForm.status) {
+      Alert.alert('Προσοχή', 'Το πεδίο Κατάσταση είναι υποχρεωτικό.');
+      return;
+    }
+
+    if (!pieceForm.workType) {
+      Alert.alert('Προσοχή', 'Το πεδίο Τύπος Εργασίας είναι υποχρεωτικό.');
+      return;
+    }
+
+    // Αν όλα είναι ΟΚ → αποθήκευση
     updatePiece(pieceModalIndex, {
       color: pieceForm.color.trim(),
       code: pieceForm.code.trim().toUpperCase(),
       shelf: pieceForm.shelf.trim(),
       status: pieceForm.status,
       workType: pieceForm.workType,
-      saved: true,  
+      saved: true,
     });
 
     closePieceModal();
   };
+
 
 
   // final cost
@@ -315,7 +374,7 @@ export default function OrdersScreen() {
   };
   const [submitting, setSubmitting] = useState(false);
 
-  // αν ο AuthProvider κάνει ακόμα rehydrate
+  // if  AuthProvider still rehydrate
   if (authLoading) {
     return null;
   }
@@ -422,7 +481,7 @@ export default function OrdersScreen() {
     <Page>
       <AppHeader showBack />
 
-      {/* ✅ Scroll ενεργό, header σταθερό */}
+      {/* Scroll and stable header  */}
       <ScrollView
         style={styles.scroller}
         contentContainerStyle={styles.containerScroll}
@@ -740,9 +799,12 @@ export default function OrdersScreen() {
           </View>
         </View>
 
-        {/* ===== Κουμπιά κάτω-κάτω ===== */}
+        {/* BUTTONS - CANCEL - CREATE ORDER */}
         <View style={styles.footerActions}>
-          <Pressable style={styles.cancelBtnOutline}>
+          <Pressable
+            style={styles.cancelBtnOutline}
+            onPress={() => router.push('/dashboard')}
+          >
             <Text style={styles.cancelBtnOutlineText}>Ακύρωση</Text>
           </Pressable>
           <Pressable style={styles.createBtn} onPress={onCreateOrder}>
@@ -862,7 +924,7 @@ export default function OrdersScreen() {
           onRequestClose={closePieceModal}
         >
           <View style={styles.modalBackdrop}>
-            <View style={styles.modalCard}>
+            <View style={[styles.modalCard, needsDimensions && styles.modalCardTall]}>
               <View style={styles.modalHeader}>
                 {/* Logo στο κέντρο */}
                 <Image
@@ -878,6 +940,7 @@ export default function OrdersScreen() {
               <ScrollView
                 contentContainerStyle={{ paddingBottom: 12 }}
                 keyboardShouldPersistTaps="handled"
+                style={{ overflow: 'visible' }}
               >
                 {/* Κατηγορία (κλειδωμένο) | Χρώμα * */}
                 <View style={styles.row2}>
@@ -896,8 +959,11 @@ export default function OrdersScreen() {
                     <Text style={styles.label}>Χρώμα *</Text>
                     <TextInput
                       value={pieceForm.color}
-                      onChangeText={(v) => setPieceForm(s => ({ ...s, color: v }))}
-                      style={styles.input}
+                      onChangeText={(v) => {
+                        setPieceForm(s => ({ ...s, color: v }));
+                        if (errors.color) setErrors(e => ({ ...e, color: false }));
+                      }}
+                      style={[styles.input, errors.color && styles.inputError]}
                       placeholder="π.χ. κόκκινο, μπλε..."
                       placeholderTextColor="#6B7280"
                     />
@@ -907,11 +973,14 @@ export default function OrdersScreen() {
                 {/* Κωδικός τεμαχίου | Ράφι */}
                 <View style={styles.row2}>
                   <View style={[styles.inputWrap, styles.flex1]}>
-                    <Text style={styles.label}>Κωδικός τεμαχίου</Text>
+                    <Text style={styles.label}>Κωδικός τεμαχίου *</Text>
                     <TextInput
                       value={pieceForm.code}
-                      onChangeText={(v) => setPieceForm(s => ({ ...s, code: v.toUpperCase() }))}
-                      style={[styles.input, !isCodeValid() && pieceForm.code ? styles.inputError : null]}
+                      onChangeText={(v) => {
+                        setPieceForm(s => ({ ...s, code: v.toUpperCase() }));
+                        if (errors.code) setErrors(e => ({ ...e, code: false }));
+                      }}
+                      style={[styles.input, errors.code && styles.inputError]}
                       placeholder="CHR001"
                       placeholderTextColor="#6B7280"
                       autoCapitalize="characters"
@@ -928,7 +997,7 @@ export default function OrdersScreen() {
                       value={pieceForm.shelf}
                       onChangeText={(v) => setPieceForm(s => ({ ...s, shelf: v.toUpperCase() }))}
                       style={styles.input}
-                      placeholder="π.χ. Α1"
+                      placeholder="π.χ. Α1, Α2 (προαιρετικό)"
                       placeholderTextColor="#6B7280"
                       autoCapitalize="characters"
                       maxLength={4}
@@ -936,10 +1005,57 @@ export default function OrdersScreen() {
                   </View>
                 </View>
 
+                {needsDimensions && (
+                  <>
+                    <Text style={[styles.label, { marginTop: 8 }]}>Διαστάσεις (μέτρα)</Text>
+                    <View style={styles.row2}>
+                      <View style={[styles.inputWrap, styles.flex1]}>
+                        <Text style={styles.label}>Μήκος (προαιρετικό)</Text>
+                        <TextInput
+                          value={pieceForm.lengthM}
+                          onChangeText={(v) => {
+                            const clean = v.replace(/[^\d.,]/g, '');
+                            setPieceForm(s => ({ ...s, lengthM: clean }));
+                          }}
+                          style={styles.input}
+                          placeholder="Μήκος (προαιρετικό)"
+                          placeholderTextColor="#6B7280"
+                          keyboardType={Platform.select({ ios: 'decimal-pad', android: 'numeric', default: 'numeric' })}
+                          inputMode="decimal"
+                        />
+                      </View>
+
+                      <View style={[styles.inputWrap, styles.flex1]}>
+                        <Text style={styles.label}>Πλάτος (προαιρετικό)</Text>
+                        <TextInput
+                          value={pieceForm.widthM}
+                          onChangeText={(v) => {
+                            const clean = v.replace(/[^\d.,]/g, '');
+                            setPieceForm(s => ({ ...s, widthM: clean }));
+                          }}
+                          style={styles.input}
+                          placeholder="Πλάτος (προαιρετικό)"
+                          placeholderTextColor="#6B7280"
+                          keyboardType={Platform.select({ ios: 'decimal-pad', android: 'numeric', default: 'numeric' })}
+                          inputMode="decimal"
+                        />
+                      </View>
+                    </View>
+
+                    {hasBoth && (
+                      <View style={{ marginTop: 4 }}>
+                        <Text style={[styles.label, { fontWeight: '600' }]}>
+                          Επιφάνεια: {areaSqm.toFixed(2)} τ.μ.
+                        </Text>
+                      </View>
+                    )}
+                  </>
+                )}
+
                 {/* Κατάσταση (dropdown) | Τύπος Εργασίας * (chips) */}
                 <View style={styles.row2}>
-                  <View style={[styles.inputWrap, styles.flex1]}>
-                    <Text style={styles.label}>Κατάσταση</Text>
+                  <View style={[styles.inputWrap, styles.flex1, styles.dropdownHost]}>
+                    <Text style={styles.label}>Κατάσταση *</Text>
                     <Pressable
                       onPress={() => setStatusOpen(v => !v)}
                       style={styles.fakeInput}
@@ -948,7 +1064,7 @@ export default function OrdersScreen() {
                       <Ionicons name={statusOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#666" />
                     </Pressable>
                     {statusOpen && (
-                      <View style={styles.dropdownMenu}>
+                      <View style={[styles.dropdownMenu,  styles.dropdownMenuAbove]}>
                         {(['άπλυτο', 'πλυμένο'] as const).map((opt, i) => (
                           <View key={opt}>
                             {i > 0 && <View style={styles.dropdownDivider} />}
@@ -967,7 +1083,7 @@ export default function OrdersScreen() {
                   <View style={[styles.inputWrap, styles.flex1]}>
                     <Text style={styles.label}>Τύπος Εργασίας *</Text>
                     <View style={styles.chipRow}>
-                      {(['Επιστροφή', 'Φύλλαξη'] as const).map(opt => {
+                      {(['Επιστροφή', 'Φύλαξη'] as const).map(opt => {
                         const active = pieceForm.workType === opt;
                         return (
                           <Pressable
@@ -992,6 +1108,10 @@ export default function OrdersScreen() {
                   <Text style={styles.primaryBtnText}>Αποθήκευση</Text>
                 </Pressable>
               </View>
+              <Text style={styles.requiredNote}>
+                Τα πεδία με * είναι υποχρεωτικά
+              </Text>
+
             </View>
           </View>
         </Modal>
@@ -1038,6 +1158,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingTop: 50,
     paddingBottom: 40,
+  },
+
+  dropdownHost: {
+    position: 'relative',    
+    overflow: 'visible',     
+    zIndex: 100,             
+  },
+
+  dropdownMenuAbove: {
+    bottom: 133, 
   },
   container: {
     flex: 1,
@@ -1108,6 +1238,13 @@ modalActionsBottom: {
     elevation: 3,
   },
 
+  requiredNote: {
+  fontSize: 11,
+  color: '#6B7280', 
+  textAlign: 'center',
+  marginTop: 6,
+  marginBottom: 4,
+},
 
   successTitle: { color: '#10B981', fontWeight: '600' },
 
@@ -1915,8 +2052,13 @@ modalActionsBottom: {
   },
 
   pieceRowCompleted: {
-  backgroundColor: 'rgba(16,185,129,0.12)', // απαλό πράσινο see-through
+  backgroundColor: 'rgba(16,185,129,0.12)', 
   borderColor: '#10B981',
 },
+
+modalCardTall: {
+    height: 630,             
+    maxHeight: '92%',        
+  },
 
 });

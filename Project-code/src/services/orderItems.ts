@@ -3,7 +3,11 @@ import { Q } from '@nozbe/watermelondb';
 import { database } from '../database/initializeDatabase';
 import { logAddOrderItem, logDeleteOrderItem, logUpdateOrderItem } from './activitylog'; //  logging
 
-
+export const normId = (v: any) => {
+  const s = String(v ?? '').trim()
+  if (!s) return ''
+  return /^\d+$/.test(s) ? String(Number(s)) : s // "0012" -> "12"
+}
 
 export type NewOrderItem = {
   orderId: string           // FK -> orders.id
@@ -152,7 +156,6 @@ export async function updateOrderItem(
     console.warn('logUpdateOrderItem failed:', err)
   }
 }
-
 
 /**  DELETE  */
 export async function deleteOrderItem(id: string, orderId?: string, userId: string = 'system') {

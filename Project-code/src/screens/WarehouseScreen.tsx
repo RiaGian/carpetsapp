@@ -3,19 +3,21 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
   Modal,
+  Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
   View,
-  useWindowDimensions
+  useWindowDimensions,
 } from 'react-native';
+import AppHeader from '../components/AppHeader';
+import Page from '../components/Page';
 import { database } from '../database/initializeDatabase';
 import Shelf from '../database/models/Shelf';
 import { logCreateShelf, logDeleteShelf, logUpdateShelf } from '../services/activitylog';
+import { colors } from '../theme/colors';
 
 // Helper για κοινό padding ανάλογα με το πλάτος
 const edgePaddingForWidth = (w: number) => {
@@ -209,207 +211,186 @@ export default function WarehouseScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="dark-content" backgroundColor="#fff" />
-      <View style={[styles.container, { paddingHorizontal: EDGE }]}>
-        
-        {/* Header */}
-        <View style={styles.header}>
-          <Pressable onPress={goBack} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color="#374151" />
-          </Pressable>
-          
-          <View style={styles.headerContent}>
-            <View style={styles.headerIcon}>
-              <Ionicons name="cube" size={24} color="#3B82F6" />
-            </View>
-            <View style={styles.headerText}>
-              <Text style={styles.title}>Αποθήκη</Text>
-              <Text style={styles.subtitle}>{shelves.length} ράφια συνολικά</Text>
-            </View>
-          </View>
+  <Page>
+    {/* Ίδιο header όπως στο History */}
+    <AppHeader showBack />
 
-          <Pressable style={styles.addButton} onPress={handleAddShelf}>
-            <Ionicons name="add" size={24} color="#FFFFFF" />
-          </Pressable>
+    {/* Περιεχόμενο */}
+    <ScrollView
+      contentContainerStyle={[styles.pageContainer, { paddingHorizontal: EDGE }]}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+    >
+      {/* Section header (εικονίδιο + τίτλος + CTA) */}
+      <View style={styles.sectionHeaderRow}>
+        <View style={styles.sectionHeaderLeft}>
+          <View style={styles.headerIcon}>
+            <Ionicons name="cube" size={22} color={colors.primary} />
+          </View>
+          <View style={{ marginLeft: 10 }}>
+            <Text style={styles.title}>Αποθήκη</Text>
+            <Text style={styles.subtitle}>{shelves.length} ράφια συνολικά</Text>
+          </View>
         </View>
 
-        {/* Search Bar */}
-        <View style={styles.searchContainer}>
-          <Ionicons name="search" size={20} color="#6B7280" style={styles.searchIcon} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Αναζήτηση ραφιού, κωδικού ή τεμαχίου..."
-            placeholderTextColor="#9CA3AF"
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-          />
-        </View>
-
-        {/* Shelves Grid */}
-        <ScrollView 
-          style={styles.shelvesContainer}
-          showsVerticalScrollIndicator={false}
-        >
-          <View style={[styles.shelvesGrid, isWide ? styles.shelvesGridWide : undefined]}>
-            {/* Add New Shelf Card - Always first */}
-            <View style={isWide ? { width: '12%' } : { width: '48%' }}>
-              <Pressable style={styles.addShelfCard} onPress={handleAddShelf}>
-                <Ionicons name="add" size={isWide ? 20 : 32} color="#3B82F6" />
-                <Text style={[styles.addShelfText, isWide && styles.addShelfTextSmall]}>Νέο Ράφι</Text>
-              </Pressable>
-            </View>
-            
-            {/* Existing Shelves - Newest first */}
-            {filteredShelves.map((shelf) => (
-              <View key={shelf.id} style={isWide ? { width: '12%' } : { width: '48%' }}>
-                <ShelfCard
-                  shelf={shelf}
-                  onEdit={() => handleEditShelf(shelf)}
-                  onDelete={() => handleDeleteShelf(shelf.id)}
-                  onClick={() => handleShelfClick(shelf)}
-                />
-              </View>
-            ))}
-          </View>
-        </ScrollView>
+        <Pressable style={styles.addButton} onPress={handleAddShelf}>
+          <Ionicons name="add" size={20} color="#FFFFFF" />
+          <Text style={styles.addButtonText}>Νέο Ράφι</Text>
+        </Pressable>
       </View>
 
-      {/* Add/Edit Shelf Modal */}
-      <ShelfModal
-        visible={showAddModal || showEditModal}
-        shelf={selectedShelf}
-        onClose={() => {
-          setShowAddModal(false);
-          setShowEditModal(false);
-          setSelectedShelf(null);
-        }}
-        onSave={async (shelfData) => {
-          try {
-            const userId = await getCurrentUserId();
-            
-            if (selectedShelf) {
-              // EDIT MODE - Update existing shelf
-              const oldValues = {
-                code: selectedShelf.code,
-                barcode: selectedShelf.barcode,
-                floor: selectedShelf.floor,
-                capacity: selectedShelf.capacity,
-                notes: selectedShelf.notes
-              };
-              
-              const newValues = {
-                code: selectedShelf.code, // Keep original code
-                barcode: shelfData.barcode || selectedShelf.barcode,
-                floor: shelfData.floor || selectedShelf.floor,
-                capacity: shelfData.capacity || selectedShelf.capacity,
-                notes: shelfData.notes || selectedShelf.notes
-              };
+      {/* Search Bar – ίδιο look με History */}
+      <View style={styles.searchContainer}>
+        <Ionicons name="search-outline" size={20} color={colors.primary} style={styles.searchIcon} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Αναζήτηση ραφιού, κωδικού ή τεμαχίου..."
+          placeholderTextColor="#9CA3AF"
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+        />
+      </View>
 
-              // Update in database
-              await database.write(async () => {
-                const shelfRecord = await database.get<Shelf>('shelves').find(selectedShelf.id);
-                await shelfRecord.update((shelf: any) => {
-                  shelf.barcode = newValues.barcode;
-                  shelf.floor = newValues.floor;
-                  shelf.capacity = newValues.capacity;
-                  shelf.notes = newValues.notes;
-                });
-              });
-              
-              // Log shelf update
-              console.log('📝 UPDATE_SHELF - User ID:', userId);
-              console.log('📝 UPDATE_SHELF - Shelf ID:', selectedShelf.id);
-              console.log('📝 UPDATE_SHELF - Old Values:', oldValues);
-              console.log('📝 UPDATE_SHELF - New Values:', newValues);
-              await logUpdateShelf(userId, selectedShelf.id, oldValues, newValues);
-            } else {
-              // CREATE MODE - Create new shelf
-              // Check for duplicate code
-              const existingShelf = shelves.find(shelf => 
-                shelf.code.toLowerCase() === shelfData.code?.toLowerCase()
-              );
-              
-              if (existingShelf) {
-                setErrorMessage(`Το ράφι με κωδικό "${shelfData.code}" υπάρχει ήδη!`);
-                setShowError(true);
-                return false; // Return false to indicate error
-              }
+      {/* Shelves Grid */}
+      <View style={[styles.shelvesGrid, isWide ? styles.shelvesGridWide : undefined]}>
+        {/* Add New Shelf Card */}
+        <View style={isWide ? { width: '12%' } : { width: '48%' }}>
+          <Pressable style={styles.addShelfCard} onPress={handleAddShelf}>
+            <Ionicons name="add" size={isWide ? 20 : 32} color={colors.primary} />
+            <Text style={[styles.addShelfText, isWide && styles.addShelfTextSmall]}>Νέο Ράφι</Text>
+          </Pressable>
+        </View>
 
-              // Save to WatermelonDB database
-              let newShelfId = '';
-              await database.write(async () => {
-                const shelvesCollection = database.get<Shelf>('shelves');
-                const newShelf = await shelvesCollection.create((shelf: any) => {
-                  shelf.code = shelfData.code || '';
-                  shelf.barcode = shelfData.barcode || shelfData.code || '';
-                  shelf.floor = shelfData.floor || 1;
-                  shelf.capacity = shelfData.capacity || 0;
-                  shelf.notes = shelfData.notes || '';
-                  shelf.item_count = 0;
-                  shelf.created_at = Date.now();
-                });
-                newShelfId = newShelf.id;
+        {/* Existing Shelves */}
+        {filteredShelves.map((shelf) => (
+          <View key={shelf.id} style={isWide ? { width: '12%' } : { width: '48%' }}>
+            <ShelfCard
+              shelf={shelf}
+              onEdit={() => handleEditShelf(shelf)}
+              onDelete={() => handleDeleteShelf(shelf.id)}
+              onClick={() => handleShelfClick(shelf)}
+            />
+          </View>
+        ))}
+      </View>
+    </ScrollView>
+
+    {/* Modals – ΑΚΡΙΒΩΣ όπως τα έχεις τώρα */}
+    <ShelfModal
+      visible={showAddModal || showEditModal}
+      shelf={selectedShelf}
+      onClose={() => {
+        setShowAddModal(false);
+        setShowEditModal(false);
+        setSelectedShelf(null);
+      }}
+      onSave={async (shelfData) => {
+        try {
+          const userId = await getCurrentUserId();
+          
+          if (selectedShelf) {
+            // EDIT MODE
+            const oldValues = {
+              code: selectedShelf.code,
+              barcode: selectedShelf.barcode,
+              floor: selectedShelf.floor,
+              capacity: selectedShelf.capacity,
+              notes: selectedShelf.notes
+            };
+            const newValues = {
+              code: selectedShelf.code,
+              barcode: shelfData.barcode || selectedShelf.barcode,
+              floor: shelfData.floor || selectedShelf.floor,
+              capacity: shelfData.capacity || selectedShelf.capacity,
+              notes: shelfData.notes || selectedShelf.notes
+            };
+            await database.write(async () => {
+              const shelfRecord = await database.get<Shelf>('shelves').find(selectedShelf.id);
+              await shelfRecord.update((shelf: any) => {
+                shelf.barcode = newValues.barcode;
+                shelf.floor = newValues.floor;
+                shelf.capacity = newValues.capacity;
+                shelf.notes = newValues.notes;
               });
-              
-              // Log shelf creation
-              console.log('📝 CREATE_SHELF - User ID:', userId);
-              console.log('📝 CREATE_SHELF - Shelf ID:', newShelfId);
-              await logCreateShelf(userId, newShelfId, {
-                code: shelfData.code,
-                barcode: shelfData.barcode,
-                floor: shelfData.floor,
-                capacity: shelfData.capacity,
-                notes: shelfData.notes
-              });
+            });
+            await logUpdateShelf(userId, selectedShelf.id, oldValues, newValues);
+          } else {
+            // CREATE MODE
+            const existingShelf = shelves.find(shelf =>
+              shelf.code.toLowerCase() === shelfData.code?.toLowerCase()
+            );
+            if (existingShelf) {
+              setErrorMessage(`Το ράφι με κωδικό "${shelfData.code}" υπάρχει ήδη!`);
+              setShowError(true);
+              return false;
             }
-            
-            // Reload shelves from database
-            await loadShelves();
-            return true; // Return true to indicate success
-          } catch (error) {
-            console.error('Error saving shelf:', error);
-            setErrorMessage('Σφάλμα κατά την αποθήκευση του ραφιού');
-            setShowError(true);
-            return false; // Return false to indicate error
+            let newShelfId = '';
+            await database.write(async () => {
+              const shelvesCollection = database.get<Shelf>('shelves');
+              const newShelf = await shelvesCollection.create((shelf: any) => {
+                shelf.code = shelfData.code || '';
+                shelf.barcode = shelfData.barcode || shelfData.code || '';
+                shelf.floor = shelfData.floor || 1;
+                shelf.capacity = shelfData.capacity || 0;
+                shelf.notes = shelfData.notes || '';
+                shelf.item_count = 0;
+                shelf.created_at = Date.now();
+              });
+              newShelfId = newShelf.id;
+            });
+            await logCreateShelf(userId, newShelfId, {
+              code: shelfData.code,
+              barcode: shelfData.barcode,
+              floor: shelfData.floor,
+              capacity: shelfData.capacity,
+              notes: shelfData.notes
+            });
           }
-        }}
-        showError={showError}
-        errorMessage={errorMessage}
-        onClearError={() => {
-          setShowError(false);
-          setErrorMessage('');
-        }}
-        onSetError={(message) => {
-          setErrorMessage(message);
+          await loadShelves();
+          return true;
+        } catch (error) {
+          console.error('Error saving shelf:', error);
+          setErrorMessage('Σφάλμα κατά την αποθήκευση του ραφιού');
           setShowError(true);
-        }}
-      />
+          return false;
+        }
+      }}
+      showError={showError}
+      errorMessage={errorMessage}
+      onClearError={() => {
+        setShowError(false);
+        setErrorMessage('');
+      }}
+      onSetError={(message) => {
+        setErrorMessage(message);
+        setShowError(true);
+      }}
+    />
 
-      {/* Delete Confirmation Modal */}
-      <DeleteConfirmationModal
-        visible={showDeleteModal}
-        shelf={shelfToDelete}
-        onClose={() => {
-          setShowDeleteModal(false);
-          setShelfToDelete(null);
-          setShowDeleteSuccess(false);
-        }}
-        onConfirm={confirmDeleteShelf}
-        showSuccess={showDeleteSuccess}
-      />
+    <DeleteConfirmationModal
+      visible={showDeleteModal}
+      shelf={shelfToDelete}
+      onClose={() => {
+        setShowDeleteModal(false);
+        setShelfToDelete(null);
+        setShowDeleteSuccess(false);
+      }}
+      onConfirm={confirmDeleteShelf}
+      showSuccess={showDeleteSuccess}
+    />
 
-      {/* Shelf Detail Modal */}
-      <ShelfDetailModal
-        visible={showShelfDetail}
-        shelf={selectedShelfDetail}
-        onClose={() => {
-          setShowShelfDetail(false);
-          setSelectedShelfDetail(null);
-        }}
-      />
-    </SafeAreaView>
-  );
+    <ShelfDetailModal
+      visible={showShelfDetail}
+      shelf={selectedShelfDetail}
+      onClose={() => {
+        setShowShelfDetail(false);
+        setSelectedShelfDetail(null);
+      }}
+    />
+  </Page>
+)
+
+
 }
 
 // Shelf Card Component
@@ -493,6 +474,7 @@ function ShelfModal({
   const [capacity, setCapacity] = useState(0);
   const [notes, setNotes] = useState('');
   const [showSuccessMessage, setShowSuccessMessage] = useState(false);
+  const isEdit = !!shelf;
 
   useEffect(() => {
     if (shelf) {
@@ -516,6 +498,13 @@ function ShelfModal({
       onClearError();
     }
   }, [visible, onClearError]);
+
+  // barcode
+  useEffect(() => {
+  if (!isEdit) {
+    setBarcodeCode(shelfName.trim());
+  }
+}, [shelfName, isEdit]);
 
   const handleSave = async () => {
     // Validate required fields
@@ -586,12 +575,19 @@ function ShelfModal({
                 <View style={[styles.inputContainer, shelf && styles.inputContainerDisabled]}>
                   <Ionicons name="location" size={20} color="#6B7280" style={styles.inputIcon} />
                   <TextInput
-                    style={[styles.textInput, shelf && styles.textInputDisabled]}
+                    style={[
+                      styles.textInput,
+                      isEdit && styles.textInputDisabled,
+                      Platform.OS === 'web' && ({ outlineStyle: 'none', outlineWidth: 0 } as any),
+                    ]}
                     value={shelfName}
-                    onChangeText={setShelfName}
+                    onChangeText={(v) => {
+                      setShelfName(v);
+                      if (!isEdit) setBarcodeCode(v.trim()); 
+                    }}
                     placeholder="A1, B2, C3_"
                     placeholderTextColor="#9CA3AF"
-                    editable={!shelf}
+                    editable={!isEdit}
                   />
                 </View>
                 <Text style={styles.inputHint}>
@@ -603,13 +599,18 @@ function ShelfModal({
                 <Text style={styles.inputLabel}>Κωδικός Σάρωσης *</Text>
                 <View style={styles.inputContainer}>
                   <Ionicons name="qr-code" size={20} color="#6B7280" style={styles.inputIcon} />
-                  <TextInput
-                    style={styles.textInput}
-                    value={barcodeCode}
-                    onChangeText={setBarcodeCode}
-                    placeholder="A1"
-                    placeholderTextColor="#9CA3AF"
-                  />
+                 <TextInput
+                  style={[
+                    styles.textInput,
+                    !isEdit && styles.textInputDisabled,
+                    Platform.OS === 'web' && ({ outlineStyle: 'none', outlineWidth: 0 } as any),
+                  ]}
+                  value={barcodeCode}
+                  onChangeText={setBarcodeCode}
+                  placeholder="A1"
+                  placeholderTextColor="#9CA3AF"
+                  editable={isEdit} 
+                />
                 </View>
                 <Text style={styles.inputHint}>Ο κωδικός δημιουργείται αυτόματα από το όνομα ραφιού</Text>
               </View>
@@ -617,7 +618,11 @@ function ShelfModal({
               <View style={styles.inputGroup}>
                 <Text style={styles.inputLabel}>Σημειώσεις (προαιρετικό)</Text>
                 <TextInput
-                  style={[styles.textInput, styles.textArea]}
+                  style={[
+                    styles.textInput,
+                    styles.textArea,
+                    Platform.OS === 'web' && ({ outlineStyle: 'none', outlineWidth: 0 } as any), // 👈 εδώ
+                  ]}
                   value={notes}
                   onChangeText={setNotes}
                   placeholder="Προσθέστε σημειώσεις για το ράφι..."
@@ -686,7 +691,7 @@ function DeleteConfirmationModal({
               </View>
               <Text style={styles.deleteModalTitle}>Διαγραφή Ραφιού</Text>
               <Text style={styles.deleteModalSubtitle}>
-                Είστε σίγουροι ότι θέλετε να διαγράψετε το ράφι &ldquo;{shelf?.code}&rdquo;?
+                Είστε σίγουροι ότι θέλετε να διαγράψετε το ράφι “{shelf?.code}”;
               </Text>
               <Text style={styles.deleteModalWarning}>
                 Αυτή η ενέργεια δεν μπορεί να αναιρεθεί.
@@ -765,7 +770,17 @@ function ShelfDetailModal({
             </View>
 
             {/* Add Item Button */}
-            <Pressable style={styles.addItemButton}>
+            <Pressable
+              style={styles.addItemButton}
+              onPress={() => {
+
+                onClose();
+
+                setTimeout(() => {
+                  router.push(`/additem?shelfId=${shelf.id}&shelfCode=${shelf.code}&itemCount=${shelf.item_count}`);
+                }, 200);
+              }}
+            >
               <Ionicons name="add-circle" size={24} color="#FFFFFF" />
               <Text style={styles.addItemButtonText}>Προσθήκη Υπάρχοντος Τεμαχίου</Text>
             </Pressable>
@@ -835,55 +850,84 @@ const styles = StyleSheet.create({
     flex: 1,
     marginLeft: 16,
   },
-  headerIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#F3F4F6',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 16,
-  },
-  headerText: {
-    flex: 1,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#111827',
-    marginBottom: 4,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#6B7280',
-  },
-  addButton: {
-    width: 40,
-    height: 40,
-    backgroundColor: '#3B82F6',
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  searchContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginBottom: 24,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
-  searchIcon: {
-    marginRight: 12,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 16,
-    color: '#374151',
-  },
+
+  
+ 
+  pageContainer: {
+  padding: 16,
+  paddingBottom: 40,
+},
+
+sectionHeaderRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  marginBottom: 12,
+},
+
+sectionHeaderLeft: {
+  flexDirection: 'row',
+  alignItems: 'center',
+},
+
+headerIcon: {
+  width: 40,
+  height: 40,
+  borderRadius: 10,
+  backgroundColor: '#EEF2FF',
+  alignItems: 'center',
+  justifyContent: 'center',
+},
+
+title: {
+  fontSize: 20,
+  fontWeight: '700',
+  color: '#111827',
+  marginBottom: 2,
+},
+
+subtitle: {
+  fontSize: 13,
+  color: '#6B7280',
+},
+
+addButton: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 8,
+  backgroundColor: '#3B82F6',
+  borderRadius: 10,
+  paddingVertical: 10,
+  paddingHorizontal: 14,
+  shadowColor: '#000',
+  shadowOpacity: 0.12,
+  shadowRadius: 6,
+  shadowOffset: { width: 0, height: 3 },
+  elevation: 3,
+},
+
+addButtonText: {
+  color: '#FFFFFF',
+  fontWeight: '800',
+  fontSize: 14,
+},
+
+/* Search ίδιο με History look */
+searchContainer: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  backgroundColor: '#F8FAFF',
+  borderRadius: 12,
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+  marginBottom: 16,
+  borderWidth: 2,
+  borderColor: '#BFDBFE',
+},
+searchIcon: { marginRight: 8 },
+searchInput: { flex: 1, fontSize: 15, color: '#111827' },
+
+
   shelvesContainer: {
     flex: 1,
   },
@@ -971,7 +1015,7 @@ const styles = StyleSheet.create({
   addShelfText: {
     fontSize: 16,
     color: '#3B82F6',
-    fontWeight: '600',
+    fontWeight: '400',
     marginTop: 8,
   },
   addShelfTextSmall: {
@@ -980,88 +1024,94 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    paddingHorizontal: 20,  
+    paddingVertical: 0,   
   },
   modalContainer: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    width: '100%',
-    maxWidth: 1100,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 8,
-  },
+  backgroundColor: '#FFFFFF',
+  borderRadius: 16,
+  width: '98%',          // σχεδόν full width
+  maxWidth: 1400,        // για desktop
+  height: '95%',         // σχεδόν full height
+  alignSelf: 'center',
+  overflow: 'hidden',
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 8 },
+  shadowOpacity: 0.25,
+  shadowRadius: 20,
+  elevation: 10,
+},
+
+
   modalHeader: {
-    padding: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
   },
-  modalBackButton: {
-    padding: 4,
-    marginBottom: 16,
-  },
+modalBackButton: { padding: 4, marginBottom: 8 },
+
   modalHeaderContent: {
     alignItems: 'center',
   },
   modalIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
+    width: 40,
+    height: 40,
+    borderRadius: 10,
     backgroundColor: '#EBF4FF',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 8,
   },
   modalTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
+    fontSize: 20,
+    fontWeight: '700',
     color: '#111827',
-    marginBottom: 4,
+    marginBottom: 2,
   },
   modalSubtitle: {
-    fontSize: 16,
+    fontSize: 13,
     color: '#6B7280',
     textAlign: 'center',
   },
   modalContent: {
-    padding: 32,
-  },
+  paddingHorizontal: 20,
+  paddingVertical: 16,
+  flex: 1,              
+  overflow: 'scroll',   
+},
+
   inputGroup: {
-    marginBottom: 32,
+    marginBottom: 20,
   },
   inputLabel: {
-    fontSize: 16,
+    fontSize: 14,
     color: '#374151',
-    fontWeight: '600',
-    marginBottom: 12,
+    marginBottom: 8,
+    fontWeight: '400',
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#D1D5DB',
-    borderRadius: 12,
+    borderRadius: 10,
     backgroundColor: '#FFFFFF',
-    marginBottom: 8,
-    minHeight: 56,
-    width: '100%',
+    marginBottom: 6,
+    minHeight: 44,
   },
   inputIcon: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 10,
   },
   textInput: {
     flex: 1,
-    paddingVertical: 16,
-    paddingRight: 16,
-    paddingLeft: 8,
-    fontSize: 18,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    fontSize: 15,
     color: '#374151',
-    minWidth: 700,
   },
   inputContainerDisabled: {
     backgroundColor: '#F3F4F6',
@@ -1071,65 +1121,62 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     backgroundColor: '#F3F4F6',
   },
-  textArea: {
-    height: 120,
-    textAlignVertical: 'top',
-    paddingTop: 16,
-    borderRadius: 12,
+ textArea: {
+    height: 80,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: '#D1D5DB',
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 16,
-    fontSize: 18,
-    color: '#374151',
-    width: '100%',
-    minWidth: 700,
+    padding: 10,
+    fontSize: 15,
+    textAlignVertical: 'top',
   },
   inputHint: {
-    fontSize: 14,
-    color: '#6B7280',
-    fontStyle: 'italic',
-    marginTop: 4,
-  },
+  fontSize: 12,
+  color: '#6B7280',
+  fontStyle: 'italic',
+  marginTop: 2,
+},
   modalActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    padding: 32,
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
-    gap: 20,
-  },
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+  paddingHorizontal: 20,
+  paddingVertical: 16,
+  borderTopWidth: 1,
+  borderTopColor: '#E5E7EB',
+  gap: 12,
+},
   cancelButton: {
-    flex: 1,
-    paddingVertical: 16,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    alignItems: 'center',
-  },
+  flex: 1,
+  paddingVertical: 10,
+  backgroundColor: '#FFFFFF',
+  borderRadius: 10,
+  borderWidth: 1,
+  borderColor: '#D1D5DB',
+  alignItems: 'center',
+},
   cancelButtonText: {
-    fontSize: 16,
-    color: '#6B7280',
-    fontWeight: '600',
-  },
+  fontSize: 14,
+  color: '#6B7280',
+  fontWeight: '400',
+},
   saveButton: {
     flex: 1,
-    paddingVertical: 16,
+    paddingVertical: 10,
     backgroundColor: '#3B82F6',
-    borderRadius: 12,
+    borderRadius: 10,
     alignItems: 'center',
   },
   saveButtonText: {
-    fontSize: 16,
+    fontSize: 14,
     color: '#FFFFFF',
-    fontWeight: '600',
+    fontWeight: '700',
   },
   requiredText: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#6B7280',
     textAlign: 'center',
-    marginTop: 8,
+    marginTop: 4,
   },
   successMessage: {
     flexDirection: 'row',
@@ -1147,7 +1194,7 @@ const styles = StyleSheet.create({
   successMessageText: {
     fontSize: 16,
     color: '#10B981',
-    fontWeight: '600',
+    fontWeight: '400',
   },
   errorMessage: {
     flexDirection: 'row',
@@ -1165,7 +1212,7 @@ const styles = StyleSheet.create({
   errorMessageText: {
     fontSize: 16,
     color: '#EF4444',
-    fontWeight: '600',
+    fontWeight: '400',
   },
   deleteModalContainer: {
     backgroundColor: '#FFFFFF',
@@ -1207,7 +1254,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#EF4444',
     textAlign: 'center',
-    fontWeight: '600',
+    fontWeight: '400',
   },
   deleteModalActions: {
     flexDirection: 'row',
@@ -1226,7 +1273,7 @@ const styles = StyleSheet.create({
   deleteCancelButtonText: {
     fontSize: 16,
     color: '#374151',
-    fontWeight: '600',
+    fontWeight: '400',
   },
   deleteConfirmButton: {
     flex: 1,
@@ -1238,7 +1285,7 @@ const styles = StyleSheet.create({
   deleteConfirmButtonText: {
     fontSize: 16,
     color: '#FFFFFF',
-    fontWeight: '600',
+    fontWeight: '400',
   },
   deleteSuccessMessage: {
     flexDirection: 'row',
@@ -1257,7 +1304,7 @@ const styles = StyleSheet.create({
   deleteSuccessMessageText: {
     fontSize: 16,
     color: '#10B981',
-    fontWeight: '600',
+    fontWeight: '400',
   },
   shelfDetailOverlay: {
     flex: 1,
@@ -1265,18 +1312,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+
   shelfDetailBackdrop: {
     flex: 1,
     width: '100%',
     justifyContent: 'center',
     alignItems: 'center',
   },
+
+
   shelfDetailContainer: {
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     width: '98%',
-    maxWidth: 1200,
-    height: '95%',
+    height: '96%',
+    maxWidth: 1400,   
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.25,
@@ -1286,98 +1336,108 @@ const styles = StyleSheet.create({
   shelfDetailHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 20,
+    padding: 16,             
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
   },
+
   shelfDetailBackButton: {
     padding: 8,
-    marginRight: 16,
+    marginRight: 12,
   },
+
   shelfDetailHeaderContent: {
     flex: 1,
   },
   shelfDetailTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
+    fontSize: 18,
+    fontWeight: '400',
     color: '#111827',
-    marginBottom: 4,
+    marginBottom: 2,
   },
+
   shelfDetailSubtitle: {
-    fontSize: 16,
+    fontSize: 12,
     color: '#6B7280',
   },
   shelfDetailEditButton: {
     padding: 8,
   },
   shelfDetailSection: {
-    padding: 20,
+    padding: 16,
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
   },
+
   shelfDetailSectionLast: {
-    padding: 20,
+    padding: 16,
   },
   shelfDetailSectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 15,
+    fontWeight: '400',
     color: '#111827',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   shelfDetailInfo: {
-    gap: 12,
+    gap: 8,
   },
+
   shelfDetailInfoRow: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   shelfDetailInfoLabel: {
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 13,
+    fontWeight: '400',
     color: '#374151',
-    width: 100,
+    width: 90,
   },
+
   shelfDetailInfoValue: {
-    fontSize: 16,
+    fontSize: 13,
     color: '#6B7280',
     flex: 1,
   },
   addItemButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#8B5CF6',
-    margin: 20,
-    paddingVertical: 16,
-    paddingHorizontal: 24,
-    borderRadius: 12,
-    gap: 12,
-    width: 500,
-    alignSelf: 'center',
-    textAlign: 'center',
-  },
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'center',
+  backgroundColor: '#8B5CF6',
+  margin: 16,
+  paddingVertical: 12,
+  paddingHorizontal: 20,
+  borderRadius: 10,
+  gap: 10,
+  width: 420,
+  alignSelf: 'center',
+  textAlign: 'center',
+},
+
   addItemButtonText: {
-    fontSize: 16,
+    fontSize: 14,
     color: '#FFFFFF',
-    fontWeight: '600',
+    fontWeight: '400',
   },
+
   emptyItemsContainer: {
     alignItems: 'center',
-    paddingVertical: 40,
+    paddingVertical: 28,
   },
   emptyItemsText: {
-    fontSize: 16,
+    fontSize: 14,
     color: '#6B7280',
-    marginTop: 16,
+    marginTop: 12,
     textAlign: 'center',
   },
+
   itemsList: {
-    gap: 12,
+    gap: 10,
   },
+
   itemCard: {
     backgroundColor: '#F9FAFB',
     borderRadius: 8,
-    padding: 16,
+    padding: 12,
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
@@ -1385,13 +1445,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   itemCode: {
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: 14,
+    fontWeight: '400',
     color: '#111827',
   },
+
   itemActions: {
     flexDirection: 'row',
     gap: 8,
@@ -1399,31 +1460,34 @@ const styles = StyleSheet.create({
   itemActionButton: {
     padding: 4,
   },
+
   itemDescription: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#374151',
-    marginBottom: 4,
+    marginBottom: 2,
   },
   itemOwner: {
-    fontSize: 14,
+    fontSize: 12,
     color: '#6B7280',
-    marginBottom: 4,
+    marginBottom: 2,
   },
+
   itemDate: {
-    fontSize: 14,
+    fontSize: 12,
     color: '#6B7280',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   itemStatus: {
     alignSelf: 'flex-start',
     backgroundColor: '#10B981',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
     borderRadius: 4,
   },
+
   itemStatusText: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#FFFFFF',
-    fontWeight: '600',
+    fontWeight: '400',
   },
 });

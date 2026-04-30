@@ -1,21 +1,22 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Q } from '@nozbe/watermelondb';
-import { router } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useState } from 'react';
 import {
   Modal,
   Pressable,
-  SafeAreaView,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
   View,
   useWindowDimensions
 } from 'react-native';
+import AppHeader from '../components/AppHeader';
+import Page from '../components/Page';
 import { database } from '../database/initializeDatabase';
 import ActivityLog from '../database/models/ActivityLog';
+
 
 // Helper για κοινό padding ανάλογα με το πλάτος
 const edgePaddingForWidth = (w: number) => {
@@ -40,6 +41,43 @@ interface SummaryStats {
   updates: number;
   errors: number;
 }
+
+// color pallete
+const PALETTE = {
+  authentication: { from: '#8B73E6', to: '#6D35D0' }, 
+  customers:      { from: '#3B82F6', to: '#2563EB' }, 
+  orders:         { from: '#DFAE1A', to: '#C18407' }, 
+  items:          { from: '#22C07A', to: '#059669' }, 
+  shelves:        { from: '#E0629E', to: '#DB2777' },
+  history:        { from: '#6366F1', to: '#4F46E5' }, 
+  system:         { from: '#DC5A5A', to: '#B91C1C' },
+
+  // Status gradients
+  success:        { from: '#22C07A', to: '#059669' },
+  update:         { from: '#3B82F6', to: '#2563EB' },
+  error:          { from: '#DC5A5A', to: '#B91C1C' },
+};
+
+
+// for categories
+const getCategoryGradient = (category: string) =>
+  // @ts-ignore
+  PALETTE[category] || { from: '#9CA3AF', to: '#6B7280' };
+
+//  status tags (SUCCESS / UPDATE / ERROR)
+const getStatusGradient = (status: string) => {
+  switch (status) {
+    case 'success':
+      return PALETTE.success;
+    case 'update':
+      return PALETTE.update;
+    case 'error':
+      return PALETTE.error;
+    default:
+      return { from: '#9CA3AF', to: '#6B7280' };
+  }
+};
+
 
 export default function ActivityLogScreen() {
   const { width } = useWindowDimensions();
@@ -339,27 +377,10 @@ export default function ActivityLogScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <StatusBar barStyle="dark-content" backgroundColor="#fff" />
-      <View style={[styles.container, { paddingHorizontal: EDGE }]}>
+     <Page>
         
-        {/* Header */}
-        <View style={styles.header}>
-          <Pressable onPress={() => router.push('/dashboard')} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color="#374151" />
-            <Text style={styles.backText}>Επιστροφή</Text>
-          </Pressable>
-          
-          <View style={styles.headerContent}>
-            <View style={styles.headerIcon}>
-              <Ionicons name="time" size={24} color="#8B5CF6" />
-            </View>
-            <View style={styles.headerText}>
-              <Text style={styles.title}>Αρχείο Καταγραφής Δραστηριοτήτων</Text>
-              <Text style={styles.subtitle}>Πλήρης καταγραφή όλων των ενεργειών του συστήματος</Text>
-            </View>
-          </View>
-        </View>
+        <AppHeader showBack />
+        <View style={{ height: 4 }} />
 
         {/* Filter */}
         <View style={styles.searchSection}>
@@ -379,14 +400,16 @@ export default function ActivityLogScreen() {
               
             </View>
             
-            <Pressable
-              style={styles.advancedFilterButton}
-              onPress={() => setShowDatePicker(true)}
-            >
-              <Ionicons name="calendar" size={20} color="#6B7280" />
-              <Text style={styles.advancedFilterText}>Ημερομηνία</Text>
-              <Ionicons name="chevron-down" size={16} color="#6B7280" />
-            </Pressable>
+            <View style={styles.advancedFilterContainer}>
+              <Pressable
+                style={styles.advancedFilterButton}
+                onPress={() => setShowDatePicker(true)}
+              >
+                <Ionicons name="calendar" size={20} color="#6B7280" />
+                <Text style={styles.advancedFilterText}>Ημερομηνία</Text>
+                <Ionicons name="chevron-down" size={16} color="#6B7280" />
+              </Pressable>
+            </View>
 
             <View style={styles.actionDropdownContainer}>
               <Pressable 
@@ -406,23 +429,31 @@ export default function ActivityLogScreen() {
 
         {/* Summary Cards */}
         <View style={styles.summaryCards}>
-          <View style={[styles.summaryCard, styles.totalCard]}>
-            <Text style={styles.summaryNumber}>{summaryStats.total}</Text>
-            <Text style={styles.summaryLabel}>Σύνολο</Text>
-          </View>
-          <View style={styles.summaryCard}>
-            <Text style={styles.summaryNumber}>{summaryStats.successes}</Text>
-            <Text style={styles.summaryLabel}>Επιτυχίες</Text>
-          </View>
-          <View style={styles.summaryCard}>
-            <Text style={styles.summaryNumber}>{summaryStats.updates}</Text>
-            <Text style={styles.summaryLabel}>Ενημερώσεις</Text>
-          </View>
-          <View style={styles.summaryCard}>
-            <Text style={styles.summaryNumber}>{summaryStats.errors}</Text>
-            <Text style={styles.summaryLabel}>Σφάλματα</Text>
-          </View>
+        <View style={[styles.summaryCard, styles.totalCard]}>
+          <Text style={[styles.summaryNumber, { color: '#8B5CF6' }]}> {/* Μωβ */}
+            {summaryStats.total}
+          </Text>
+          <Text style={styles.summaryLabel}>Σύνολο</Text>
         </View>
+        <View style={styles.summaryCard}>
+          <Text style={[styles.summaryNumber, { color: '#10B981' }]}> {/* Πράσινο */}
+            {summaryStats.successes}
+          </Text>
+          <Text style={styles.summaryLabel}>Επιτυχίες</Text>
+        </View>
+        <View style={styles.summaryCard}>
+          <Text style={[styles.summaryNumber, { color: '#3B82F6' }]}> {/* Μπλε */}
+            {summaryStats.updates}
+          </Text>
+          <Text style={styles.summaryLabel}>Ενημερώσεις</Text>
+        </View>
+        <View style={styles.summaryCard}>
+          <Text style={[styles.summaryNumber, { color: '#EF4444' }]}> {/* Κόκκινο */}
+            {summaryStats.errors}
+          </Text>
+          <Text style={styles.summaryLabel}>Σφάλματα</Text>
+        </View>
+      </View>
 
         {/* Activity Log Sections */}
         <ScrollView 
@@ -437,99 +468,148 @@ export default function ActivityLogScreen() {
             
             return (
               <View key={category} style={styles.logSection}>
-                <Pressable 
-                  style={[styles.sectionHeader, { backgroundColor: getCategoryColor(category) }]}
-                  onPress={() => toggleSection(category)}
-                >
-                  <View style={styles.sectionHeaderLeft}>
-                    <Ionicons 
-                      name={getCategoryIcon(category) as any} 
-                      size={20} 
-                      color="white" 
-                    />
-                    <Text style={styles.sectionTitle}>
-                      {getCategoryTitle(category)} {categoryLogs.length}
-                    </Text>
-                  </View>
-                  <Ionicons 
-                    name={isExpanded ? "chevron-up" : "chevron-down"} 
-                    size={20} 
-                    color="white" 
-                  />
-                </Pressable>
+                {(() => {
+                  const grad = getCategoryGradient(category);
+                  return (
+                    <LinearGradient
+                      colors={[grad.from, grad.to]}
+                      start={{ x: 0, y: 0.5 }}
+                      end={{ x: 1, y: 0.5 }}
+                      style={styles.sectionHeaderGradient}
+                    >
+
+                      <View style={styles.glossOverlay} pointerEvents="none" />
+
+                      <Pressable
+                        onPress={() => toggleSection(category)}
+                        style={({ pressed }) => [
+                          styles.sectionHeaderPressable,
+                          pressed && { opacity: 0.95 } 
+                        ]}
+                      >
+                        <View style={styles.sectionHeaderLeft}>
+                          <Ionicons
+                            name={getCategoryIcon(category) as any}
+                            size={20}
+                            color="white"
+                          />
+                          <Text style={styles.sectionTitle}>
+                            {getCategoryTitle(category)} {categoryLogs.length}
+                          </Text>
+                        </View>
+                        <Ionicons
+                          name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                          size={20}
+                          color="white"
+                        />
+                      </Pressable>
+                    </LinearGradient>
+                  );
+                })()}
 
                 {isExpanded && (
                   <View style={styles.sectionContent}>
-                    {paginatedLogs.map((log) => (
-                      <View key={log.id} style={styles.logEntry}>
-                        <View style={styles.logEntryHeader}>
-                          <Ionicons 
-                            name={getActionIcon(log.action, log.status) as any} 
-                            size={20} 
-                            color={getStatusColor(log.status)} 
-                          />
-                          <Text style={styles.logAction}>{log.action}</Text>
-                          <View style={[styles.statusTag, { backgroundColor: getStatusColor(log.status) }]}>
-                            <Text style={styles.statusTagText}>
-                              {log.status.toUpperCase()}
-                            </Text>
+                    {paginatedLogs.map((log) => {
+                      const sg = getStatusGradient(log.status);
+                      return (
+                        <View key={log.id} style={styles.logEntry}>
+                          <View style={styles.logEntryHeader}>
+                            <Ionicons
+                              name={getActionIcon(log.action, log.status) as any}
+                              size={20}
+                              color={getStatusColor(log.status)}
+                            />
+                            <Text style={styles.logAction}>{log.action}</Text>
+
+                            {/* Gradient status tag */}
+                            <LinearGradient
+                              colors={[sg.from, sg.to]}
+                              start={{ x: 0, y: 0.5 }}
+                              end={{ x: 1, y: 0.5 }}
+                              style={[
+                                styles.statusTagGradient,
+                                log.status === 'success' && { shadowColor: 'rgba(16,185,129,0.55)' },
+                                log.status === 'update'  && { shadowColor: 'rgba(59,130,246,0.55)' },
+                                log.status === 'error'   && { shadowColor: 'rgba(239,68,68,0.55)' },
+                              ]}
+                            >
+                              <Text style={styles.statusTagText}>
+                                {log.status.toUpperCase()}
+                              </Text>
+                            </LinearGradient>
                           </View>
-                        </View>
-                        
-                        <Text style={styles.logDetails}>
-                          {(() => {
-                            try {
-                              const detailsObj = JSON.parse(log.details);
-                              if (detailsObj.username && detailsObj.email) {
-                                return `${detailsObj.username} (${detailsObj.email})`;
-                              } else if (detailsObj.username) {
-                                return detailsObj.username;
-                              } else if (detailsObj.email) {
-                                return detailsObj.email;
+
+                          <Text style={styles.logDetails}>
+                            {(() => {
+                              try {
+                                const detailsObj = JSON.parse(log.details);
+                                if (detailsObj.username && detailsObj.email) {
+                                  return `${detailsObj.username} (${detailsObj.email})`;
+                                } else if (detailsObj.username) {
+                                  return detailsObj.username;
+                                } else if (detailsObj.email) {
+                                  return detailsObj.email;
+                                }
+                                return log.details;
+                              } catch {
+                                return log.details;
                               }
-                              return log.details;
-                            } catch {
-                              return log.details;
-                            }
-                          })()}
-                        </Text>
-                        
-                        <View style={styles.logMeta}>
-                          <View style={styles.logMetaItem}>
-                            <Ionicons name="person" size={14} color="#6B7280" />
-                            <Text style={styles.logMetaText}>{log.user}</Text>
-                          </View>
-                          <View style={styles.logMetaItem}>
-                            <Ionicons name="time" size={14} color="#6B7280" />
-                            <Text style={styles.logMetaText}>{formatDate(log.timestamp)}</Text>
+                            })()}
+                          </Text>
+
+                          <View style={styles.logMeta}>
+                            <View style={styles.logMetaItem}>
+                              <Ionicons name="person" size={14} color="#6B7280" />
+                              <Text style={styles.logMetaText}>{log.user}</Text>
+                            </View>
+                            <View style={styles.logMetaItem}>
+                              <Ionicons name="time" size={14} color="#6B7280" />
+                              <Text style={styles.logMetaText}>{formatDate(log.timestamp)}</Text>
+                            </View>
                           </View>
                         </View>
-                      </View>
-                    ))}
-                    
+                      );
+                    })}
+
                     {/* Pagination Controls */}
                     {totalPages > 1 && (
                       <View style={styles.paginationContainer}>
-                        <Pressable 
-                          style={[styles.paginationButton, currentPage[category] === 1 && styles.paginationButtonDisabled]}
+                        <Pressable
+                          style={[
+                            styles.paginationButton,
+                            currentPage[category] === 1 && styles.paginationButtonDisabled,
+                          ]}
                           onPress={() => goToPage(category, currentPage[category] - 1)}
                           disabled={currentPage[category] === 1}
                         >
-                          <Text style={[styles.paginationButtonText, currentPage[category] === 1 && styles.paginationButtonTextDisabled]}>
+                          <Text
+                            style={[
+                              styles.paginationButtonText,
+                              currentPage[category] === 1 && styles.paginationButtonTextDisabled,
+                            ]}
+                          >
                             Προηγούμενο
                           </Text>
                         </Pressable>
-                        
+
                         <Text style={styles.paginationInfo}>
                           Σελίδα {currentPage[category]} από {totalPages}
                         </Text>
-                        
-                        <Pressable 
-                          style={[styles.paginationButton, currentPage[category] === totalPages && styles.paginationButtonDisabled]}
+
+                        <Pressable
+                          style={[
+                            styles.paginationButton,
+                            currentPage[category] === totalPages && styles.paginationButtonDisabled,
+                          ]}
                           onPress={() => goToPage(category, currentPage[category] + 1)}
                           disabled={currentPage[category] === totalPages}
                         >
-                          <Text style={[styles.paginationButtonText, currentPage[category] === totalPages && styles.paginationButtonTextDisabled]}>
+                          <Text
+                            style={[
+                              styles.paginationButtonText,
+                              currentPage[category] === totalPages && styles.paginationButtonTextDisabled,
+                            ]}
+                          >
                             Επόμενο
                           </Text>
                         </Pressable>
@@ -537,12 +617,12 @@ export default function ActivityLogScreen() {
                     )}
                   </View>
                 )}
-              </View>
+</View>
+
             );
           })}
         </ScrollView>
-      </View>
-
+      
 
       {/* Category Dropdown Modal */}
       <Modal visible={showCategoryDropdown} transparent animationType="fade">
@@ -830,11 +910,40 @@ export default function ActivityLogScreen() {
         </Pressable>
       </Modal>
 
-    </SafeAreaView>
+
+  </Page>
   );
 }
-
 const styles = StyleSheet.create({
+
+  sectionHeaderGradient: {
+  borderRadius: 12,
+  marginBottom: 8,
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 6 },
+  shadowOpacity: 0.15,
+  shadowRadius: 10,
+  elevation: 6,
+},
+sectionHeaderPressable: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  paddingHorizontal: 16,
+  paddingVertical: 12,
+  borderRadius: 12,
+},
+statusTagGradient: {
+  paddingHorizontal: 10,
+  paddingVertical: 5,
+  borderRadius: 8,
+  shadowOffset: { width: 0, height: 4 },
+  shadowOpacity: 0.6,
+  shadowRadius: 10,
+  elevation: 4,
+},
+
+
   safe: {
     flex: 1,
     backgroundColor: '#F9FAFB',
@@ -893,27 +1002,37 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   summaryCard: {
-    flex: 1,
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
+  flex: 1,
+  backgroundColor: '#F9FAFB',
+  borderRadius: 16,
+  paddingVertical: 20,
+  alignItems: 'center',
+  justifyContent: 'center',
+  shadowColor: '#000',
+  shadowOffset: { width: 4, height: 4 },
+  shadowOpacity: 0.08,
+  shadowRadius: 12,
+  elevation: 6,
+  borderWidth: 1,
+  borderColor: '#E5E7EB',
+},
   totalCard: {
     flex: 1.2,
   },
   summaryNumber: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#111827',
-    marginBottom: 4,
-  },
+  fontSize: 26,
+  fontWeight: '500',
+  textShadowColor: 'rgba(0, 0, 0, 0.1)',
+  textShadowOffset: { width: 0, height: 1 },
+  textShadowRadius: 2,
+  marginBottom: 6,
+},
   summaryLabel: {
-    fontSize: 14,
-    color: '#6B7280',
-  },
+  fontSize: 15,
+  fontWeight: '500',
+  color: '#6B7280',
+  letterSpacing: 0.3,
+},
   logsContainer: {
     flex: 1,
   },
@@ -1028,14 +1147,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginTop: 12,
   },
-  advancedFilterButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#F3F4F6',
-    borderRadius: 8,
-  },
+
   advancedFilterText: {
     fontSize: 14,
     color: '#6B7280',
@@ -1104,6 +1216,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#D1D5DB',
     gap: 8,
+    width: '100%', 
+    minHeight: 40,
   },
   categoryDropdownText: {
     flex: 1,
@@ -1329,6 +1443,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#D1D5DB',
     gap: 8,
+    width: '100%', 
+    minHeight: 44,
   },
   actionDropdownText: {
     flex: 1,
@@ -1394,4 +1510,36 @@ const styles = StyleSheet.create({
     color: '#3B82F6',
     fontWeight: '600',
   },
+
+  glossOverlay: {
+  position: 'absolute',
+  top: 0,
+  left: 0,
+  right: 0,
+  height: '50%',
+  borderTopLeftRadius: 12,
+  borderTopRightRadius: 12,
+  backgroundColor: 'rgba(255,255,255,0.25)',
+  opacity: 0.25,
+},
+
+advancedFilterContainer: {
+  flex: 1,              // κάνει το κουμπί να έχει ίδιο πλάτος με τα άλλα δύο
+},
+
+advancedFilterButton: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'center',
+  paddingHorizontal: 16,
+  paddingVertical: 12,
+  backgroundColor: '#FFFFFF',
+  borderRadius: 8,
+  borderWidth: 1,
+  borderColor: '#D1D5DB',
+  gap: 8,
+  width: '100%',
+  minHeight: 58,
+},
+
 });

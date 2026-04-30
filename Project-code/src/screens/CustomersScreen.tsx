@@ -1,6 +1,8 @@
 import { Ionicons } from '@expo/vector-icons'
 import { useFocusEffect } from '@react-navigation/native'
+import * as Print from 'expo-print'
 import { router } from 'expo-router'
+import * as Sharing from 'expo-sharing'
 import React, { useCallback, useMemo, useRef, useState } from 'react'
 import {
   Alert,
@@ -16,12 +18,13 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native'
+import { Circle, Svg } from 'react-native-svg'
 import AppHeader from '../components/AppHeader'
 import ConfirmModal from '../components/ConfirmModal'
 import Page from '../components/Page'
+import { logExportHistoryPDF, logFilterHistoryApplied, logViewCustomerHistory } from '../services/activitylog'
 import { createCustomer, deleteCustomer, observeCustomers, updateCustomer } from '../services/customer'
-import { listOrderItemsByCustomer, updateOrderItem } from '../services/orderItems'
-
+import { listOrderItemsByCustomer, normId, updateOrderItem } from '../services/orderItems'
 import { observeOrdersByCustomer } from '../services/orders'
 import { usePreview } from '../state/PreviewProvider'
 import { colors } from '../theme/colors'
@@ -31,6 +34,7 @@ const normalize = (s: string) =>
   s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim()
 const isAFM = (q: string) => /^\d{9}$/.test(q)
 const isPhone = (q: string) => /^\d{7,}$/.test(q)
+
 
 // Parse/Compose helpers : notes (desc | Receipt: X | €/m²: Y)
 function parseNotes(notes: string | null | undefined) {
@@ -71,13 +75,51 @@ function composeNotes(desc: string, receiptNo: string, pricePerSqm: string) {
   return parts.join(' | ')
 }
 
+
 /*  Helpers */
-const fmtDate = (isoOrMs: string | number) => {
-  try {
-    const d = typeof isoOrMs === 'number' ? new Date(isoOrMs) : new Date(isoOrMs)
-    return isNaN(d.getTime()) ? '—' : d.toLocaleString('el-GR')
-  } catch { return '—' }
+/*  Helpers (ημερομηνίες ανθεκτικές σε dd/MM/yyyy, YYYY-MM-DD, ms) */
+function parseDateFlexible(input?: string | number | null) {
+  if (input == null) return null
+
+  // numeric (ms) ή numeric string
+  if (typeof input === 'number') {
+    const d = new Date(input)
+    return isNaN(d.getTime()) ? null : d
+  }
+  const s = String(input).trim()
+
+  if (/^\d+$/.test(s)) {
+    const d = new Date(Number(s))
+    return isNaN(d.getTime()) ? null : d
+  }
+
+  // ISO date-only
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const d = new Date(`${s}T00:00:00`)
+    return isNaN(d.getTime()) ? null : d
+  }
+
+  // Ελληνικό dd/MM/yyyy
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) {
+    const [dd, mm, yyyy] = s.split('/').map(Number)
+    const d = new Date(yyyy, mm - 1, dd)
+    return isNaN(d.getTime()) ? null : d
+  }
+
+  const d = new Date(s)
+  return isNaN(d.getTime()) ? null : d
 }
+
+const fmtDate = (v: string | number | null | undefined) => {
+  const d = parseDateFlexible(v as any)
+  return d ? d.toLocaleString('el-GR') : '—'
+}
+
+function yearOf(v?: string | number | null) {
+  const d = parseDateFlexible(v)
+  return d ? d.getFullYear() : null
+}
+
 
 const fmtMoney = (n: number | string | null | undefined) => {
   const num = typeof n === 'string' ? Number(n) : (n ?? 0)
@@ -115,7 +157,6 @@ function Highlight({ text, query }: { text: string; query: string }) {
   )
 }
 
-
 /* helper: FieldRow */
 function FieldRow({
   label,
@@ -130,11 +171,21 @@ function FieldRow({
   onChangeText?: (v: string) => void
   keyboardType?: 'default' | 'number-pad' | 'phone-pad' | 'decimal-pad'
 }) {
+  const [isFocused, setIsFocused] = React.useState(false)
   const inputRef = React.useRef<TextInput | null>(null)
 
   return (
-    <View style={{ marginBottom: 12 }}>
-      <Text style={{ fontSize: 12, color: '#6B7280', fontWeight: '700', marginBottom: 6 }}>
+    <View style={{ marginBottom: 6 }}>
+      <Text
+        style={{
+          fontSize: 10,
+          color: '#9CA3AF',
+          fontWeight: '600',
+          marginBottom: 2,
+          textTransform: 'uppercase',
+          letterSpacing: 0.5,
+        }}
+      >
         {label}
       </Text>
 
@@ -145,39 +196,57 @@ function FieldRow({
           onChangeText={onChangeText}
           keyboardType={keyboardType || 'default'}
           underlineColorAndroid="transparent"
-          onFocus={() => {
-            // Web only
-            if (Platform.OS === 'web') {
-              (inputRef.current as any)?.setNativeProps?.({
-                style: { outlineStyle: 'none', outlineWidth: 0, outlineColor: 'transparent', boxShadow: 'none' },
-              })
-            }
-          }}
+          placeholderTextColor="#9CA3AF"
+          onFocus={() => setIsFocused(true)}
+          onBlur={() => setIsFocused(false)}
           style={[
             {
-              borderWidth: 2,
-              borderColor: '#BFDBFE',
+              backgroundColor: '#FFFFFF', // 🤍 λευκό φόντο
+              borderWidth: 1.5,
+              borderColor: isFocused ? '#3B82F6' : '#E5E7EB', // 🔵 απαλή μπλε απόχρωση όταν έχει focus
               borderRadius: 10,
               paddingHorizontal: 10,
-              paddingVertical: 10,
+              paddingVertical: 6,
               fontSize: 14,
               color: '#111827',
+              height: 34,
+
+              // ✨ Εφέ φωτεινότητας + σκιά
+              ...(Platform.select({
+                ios: {
+                  shadowColor: '#3B82F6',
+                  shadowOpacity: isFocused ? 0.25 : 0.08,
+                  shadowRadius: isFocused ? 6 : 3,
+                  shadowOffset: { width: 0, height: isFocused ? 3 : 1 },
+                },
+                android: {
+                  elevation: isFocused ? 5 : 2,
+                },
+                web: {
+                  transition: 'all 0.15s ease-in-out',
+                  boxShadow: isFocused
+                    ? '0 0 6px rgba(59,130,246,0.4)' // 🔹 glow όταν εστιάζεται
+                    : '0 1px 3px rgba(0,0,0,0.06)', // απαλή σκιά όταν είναι idle
+                } as any,
+              }) as object),
             },
-            styles.noFocusRingWeb, // NO focus ring on Web
+            styles.noFocusRingWeb,
           ]}
         />
       ) : (
         <View
           style={{
-            borderWidth: 2,
-            borderColor: '#BFDBFE',
+            borderWidth: 1.5,
+            borderColor: '#E5E7EB',
             borderRadius: 10,
             paddingHorizontal: 10,
-            paddingVertical: 10,
-            backgroundColor: '#FAFAFB',
+            paddingVertical: 6,
+            backgroundColor: '#FFFFFF',
           }}
         >
-          <Text style={{ fontSize: 14, color: '#111827' }}>{(value || '').trim() || '—'}</Text>
+          <Text style={{ fontSize: 14, color: '#111827' }}>
+            {(value || '').trim() || '—'}
+          </Text>
         </View>
       )}
     </View>
@@ -194,7 +263,7 @@ function Badge({ label }: { label: string }) {
   )
 }
 
-/* component: key/value line  */
+/*  key/value line  */
 function KV({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.kvRow}>
@@ -204,7 +273,7 @@ function KV({ label, value }: { label: string; value: string }) {
   )
 }
 
-/*  component: OrderCard  */
+/*  OrderCard  */
 function OrderCard({
   code, date, total, deposit, paymentMethod, notes, itemsCount,
   expanded, onToggle, onViewItems, onEdit, onClose,
@@ -280,15 +349,12 @@ const COLOR_OPTIONS = [
   'Μπλε', 'Κόκκινο', 'Πράσινο', 'Κίτρινο', 'Μαύρο', 'Λευκό', 'Γκρι', 'Μπεζ',
   'Ροζ', 'Καφέ', 'Μωβ'
 ]
-
 const CATEGORY_OPTIONS = [
   'Πάπλωμα', 'Κουβέρτα', 'Φλοκάτη', 'Κουρτίνα', 'Διαδρομάκι', 'Χαλί'
 ]
-
 const STATUS = [
   'Άπλυτο', 'Πλυμένο'
 ]
-
 const STORAGE_STATUS = [
   'Φύλλαξη', 'Επιστροφή'
 ]
@@ -379,6 +445,138 @@ function SimpleDropdown({
   )
 }
 
+// === Helpers for history ===
+export const CATEGORY_COLORS: Record<string, string> = {
+  'Μόκετα': '#2563EB',
+  'Διαδρομάκι': '#EF4444',
+  'Κουβέρτα': '#10B981',
+  'Πάπλωμα': '#F59E0B',
+  'Φλοκάτη': '#7C3AED',
+  'Χαλί': '#111827',
+};
+
+export const CATEGORY_LABELS = new Map<string, string>([
+  ['μοκετα','Μόκετα'], ['μοκέτα','Μόκετα'],
+  ['διαδρομακι','Διαδρομάκι'], ['διαδρομάκι','Διαδρομάκι'],
+  ['κουβερτα','Κουβέρτα'], ['κουβέρτα','Κουβέρτα'],
+  ['παπλωμα','Πάπλωμα'], ['πάπλωμα','Πάπλωμα'],
+  ['φλοκατη','Φλοκάτη'], ['φλοκάτη','Φλοκάτη'],
+  ['χαλι','Χαλί'], ['χαλί','Χαλί'],
+]);
+
+const COLOR_SWATCH: Record<string, string> = {
+  'Μπλε': '#2563EB',
+  'Κόκκινο': '#EF4444',
+  'Πράσινο': '#10B981',
+  'Κίτρινο': '#F59E0B',
+  'Μαύρο': '#111827',
+  'Λευκό': '#E5E7EB',
+  'Γκρι': '#6B7280',
+  'Μπεζ': '#D6CCC2',
+  'Ροζ': '#F472B6',
+  'Καφέ': '#92400E',
+  'Μωβ': '#7C3AED',
+};
+
+const getColorHex = (name?: string) => {
+  const key = (name || '—').trim();
+  return COLOR_SWATCH[key] || '#9CA3AF';
+};
+
+export const normCat = (s: string) => {
+  const k = (s || '').trim().toLowerCase();
+  return CATEGORY_LABELS.get(k) || s || '—';
+};
+
+export const sum = (arr: number[]) => arr.reduce((a, b) => a + b, 0);
+
+export const fmtPercent = (num: number) => `${(num * 100).toFixed(1)}%`;
+
+function categoriesLabelForItems(items: any[]) {
+  const cats = Array.from(
+    new Set(
+      items
+        .map(x => normCat(x.category || '').trim())
+        .filter(Boolean)
+    )
+  )
+  return cats.length ? cats.join(', ') : '—'
+}
+
+function DonutChart({
+  data, // [{label, value, color}]
+  size = 180,
+  strokeWidth = 22,
+}: {
+  data: { label: string; value: number; color: string }[]
+  size?: number
+  strokeWidth?: number
+}) {
+  const total = sum(data.map(d => d.value))
+  const radius = (size - strokeWidth) / 2
+  const circumference = 2 * Math.PI * radius
+
+  // ξεκινάμε από -90° ώστε το πρώτο segment να ξεκινάει "πάνω"
+  let accumulated = 0
+
+  return (
+    <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+      <Svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <Circle
+          cx={size/2}
+          cy={size/2}
+          r={radius}
+          stroke="#E5E7EB"
+          strokeWidth={strokeWidth}
+          fill="none"
+        />
+        {data.map((d, idx) => {
+          const fraction = total === 0 ? 0 : d.value / total
+          const dash = circumference * fraction
+          const gap  = circumference - dash
+          const rotation = (accumulated / total) * 360 - 90
+          accumulated += d.value
+          return (
+             <Circle
+              key={idx}
+              cx={size / 2}
+              cy={size / 2}
+              r={radius}
+              stroke={d.color}
+              strokeWidth={strokeWidth}
+              strokeDasharray={`${dash} ${gap}`}
+              strokeLinecap="butt"
+              fill="none"
+              transform={`rotate(${rotation} ${size / 2} ${size / 2})`}
+            />
+          )
+        })}
+      </Svg>
+    </View>
+  )
+}
+
+/* for history */
+function YearRow({ year, subtitle, onPress }: { year: number; subtitle: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity onPress={onPress} activeOpacity={0.9} style={styles.yearRowCard}>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <View style={styles.yearBadge}>
+          <Text style={styles.yearBadgeText}>{String(year).slice(-2)}</Text>
+        </View>
+        <View style={{ marginLeft: 10, flex: 1 }}>
+          <Text style={styles.yearRowTitle}>{year}</Text>
+          <Text style={styles.yearRowSub}>{subtitle}</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color="#6B7280" />
+      </View>
+    </TouchableOpacity>
+  )
+}
+
+
+
+
 export default function CustomersScreen() {
   const { setCustomersPreview } = usePreview()
 
@@ -438,6 +636,708 @@ export default function CustomersScreen() {
 const [itemsOpen, setItemsOpen] = useState(false)
 const [itemsLoading, setItemsLoading] = useState(false)
 const [items, setItems] = useState<any[]>([])
+
+// History
+const [histLoading, setHistLoading] = useState(false)
+const [histOrders, setHistOrders] = useState<any[]>([])   
+const [histItems, setHistItems]   = useState<any[]>([])  
+const [filtersOpen, setFiltersOpen] = useState(false)    
+
+
+const [yearOpen, setYearOpen] = useState<number | null>(null)
+const [showYearReport, setShowYearReport] = useState(false)
+
+// Filters state 
+type HistoryFilters = {
+  category: string | null
+  color: string | null
+  yearFrom: number | null
+  yearTo: number | null
+}
+
+const [filtersDraft, setFiltersDraft] = useState<HistoryFilters>({
+  category: null,
+  color: null,
+  yearFrom: null,
+  yearTo: null,
+})
+
+
+const [appliedFilters, setAppliedFilters] = useState<HistoryFilters | null>(null)
+const [modalResultsFilters, setModalResultsFilters] = useState<HistoryFilters | null>(null)
+
+
+const hasActiveFilters = !!appliedFilters &&
+  (!!appliedFilters.category || !!appliedFilters.color || !!appliedFilters.yearFrom || !!appliedFilters.yearTo)
+
+
+const fullName = React.useMemo(() => {
+    if (!selectedCustomer) return '—'
+    const first = (selectedCustomer.firstName || '').trim()
+    const last  = (selectedCustomer.lastName  || '').trim()
+    const name  = `${first} ${last}`.trim()
+    return name || '—'
+  }, [selectedCustomer])
+
+const ordersByYear = React.useMemo(() => {
+  const map = new Map<number, any[]>();
+
+  for (const o of histOrders) {
+    const y = yearOf(o.orderDate || o.createdAt);
+    if (y == null) continue;
+    if (!map.has(y)) map.set(y, []);
+    map.get(y)!.push(o);
+  }
+
+  // ταξινόμηση παραγγελιών ανά έτος (πιο πρόσφατες πρώτες)
+  for (const [, arr] of map.entries()) {
+    arr.sort(
+      (a, b) =>
+        (parseDateFlexible(b.orderDate || b.createdAt)?.getTime() ?? 0) -
+        (parseDateFlexible(a.orderDate || a.createdAt)?.getTime() ?? 0)
+    );
+  }
+
+  // επιστροφή φθίνουσα κατά έτος
+  return new Map([...map.entries()].sort((a, b) => b[0] - a[0]));
+}, [histOrders]);
+
+const years = React.useMemo(() => [...ordersByYear.keys()], [ordersByYear]);
+
+
+const itemsByYear = React.useMemo(() => {
+  const map = new Map<number, any[]>();
+
+  for (const it of histItems) {
+    const y = yearOf(it.order_date || it.created_at);
+    if (y == null) continue;
+    if (!map.has(y)) map.set(y, []);
+    map.get(y)!.push(it);
+  }
+
+  // σταθερή σειρά ανά created_at
+  for (const [, arr] of map.entries()) {
+    arr.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+  }
+
+  return map;
+}, [histItems]);
+
+const yearsToShow = React.useMemo(() => {
+  const all = [...ordersByYear.keys()] 
+  if (!hasActiveFilters) return all
+
+  return all.filter((y) => {
+    if (appliedFilters?.yearFrom != null && y < appliedFilters.yearFrom) return false
+    if (appliedFilters?.yearTo   != null && y > appliedFilters.yearTo)   return false
+
+    const its = itemsByYear.get(y) || []
+    const okCategory = appliedFilters?.category ? its.some(it => normCat(it.category) === appliedFilters.category) : true
+    const okColor    = appliedFilters?.color    ? its.some(it => (it.color || '—').trim() === appliedFilters.color) : true
+    return okCategory && okColor
+  })
+}, [ordersByYear, itemsByYear, appliedFilters, hasActiveFilters])
+
+// helper: year (item)
+const yearOfItem = (it: any) => yearOf(it.order_date || it.created_at)
+
+// filtered items
+const modalPreviewItems = React.useMemo(() => {
+  if (!modalResultsFilters) return [] 
+
+  let arr = histItems
+  const f = modalResultsFilters
+
+  if (f.yearFrom != null) {
+    arr = arr.filter(it => {
+      const y = yearOfItem(it)
+      return y == null ? false : y >= f.yearFrom!
+    })
+  }
+  if (f.yearTo != null) {
+    arr = arr.filter(it => {
+      const y = yearOfItem(it)
+      return y == null ? false : y <= f.yearTo!
+    })
+  }
+  if (f.category) {
+    arr = arr.filter(it => normCat(it.category) === f.category)
+  }
+  if (f.color) {
+    arr = arr.filter(it => (it.color || '—').trim() === f.color)
+  }
+
+  return arr
+}, [histItems, modalResultsFilters])
+
+const modalPreviewCount  = modalPreviewItems.length
+const modalPreviewAmount = sum(modalPreviewItems.map(it => Number(it.price || 0)))
+const modalPreviewYears  = new Set(modalPreviewItems.map(yearOfItem).filter(Boolean)).size
+
+
+//  items group by order
+const itemsByOrderAll = React.useMemo(() => {
+  return groupItemsByOrder(histItems); 
+}, [histItems]);
+
+// helper: group items by order once
+function groupItemsByOrder(items: any[]) {
+  const map = new Map<string, any[]>()
+  for (const it of items) {
+    const raw = it.order_id ?? it.orderId ?? it.orderID ?? it.order ?? ''
+    const key = normId(raw)            // normalize
+    if (!key) continue
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(it)
+  }
+  return map
+}
+
+
+React.useEffect(() => {
+  if (!detailsOpen || !selectedCustomer) return;
+
+  let cancelled = false;
+
+  const sub = observeOrdersByCustomer(selectedCustomer.id, { limit: 1000 })
+    .subscribe(async (rows: any[]) => {
+      if (cancelled) return;
+
+      // 1) map orders
+      const ordersMapped = rows.map((r: any) => ({
+        id: r.id,
+        customerId: selectedCustomer.id,
+        paymentMethod: r.paymentMethod ?? '',
+        deposit: r.deposit ?? null,
+        totalAmount: r.totalAmount ?? 0,
+        notes: r.notes ?? null,
+        orderDate: r.orderDate,
+        createdAt: r.createdAt,
+        lastModifiedAt: r.lastModifiedAt,
+      }));
+
+      //  fetch ALL items for this customer (once)
+      const itemsRows: any[] = await listOrderItemsByCustomer(selectedCustomer.id, { limit: 5000 });
+
+      const itemsMapped = itemsRows.map((r: any) => {
+        const raw = r?._raw ?? {}
+        const orderId =
+          r.order_id ?? r.orderId ?? raw.order_id ?? raw.orderId ?? ''
+
+        return {
+          id: r.id,
+          order_id: normId(orderId),                
+          item_code: r.item_code ?? raw.item_code ?? '',
+          category: r.category ?? raw.category ?? '',
+          color: r.color ?? raw.color ?? '',
+          price: (r.price ?? raw.price) ?? 0,
+          status: r.status ?? raw.status ?? '',
+          storage_status: r.storage_status ?? raw.storage_status ?? '',
+          order_date: r.order_date ?? raw.order_date ?? '',
+          created_at: r.created_at ?? raw.created_at,
+        }
+      })
+
+      // 3) enrich orders with itemsCount
+      const byOrder = groupItemsByOrder(itemsMapped);
+      const ordersWithCounts = ordersMapped.map(o => {
+      const key = String(o.id).trim();
+      return {
+        ...o,
+       itemsCount: byOrder.get(normId(o.id))?.length ?? 0,  // normalize
+      };
+    });
+
+      // 4) set state for both tabs
+      setOrders(ordersWithCounts); // Orders tab
+      setHistOrders(ordersMapped); // History tab (year/group)
+      setHistItems(itemsMapped);   // History tab (category/color pie)
+
+      // debug
+      console.log('[DEBUG] orders:', ordersWithCounts.length, 'items:', itemsMapped.length);
+    });
+
+  return () => { cancelled = true; sub?.unsubscribe?.(); };
+}, [detailsOpen, selectedCustomer]);
+
+
+function totalsForYear(y: number) {
+  const ords = ordersByYear.get(y) || [];
+  const totalAmount = sum(ords.map(o => Number(o.totalAmount || 0)));
+  const count = ords.length;
+  return { count, totalAmount };
+}
+
+function categoryBreakdownForYear(y: number) {
+  const items = itemsByYear.get(y) || [];
+  const counter = new Map<string, number>();
+  for (const it of items) {
+    const label = normCat(it.category || '');
+    counter.set(label, (counter.get(label) || 0) + 1);
+  }
+  const entries = [...counter.entries()].sort((a, b) => b[1] - a[1]);
+  const total = sum(entries.map(e => e[1]));
+  return { total, entries };
+}
+
+function colorBreakdownForYear(y: number) {
+  const items = itemsByYear.get(y) || [];
+  const counter = new Map<string, number>();
+  for (const it of items) {
+    const c = (it.color || '—').trim() || '—';
+    counter.set(c, (counter.get(c) || 0) + 1);
+  }
+  const entries = [...counter.entries()].sort((a, b) => b[1] - a[1]);
+  const total = sum(entries.map(e => e[1]));
+  return { total, entries };
+}
+
+const computeYearData = (y: number, f?: HistoryFilters | null) => {
+  const allOrders = ordersByYear.get(y) || []
+  const allItems  = itemsByYear.get(y) || []
+
+  if (!f || (!f.category && !f.color && !f.yearFrom && !f.yearTo)) {
+    const totals = totalsForYear(y)
+    const cat = categoryBreakdownForYear(y)
+    const color = colorBreakdownForYear(y)
+    const ordersOfYear = allOrders
+    const itemsOfYear = allItems
+    return { totals, cat, color, ordersOfYear, itemsOfYear }
+  }
+
+  // filterd items
+  const itemsFiltered = allItems.filter(it => {
+    const byCat   = f.category ? normCat(it.category) === f.category : true
+    const byColor = f.color ? (it.color || '—').trim() === f.color : true
+    return byCat && byColor
+  })
+
+  // orders of these items 
+  const orderIdsKeep = new Set(itemsFiltered.map(it => normId(it.order_id)))
+  const ordersFiltered = (f.category || f.color)
+    ? allOrders.filter(o => orderIdsKeep.has(normId(o.id)))
+    : allOrders
+
+  const totals = {
+    count: ordersFiltered.length,
+    totalAmount: sum(ordersFiltered.map(o => Number(o.totalAmount || 0))),
+  }
+
+  const catCounter = new Map<string, number>()
+  for (const it of itemsFiltered) {
+    const label = normCat(it.category || '')
+    catCounter.set(label, (catCounter.get(label) || 0) + 1)
+  }
+  const catEntries = [...catCounter.entries()].sort((a, b) => b[1] - a[1])
+  const catTotal = sum(catEntries.map(e => e[1]))
+  const cat = { total: catTotal, entries: catEntries }
+
+  const colorCounter = new Map<string, number>()
+  for (const it of itemsFiltered) {
+    const c = (it.color || '—').trim() || '—'
+    colorCounter.set(c, (colorCounter.get(c) || 0) + 1)
+  }
+  const colorEntries = [...colorCounter.entries()].sort((a, b) => b[1] - a[1])
+  const colorTotal = sum(colorEntries.map(e => e[1]))
+  const color = { total: colorTotal, entries: colorEntries }
+
+  return { totals, cat, color, ordersOfYear: ordersFiltered, itemsOfYear: itemsFiltered }
+}
+
+
+
+function itemsByOrderForYear(y: number) {
+  const items = itemsByYear.get(y) || []
+  const map = new Map<string, any[]>()
+  for (const it of items) {
+    const key = normId(it.order_id ?? it.orderId ?? it.orderID ?? it.order ?? '')
+    if (!key) continue
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(it)
+  }
+  return map
+}
+
+function renderYearDetail(year: number) {
+  const { count, totalAmount } = totalsForYear(year)
+  const cat = categoryBreakdownForYear(year)
+  const byOrder = itemsByOrderForYear(year)
+  const color = colorBreakdownForYear(year)
+
+  const donutData = cat.entries.map(([label, value]) => ({
+    label,
+    value,
+    color: CATEGORY_COLORS[label] || '#9CA3AF',
+  }))
+
+  return (
+    <View key={year} style={styles.yearBlock}>
+      <View style={styles.yearHeaderRow}>
+        <Text style={styles.yearTitle}>{year}</Text>
+      </View>
+
+      <View style={styles.summaryRow}>
+        <View style={styles.summaryBox}>
+          <Text style={styles.summaryLabel}>Συνολικές παραγγελίες</Text>
+          <Text style={styles.summaryValue}>{count}</Text>
+        </View>
+        <View style={styles.summaryBox}>
+          <Text style={styles.summaryLabel}>Συνολικό ποσό</Text>
+          <Text style={styles.summaryValue}>{fmtMoney(totalAmount)}</Text>
+        </View>
+        <View style={styles.summaryBox}>
+          <Text style={styles.summaryLabel}>Τετραγωνικά μέτρα</Text>
+          <Text style={styles.summaryMuted}>—</Text>
+        </View>
+        <View style={styles.summaryBox}>
+          <Text style={styles.summaryLabel}>Μέση τιμή / τ.μ.</Text>
+          <Text style={styles.summaryMuted}>—</Text>
+        </View>
+      </View>
+
+      <View style={styles.cardSection}>
+        <Text style={styles.sectionTitle}>Κατηγορίες (πίτα)</Text>
+        {cat.total === 0 ? (
+          <Text style={styles.muted}>Δεν υπάρχουν τεμάχια για το {year}.</Text>
+        ) : (
+          <View style={{ alignItems: 'center' }}>
+            <DonutChart data={donutData} />
+            <View style={styles.legendWrap}>
+              {donutData.map((d, idx) => {
+                const pct = cat.total ? d.value / cat.total : 0
+                return (
+                  <View key={idx} style={styles.legendRow}>
+                    <View style={[styles.legendDot, { backgroundColor: d.color }]} />
+                    <Text style={styles.legendText}>
+                      {d.label} — {d.value} ({fmtPercent(pct)})
+                    </Text>
+                  </View>
+                )
+              })}
+            </View>
+          </View>
+        )}
+      </View>
+
+      <View style={styles.cardSection}>
+        <Text style={styles.sectionTitle}>Ανάλυση κατηγοριών</Text>
+        {cat.entries.length === 0 ? (
+          <Text style={styles.muted}>—</Text>
+        ) : (
+          cat.entries.map(([label, cnt], i) => (
+            <View key={`${label}-${i}`} style={styles.kvRow}>
+              <View style={styles.legendRow}>
+                <View style={[styles.legendDot, { backgroundColor: CATEGORY_COLORS[label] || '#9CA3AF' }]} />
+                <Text style={styles.kvLabel}>{label}</Text>
+              </View>
+              <Text style={styles.kvValue}>
+                {cnt} {cat.total ? `(${fmtPercent(cnt / cat.total)})` : ''}
+              </Text>
+            </View>
+          ))
+        )}
+      </View>
+
+      <View style={styles.cardSection}>
+        <Text style={styles.sectionTitle}>Ανάλυση χρωμάτων</Text>
+        {color.entries.length === 0 ? (
+          <Text style={styles.muted}>—</Text>
+        ) : (
+          color.entries.map(([c, cnt], i) => (
+            <View key={`${c}-${i}`} style={styles.kvRow}>
+              <Text style={styles.kvLabel}>{c}</Text>
+              <Text style={styles.kvValue}>
+                {cnt} {color.total ? `(${fmtPercent(cnt / color.total)})` : ''}
+              </Text>
+            </View>
+          ))
+        )}
+      </View>
+
+      <View style={styles.cardSection}>
+        <Text style={styles.sectionTitle}>Ανάλυση παραγγελιών</Text>
+          {(ordersByYear.get(year) || []).map((o) => {
+          // normalized key 
+          const orderKey = normId(o.id)
+
+          // items of order
+          const its =
+            itemsByOrderAll.get(orderKey) ??
+            [] //  fallback
+
+          const categoriesLabel = categoriesLabelForItems(its)
+            return (
+            <View key={o.id} style={styles.entryCard}>
+              <View style={styles.entryAccent} />
+
+              <View style={styles.entryBody}>
+                <View style={styles.entryTopRow}>
+                  <Text style={styles.entryTitle}>#{o.id.slice(0,6).toUpperCase()}</Text>
+                  <Text style={styles.entryDate}>{fmtDate(o.orderDate || o.createdAt)}</Text>
+                </View>
+
+                <View style={styles.entryMetaRow}>
+                 <Text style={styles.entryMeta}>Κατηγορία: {categoriesLabel}</Text>
+                  <Text style={styles.entryMeta}>Order: {fmtMoney(o.totalAmount)}</Text>
+                </View>
+              </View>
+
+            </View>
+          )
+        })}
+      </View>
+
+
+      <View style={styles.cardSection}>
+        <Text style={styles.sectionTitle}>Όλα τα τεμάχια του έτους</Text>
+        {(itemsByYear.get(year) || []).map((it) => (
+          <View key={it.id} style={styles.entryCard}>
+            <View
+              style={[
+                styles.entryAccent,
+                { backgroundColor: CATEGORY_COLORS[normCat(it.category)] || '#93C5FD' },
+              ]}
+            />
+
+            <View style={styles.entryBody}>
+              <View style={styles.entryTopRow}>
+                <Text style={styles.entryTitle}>
+                  {it.item_code || `#${it.id.slice(0,6).toUpperCase()}`}
+                </Text>
+                <Text style={styles.entryDate}>
+                  {fmtDate(it.order_date || it.created_at)}
+                </Text>
+              </View>
+
+              <View style={styles.entryMetaRow}>
+                <Text style={styles.entryMeta}>Κατηγορία: {normCat(it.category)}</Text>
+                <View style={styles.colorBadge}>
+                  <View
+                    style={[
+                      styles.colorDot,
+                      { backgroundColor: getColorHex(it.color) },
+                    ]}
+                  />
+                  <Text style={styles.colorBadgeText}>{it.color || '—'}</Text>
+                </View>
+                <Text style={styles.entryMetaStrong}>{fmtMoney(it.price)}</Text>
+              </View>
+            </View>
+          </View>
+        ))}
+      </View>
+
+    </View>
+  )
+}
+
+function printHtmlWeb(html: string) {
+  const win = window.open('', '_blank');
+  if (!win) {
+    Alert.alert('Σφάλμα', 'Ο browser μπλόκαρε την εκτύπωση.');
+    return;
+  }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  win.focus();
+  // δώσε ένα μικρό delay για layout πριν το print
+  setTimeout(() => {
+    try { win.print(); } finally {
+      setTimeout(() => { try { win.close(); } catch {} }, 300);
+    }
+  }, 150);
+}
+
+
+async function exportHistoryYearPDF(year: number) {
+  try {
+    const ords     = ordersByYear.get(year) || []
+    const byOrd    = itemsByOrderForYear(year)
+    const cat      = categoryBreakdownForYear(year)
+    const colors   = colorBreakdownForYear(year)
+    const itemsYear= itemsByYear.get(year) || []
+
+    const fullName = selectedCustomer
+      ? `${selectedCustomer.firstName || ''} ${selectedCustomer.lastName || ''}`.trim()
+      : '—'
+
+    const html = `
+      <html>
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <style>
+          @page { size: A4 landscape; margin: 8mm; }
+
+          html, body {
+            margin: 0; padding: 0;
+            height: auto !important;
+            overflow: visible !important;
+            font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+          }
+
+          #page { box-sizing: border-box; padding: 4mm; }
+          .content { width: 100%; }
+
+          h1 { margin: 0 0 4px; font-size: 13px; font-weight: 800; }
+          .sub { margin: 0 0 6px; font-size: 10px; color: #374151; }
+          h2 { margin: 4px 0 2px; font-size: 10px; }
+          .muted { color: #6b7280; }
+          .tight { margin-top: 4px; }
+
+          table { width:100%; border-collapse: collapse; table-layout: fixed; }
+          th, td { border:1px solid #ddd; padding:1px; font-size:8px; vertical-align:top; }
+          th { background:#f3f4f6; text-align:left; }
+          .nowrap { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+          .notes { max-width:180px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+          /* Pagination-friendly κανόνες */
+          section { break-inside: avoid; page-break-inside: avoid; }
+          table   { break-inside: avoid; page-break-inside: avoid; }
+          thead   { display: table-header-group; } /* header σε κάθε σελίδα */
+          tfoot   { display: table-footer-group; }
+          tr      { break-inside: avoid; page-break-inside: avoid; }
+
+          /* Manual page breaks όπου θέλεις νέα σελίδα */
+          .page-break { break-after: page; page-break-after: always; }
+
+          .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:4px; align-items:start; }
+
+          * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+          @media print {
+            html, body { height: auto !important; overflow: visible !important; }
+          }
+        </style>
+      </head>
+
+      <body>
+        <div id="page">
+          <div class="content">
+            <h1>${fullName}</h1>
+            <div class="sub">Ιστορικό ${year}</div>
+
+            <section class="tight">
+              <h2>Σύνοψη</h2>
+              <table class="kv">
+                <tr><th>Συνολικές παραγγελίες</th><td>${ords.length}</td></tr>
+                <tr><th>Συνολικό ποσό</th><td>${fmtMoney(sum(ords.map(o => Number(o.totalAmount || 0))))}</td></tr>
+              </table>
+            </section>
+
+            <section class="tight">
+              <div class="grid2">
+                <div>
+                  <h2>Κατηγορίες</h2>
+                  ${cat.entries.length === 0 ? '<div class="muted">—</div>' : `
+                  <table><thead><tr><th>Κατηγορία</th><th>Πλήθος</th></tr></thead><tbody>
+                    ${cat.entries.map(([label, cnt]) => `
+                      <tr><td>${label}</td><td>${cnt} (${fmtPercent(cnt / (cat.total || 1))})</td></tr>
+                    `).join('')}
+                  </tbody></table>`}
+                </div>
+                <div>
+                  <h2>Χρώματα</h2>
+                  ${colors.entries.length === 0 ? '<div class="muted">—</div>' : `
+                  <table><thead><tr><th>Χρώμα</th><th>Πλήθος</th></tr></thead><tbody>
+                    ${colors.entries.map(([c, cnt]) => `
+                      <tr><td>${c}</td><td>${cnt} (${fmtPercent(cnt / (colors.total || 1))})</td></tr>
+                    `).join('')}
+                  </tbody></table>`}
+                </div>
+              </div>
+            </section>
+
+            <section class="tight">
+              <h2>Παραγγελίες</h2>
+              ${ords.length === 0 ? '<div class="muted">—</div>' : `
+              <table>
+                <thead>
+                  <tr>
+                    <th>Κωδικός</th>
+                    <th class="nowrap">Ημερομηνία</th>
+                    <th>Τεμάχια</th>
+                    <th>Σύνολο</th>
+                    <th class="notes">Σημειώσεις</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${ords.map(o => {
+                    const its = byOrd.get(normId(o.id)) || []
+                    return `
+                      <tr>
+                        <td>#${o.id.slice(0,6).toUpperCase()}</td>
+                        <td class="nowrap">${fmtDate(o.orderDate || o.createdAt)}</td>
+                        <td>${its.length}</td>
+                        <td>${fmtMoney(o.totalAmount)}</td>
+                        <td class="notes">${(o.notes || '').replace(/</g,'&lt;')}</td>
+                      </tr>`
+                  }).join('')}
+                </tbody>
+              </table>`}
+            </section>
+
+
+            <section class="tight">
+              <h2>Όλα τα τεμάχια</h2>
+              ${itemsYear.length === 0 ? '<div class="muted">—</div>' : `
+              <table>
+                <thead>
+                  <tr>
+                    <th>Κωδικός</th>
+                    <th>Κατηγορία</th>
+                    <th>Χρώμα</th>
+                    <th>Τιμή</th>
+                    <th class="nowrap">Ημ/νία</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${itemsYear.map((it:any) => `
+                    <tr>
+                      <td>${(it.item_code || ('#'+it.id.slice(0,6).toUpperCase()))}</td>
+                      <td>${normCat(it.category)}</td>
+                      <td>${it.color || '—'}</td>
+                      <td>${fmtMoney(it.price)}</td>
+                      <td class="nowrap">${fmtDate(it.order_date || it.created_at)}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>`}
+            </section>
+          </div>
+        </div>
+      </body>
+      </html>
+    `
+
+    // 🔁 WEB ΠΡΩΤΑ — χωρίς printToFileAsync
+    if (Platform.OS === 'web') {
+      printHtmlWeb(html); 
+      return
+    }
+
+    // 📱 Native: φτιάχνουμε PDF αρχείο και το μοιραζόμαστε
+    const file = await Print.printToFileAsync({ html })
+    const uri = file?.uri
+    if (!uri) {
+      Alert.alert('Σφάλμα', 'Δεν δημιουργήθηκε αρχείο PDF.')
+      return
+    }
+
+    if (await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(uri, {
+        mimeType: 'application/pdf',
+        dialogTitle: `Ιστορικό ${year}.pdf`,
+      })
+    } else {
+      Alert.alert('PDF έτοιμο', uri)
+    }
+  } catch (e) {
+    console.error('exportHistoryYearPDF failed', e)
+    Alert.alert('Σφάλμα', 'Αποτυχία εξαγωγής PDF.')
+  }
+}
 
 const [selectedItem, setSelectedItem] = useState<any | null>(null)
 const [itemEdit, setItemEdit] = useState({
@@ -524,32 +1424,111 @@ const [itemEdit, setItemEdit] = useState({
       try {
         setItemsLoading(true)
         const rows: any[] = await listOrderItemsByCustomer(selectedCustomer.id, { limit: 1000 })
-        if (cancelled) return
+          if (cancelled) return
 
-        const mapped = rows.map((r: any) => ({
-          id: r.id,
-          order_id: r.order_id,
-          item_code: r.item_code ?? '',
-          category: r.category ?? '',
-          color: r.color ?? '',
-          price: r.price ?? 0,
-          status: r.status ?? '',
-          storage_status: r.storage_status ?? '',
-          order_date: r.order_date ?? '',
-          created_at: r.created_at,
-        }))
-        setItems(mapped)
-      } catch (e) {
-        console.error('load items failed', e)
-        Alert.alert('Σφάλμα', 'Αποτυχία φόρτωσης τεμαχίων.')
-      } finally {
-        if (!cancelled) setItemsLoading(false)
+          const mapped = rows.map((r: any) => {
+            const raw = r?._raw ?? {}
+            const orderId = r.order_id ?? r.orderId ?? raw.order_id ?? raw.orderId ?? ''
+            return {
+              id: r.id,
+              order_id: normId(orderId),                      
+              item_code: r.item_code ?? raw.item_code ?? '',
+              category: r.category ?? raw.category ?? '',
+              color: r.color ?? raw.color ?? '',
+              price: (r.price ?? raw.price) ?? 0,
+              status: r.status ?? raw.status ?? '',
+              storage_status: r.storage_status ?? raw.storage_status ?? '',
+              order_date: r.order_date ?? raw.order_date ?? '',
+              created_at: r.created_at ?? raw.created_at,
+            }
+          })
+          console.log('[D] items mapped sample:', mapped[0])
+
+          setItems(mapped)
+        } catch (e) {
+          console.error('load items failed', e)
+          Alert.alert('Σφάλμα', 'Αποτυχία φόρτωσης τεμαχίων.')
+        } finally {
+          if (!cancelled) setItemsLoading(false)
+        }
       }
-    }
 
     run()
     return () => { cancelled = true }
   }, [itemsOpen, selectedCustomer])
+
+  // history
+  React.useEffect(() => {
+  if (!detailsOpen || activeTab !== 'history' || !selectedCustomer) return
+
+  let unsub: any = null
+  setHistLoading(true)
+
+  // 1) Observe orders αυτού του πελάτη (όπως στο orders tab, αλλά εδώ ανεξάρτητα)
+  const sub = observeOrdersByCustomer(selectedCustomer.id, { limit: 1000 })
+    .subscribe(async (rows: any[]) => {
+      const mapped = rows.map((r: any) => ({
+        id: r.id,
+        customerId: selectedCustomer.id,
+        orderDate: r.orderDate,
+        totalAmount: r.totalAmount ?? 0,
+        deposit: r.deposit ?? null,
+        notes: r.notes ?? null,
+        createdAt: r.createdAt,
+        lastModifiedAt: r.lastModifiedAt,
+      }))
+      setHistOrders(mapped)
+
+      // 2) Φέρε ΟΛΑ τα items για τον πελάτη (θα τα φιλτράρουμε per-year client-side)
+      try {
+        const rowsItems: any[] = await listOrderItemsByCustomer(selectedCustomer.id, { limit: 5000 })
+        const mappedItems = rowsItems.map((r: any) => {
+          const raw = r?._raw ?? {}
+          const orderId =
+            r.order_id ?? r.orderId ?? raw.order_id ?? raw.orderId ?? r.order ?? raw.order ?? ''
+
+          return {
+            id: r.id,
+            order_id: normId(String(orderId).trim()),
+            item_code: r.item_code ?? raw.item_code ?? '',
+            category: r.category ?? raw.category ?? '',
+            color: r.color ?? raw.color ?? '',
+            price: Number((r.price ?? raw.price) ?? 0),
+            status: r.status ?? raw.status ?? '',
+            storage_status: r.storage_status ?? raw.storage_status ?? '',
+            order_date: r.order_date ?? raw.order_date ?? '',
+            created_at: r.created_at ?? raw.created_at,
+          }
+        })
+        setHistItems(mappedItems)
+      } catch (e) {
+        console.error('history: load items failed', e)
+        Alert.alert('Σφάλμα', 'Αποτυχία φόρτωσης δεδομένων ιστορικού.')
+      } finally {
+        setHistLoading(false)
+      }
+    })
+
+  return () => { sub?.unsubscribe?.() }
+}, [detailsOpen, activeTab, selectedCustomer])
+
+  const loggedYearRef = React.useRef<number | null>(null)
+
+  React.useEffect(() => {
+    if (!showYearReport || yearOpen == null || !selectedCustomer) return
+
+    if (loggedYearRef.current === yearOpen) return
+    loggedYearRef.current = yearOpen
+
+    const range =
+      appliedFilters
+        ? `${appliedFilters.yearFrom ?? yearOpen}-${appliedFilters.yearTo ?? yearOpen}`
+        : `${yearOpen}`
+
+    logViewCustomerHistory('system', selectedCustomer.id, range)
+      .catch((e) => console.warn('logViewCustomerHistory failed:', e))
+  }, [showYearReport, yearOpen, selectedCustomer, appliedFilters])
+
 
   // Filter results
   const results = useMemo(() => {
@@ -579,6 +1558,10 @@ const [itemEdit, setItemEdit] = useState({
 
   // open customer card
   function openCustomerCard(customer: DBCustomer) {
+    // clean last history-data & state 
+    setYearOpen(null)
+    setHistOrders([])
+    setHistItems([])
     const { desc, receiptNo, pricePerSqm } = parseNotes(customer.notes)
     setSelectedCustomer(customer)
     setEdit({
@@ -641,6 +1624,10 @@ const [itemEdit, setItemEdit] = useState({
         } : prev
       )
       setEditMode(false)
+
+      setDetailsOpen(false)
+      router.replace('/customers') 
+
       Alert.alert('OK', 'Τα στοιχεία πελάτη ενημερώθηκαν.')
     } catch (e) {
       console.error('Update failed:', e)
@@ -733,6 +1720,7 @@ const [itemEdit, setItemEdit] = useState({
     }
   }
 
+  
   return (
     <Page>
       <AppHeader showBack /* onLogout={() => router.replace('/')} */ />
@@ -1073,10 +2061,13 @@ const [itemEdit, setItemEdit] = useState({
 
             {/* Περιεχόμενο */}
             {activeTab === 'details' && selectedCustomer && (
-              <View style={styles.detailsUnifiedCard}>
-                {/* Εσωτερική μπάρα ενεργειών μέσα στο ίδιο card */}
-                <View style={styles.detailsInnerHeader}>
-                  <Text style={styles.detailsInnerTitle}>Στοιχεία πελάτη</Text>
+              <View style={[styles.detailsUnifiedCard, styles.cardPolish]}>
+                {/* Header γραμμή με badge + actions */}
+                <View style={styles.sectionTitleRow}>
+                  
+
+                  <View style={{ flex: 1 }} />
+
                   <View style={styles.detailsInnerActions}>
                     {!editMode ? (
                       <TouchableOpacity style={styles.editBtnInside} onPress={startEdit}>
@@ -1095,59 +2086,62 @@ const [itemEdit, setItemEdit] = useState({
                   </View>
                 </View>
 
+               
                 <View style={styles.detailsContentRow}>
-                  {/* ⬅️ Αριστερή στήλη: ΜΟΝΟ αυτή σκρολάρει */}
+                  {/* ⬅️ Αριστερή στήλη (scroll) */}
                   <ScrollView
                     style={styles.colLeftScroll}
                     contentContainerStyle={{ padding: 14, paddingBottom: 24 }}
                     keyboardShouldPersistTaps="handled"
                     showsVerticalScrollIndicator
                   >
+                    {/* Ομάδα: Βασικά */}
                     <FieldRow label="Όνομα" value={edit.firstName} editable={editMode}
                       onChangeText={(v) => setEdit(s => ({ ...s, firstName: v }))} />
                     <FieldRow label="Επώνυμο" value={edit.lastName} editable={editMode}
                       onChangeText={(v) => setEdit(s => ({ ...s, lastName: v }))} />
+
+                    <View style={styles.hairline} />
+
+                    {/* Ομάδα: Επικοινωνία */}
+                    
                     <FieldRow label="Τηλέφωνο" value={edit.phone} editable={editMode}
                       keyboardType="phone-pad"
                       onChangeText={(v) => setEdit(s => ({ ...s, phone: v }))} />
                     <FieldRow label="Διεύθυνση" value={edit.address} editable={editMode}
                       onChangeText={(v) => setEdit(s => ({ ...s, address: v }))} />
+
+                    <View style={styles.hairline} />
+
+
+                    
                     <FieldRow label="ΑΦΜ" value={edit.afm} editable={editMode}
                       keyboardType="number-pad"
                       onChangeText={(v) => setEdit(s => ({ ...s, afm: v }))} />
 
-                    <FieldRow label="Αρ. Δελτίου" value={edit.receiptNo} editable={editMode}
-                      onChangeText={(v) => setEdit(s => ({ ...s, receiptNo: v }))} />
-                    <FieldRow label="€/m²" value={edit.pricePerSqm} editable={editMode}
-                      keyboardType="decimal-pad"
-                      onChangeText={(v) => setEdit(s => ({ ...s, pricePerSqm: v }))} />
-
-                    {/* read-only δίπλα-δίπλα */}
-                    <View style={styles.readonlyInlineRow}>
-                      <View style={styles.readonlyBoxLite}>
-                        <Text style={styles.roLabel}>Δημιουργία</Text>
-                        <Text style={styles.roValue}>
-                          {selectedCustomer ? new Date(selectedCustomer.createdAt).toLocaleString('el-GR') : '—'}
-                        </Text>
+                    <View style={{ flexDirection: 'row', gap: 10 }}>
+                      <View style={{ flex: 1 }}>
+                        <FieldRow label="Αρ. Δελτίου" value={edit.receiptNo} editable={editMode}
+                          onChangeText={(v) => setEdit(s => ({ ...s, receiptNo: v }))} />
                       </View>
-                      <View style={styles.readonlyBoxLite}>
-                        <Text style={styles.roLabel}>Τελευταία αλλαγή</Text>
-                        <Text style={styles.roValue}>
-                          {selectedCustomer ? new Date(selectedCustomer.lastModifiedAt || selectedCustomer.createdAt).toLocaleString('el-GR') : '—'}
-                        </Text>
+                      <View style={{ flex: 1 }}>
+                        <FieldRow label="€/m²" value={edit.pricePerSqm} editable={editMode}
+                          keyboardType="decimal-pad"
+                          onChangeText={(v) => setEdit(s => ({ ...s, pricePerSqm: v }))} />
                       </View>
                     </View>
+
                   </ScrollView>
 
                   {/* Divider */}
                   <View style={styles.vDivider} />
 
-                  {/* ➡️ Δεξιά στήλη: ΣΤΑΘΕΡΗ (χωρίς scroll) */}
+                  {/* ➡️ Δεξιά στήλη (σταθερή) */}
                   <View style={styles.detailsColRight}>
                     <Text style={styles.rightTitle}>Περιγραφή</Text>
                     {editMode ? (
                       <TextInput
-                        style={styles.notesInput}
+                        style={[styles.notesInput, { minHeight: 160 }]}
                         value={edit.notesBase}
                         onChangeText={(v) => setEdit(s => ({ ...s, notesBase: v }))}
                         placeholder="Προσθέστε περιγραφή…"
@@ -1155,16 +2149,19 @@ const [itemEdit, setItemEdit] = useState({
                         multiline
                       />
                     ) : (
-                      <View style={styles.notesViewBox}>
+                      <View style={styles.notesViewBoxPolished}>
                         <Text style={styles.notesText}>
                           {parseNotes(selectedCustomer?.notes).desc || '—'}
                         </Text>
                       </View>
                     )}
+
+                    
                   </View>
                 </View>
               </View>
             )}
+
 
   
 
@@ -1236,11 +2233,72 @@ const [itemEdit, setItemEdit] = useState({
             )}
 
 
-            {activeTab === 'history' && (
-              <View style={styles.placeholderArea}>
-                <Text style={styles.placeholderText}>Το ιστορικό θα προστεθεί αργότερα.</Text>
+            {activeTab === 'history' && !showYearReport && (
+              <View style={styles.detailsUnifiedCard}>
+                {/* Header ΜΟΝΟ με τίτλο και (προαιρετικά) Φίλτρα */}
+                <View style={styles.detailsInnerHeader}>
+                  <Text style={styles.detailsInnerTitle}>Ιστορικό</Text>
+                  <View style={{ flexDirection: 'row' }}>
+                    <TouchableOpacity
+                      onPress={() => {
+                        setFiltersDraft(appliedFilters ?? { category: null, color: null, yearFrom: null, yearTo: null })
+                        setModalResultsFilters(null)
+                        setFiltersOpen(true)
+                      }}
+                      style={styles.editBtnInside}
+                    >
+                      <Text style={styles.editBtnInsideText}>Φίλτρα</Text>
+                    </TouchableOpacity>
+                                      </View>
+                </View>
+
+                {/* Περιεχόμενο: μόνο λίστα ετών */}
+                {histLoading ? (
+                  <View style={styles.emptyState}>
+                    <Text style={styles.emptyTitle}>Φόρτωση ιστορικού…</Text>
+                  </View>
+                ) : ordersByYear.size === 0 ? (
+                  <View style={styles.emptyState}>
+                    <Text style={styles.emptyTitle}>Δεν υπάρχουν δεδομένα ιστορικού</Text>
+                    <Text style={styles.emptySubtitle}>Μόλις δημιουργηθούν παραγγελίες θα εμφανιστούν εδώ.</Text>
+                  </View>
+                ) : (
+                  <FlatList
+                    data={years}
+                    keyExtractor={(y) => String(y)}
+                    ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+                    contentContainerStyle={{ padding: 10, paddingBottom: 24 }}
+                    renderItem={({ item: y }) => {
+                      const { count, totalAmount } = totalsForYear(y)
+                      return (
+                        <YearRow
+                          year={y}
+                          subtitle={`${count} ${count === 1 ? 'παραγγελία' : 'παραγγελίες'} · ${fmtMoney(totalAmount)}`}
+                          onPress={() => {
+                            setYearOpen(y)
+                            setShowYearReport(true)
+                            const range =
+                              appliedFilters
+                                ? `${appliedFilters.yearFrom ?? y}-${appliedFilters.yearTo ?? y}`
+                                : `${y}`
+
+                            // activity log
+                            logViewCustomerHistory('system', selectedCustomer?.id ?? '', range)
+                              .catch((e) => console.warn('logViewCustomerHistory failed:', e))
+                             
+                          }}
+                        />
+                      )
+                    }}
+                  />
+                )}
               </View>
             )}
+
+
+
+
+
           </View>
         </View>
       </Modal>
@@ -1483,6 +2541,298 @@ const [itemEdit, setItemEdit] = useState({
         }}
         onConfirm={confirmDeleteNow}
       />
+
+      {/*  History */}
+      <Modal
+        visible={filtersOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setFiltersOpen(false)}
+      >
+        <View style={styles.detailsBackdrop}>
+          <View
+            style={[
+              styles.filtersCard,
+              {
+                maxWidth: 720,
+                width: '90%',
+                height: 600,             
+                borderRadius: 18,
+                backgroundColor: '#fff',
+                paddingHorizontal: 14,
+                paddingTop: 10,
+                paddingBottom: 6,
+              },
+            ]}
+          >
+            
+            {/* Header */}
+            <View style={styles.itemsHeaderRow}>
+              <Text style={styles.itemsTitle}>Φίλτρα</Text>
+              <View style={{ flex: 1 }} />
+              <Pressable onPress={() => setFiltersOpen(false)} hitSlop={8}>
+                <Ionicons name="close" size={22} color="#6B7280" />
+              </Pressable>
+            </View>
+
+            {/* Body (όΧΙ ScrollView εδώ) ⬇️ */}
+            <View style={{ flex: 1, padding: 12, paddingBottom: 18 }}>
+              {/* Χρονική Περίοδος */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                <Ionicons name="time-outline" size={16} color="#111827" style={{ marginRight: 6 }} />
+                <Text style={{ fontWeight: '700', color: '#111827' }}>Χρονική Περίοδος</Text>
+              </View>
+
+              <View style={styles.row2}>
+                <View style={[styles.inputWrap, styles.flex1]}>
+                  <Text style={styles.smallLabel}>Από</Text>
+                  <View style={styles.filledInput}>
+                    <TextInput
+                      value={filtersDraft.yearFrom ? String(filtersDraft.yearFrom) : ''}
+                      onChangeText={(v) => setFiltersDraft(s => ({ ...s, yearFrom: v ? Number(v) : null }))}
+                      keyboardType="number-pad"
+                      placeholder="π.χ. 2020"
+                      placeholderTextColor="#9CA3AF"
+                      style={styles.filledInputText}
+                    />
+                  </View>
+                </View>
+
+                <View style={[styles.inputWrap, styles.flex1]}>
+                  <Text style={styles.smallLabel}>Έως</Text>
+                  <View style={styles.filledInput}>
+                    <TextInput
+                      value={filtersDraft.yearTo ? String(filtersDraft.yearTo) : ''}
+                      onChangeText={(v) => setFiltersDraft(s => ({ ...s, yearTo: v ? Number(v) : null }))}
+                      keyboardType="number-pad"
+                      placeholder="π.χ. 2025"
+                      placeholderTextColor="#9CA3AF"
+                      style={styles.filledInputText}
+                    />
+                  </View>
+                </View>
+              </View>
+
+              {/* Κατηγορία & Χρώμα */}
+              <View style={styles.row2}>
+                <View style={[styles.inputWrap, styles.flex1]}>
+                  <Text style={styles.smallLabel}>Κατηγορία</Text>
+                  <SimpleDropdown
+                    value={filtersDraft.category ?? ''}
+                    placeholder="Όλες"
+                    options={['(Όλες)', ...CATEGORY_OPTIONS]}
+                    onChange={(v) => setFiltersDraft(s => ({ ...s, category: v === '(Όλες)' ? null : v }))}
+                  />
+                </View>
+
+                <View style={[styles.inputWrap, styles.flex1]}>
+                  <Text style={styles.smallLabel}>Χρώμα</Text>
+                  <SimpleDropdown
+                    value={filtersDraft.color ?? ''}
+                    placeholder="Όλα"
+                    options={['(Όλα)', ...COLOR_OPTIONS]}
+                    onChange={(v) => setFiltersDraft(s => ({ ...s, color: v === '(Όλα)' ? null : v }))}
+                  />
+                </View>
+              </View>
+
+              {/* Actions */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 }}>
+                <TouchableOpacity
+                  onPress={async () => {
+                    setAppliedFilters(filtersDraft)         // 1) εφαρμόζει στο History
+                    setModalResultsFilters(filtersDraft)    // 2) εμφανίζει ΤΩΡΑ αποτελέσματα στο modal
+
+                    try {
+                      await logFilterHistoryApplied('system', {
+                        customerId: selectedCustomer?.id ?? null,
+                        ...filtersDraft,
+                        at: new Date().toISOString(),
+                      })
+                    } catch (e) {
+                      console.warn('logFilterHistoryApplied failed', e)
+                    }
+
+                    // Δεν κλείνουμε το modal — μένεις να δεις τα αποτελέσματα
+                  }}
+                  style={[styles.primaryBtn, { flexDirection: 'row', alignItems: 'center' }]}
+                  activeOpacity={0.9}
+                >
+                  <Ionicons name="search-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
+                  <Text style={styles.primaryBtnText}>Εφαρμογή Φίλτρων</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => {
+                    setFiltersDraft({ category: null, color: null, yearFrom: null, yearTo: null })
+                    // αν θες να καθαρίζει και τα αποτελέσματα:
+                    // setModalResultsFilters(null)
+                  }}
+                  style={[styles.secondaryBtn, { marginLeft: 10 }]}
+                >
+                  <Text style={styles.secondaryBtnText}>Καθαρισμός</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Divider */}
+              <View style={{ height: 14 }} />
+              <View style={{ height: 1, backgroundColor: '#E5E7EB' }} />
+              <View style={{ height: 10 }} />
+
+              {/* Αποτελέσματα Φίλτρων */}
+              <Text style={{ fontWeight: '800', fontSize: 16, color: '#111827', marginBottom: 8 }}>
+                Αποτελέσματα Φίλτρων
+              </Text>
+
+              {/* ⬇️ Scroll ΜΟΝΟ στο section των αποτελεσμάτων */}
+              <View style={{ flex: 1, maxHeight: 340 }}>
+                <ScrollView
+                  style={{ flex: 1 }}
+                  contentContainerStyle={{ paddingBottom: 16 }}
+                  showsVerticalScrollIndicator={true}
+                >
+                  {/* KPIs bar */}
+                  <View style={{ flexDirection: 'row', backgroundColor: '#F3F4F6', borderRadius: 12, padding: 10, marginBottom: 10 }}>
+                    <View style={{ flex: 1, alignItems: 'center' }}>
+                      <Text style={{ fontWeight: '800', fontSize: 18 }}>{modalPreviewCount}</Text>
+                      <Text style={{ color: '#6B7280' }}>Τεμάχια</Text>
+                    </View>
+
+                    <View style={{ width: 1, backgroundColor: '#E5E7EB' }} />
+
+                    <View style={{ flex: 1, alignItems: 'center' }}>
+                      <Text style={{ fontWeight: '800', fontSize: 18 }}>{fmtMoney(modalPreviewAmount)}</Text>
+                      <Text style={{ color: '#6B7280' }}>Συνολικό ποσό</Text>
+                    </View>
+
+                    <View style={{ width: 1, backgroundColor: '#E5E7EB' }} />
+
+                    <View style={{ flex: 1, alignItems: 'center' }}>
+                      <Text style={{ fontWeight: '800', fontSize: 18 }}>{modalPreviewYears}</Text>
+                      <Text style={{ color: '#6B7280' }}>Χρονιές</Text>
+                    </View>
+                  </View>
+
+                  {/* Λίστα προεπισκόπησης */}
+                  {modalPreviewItems.length === 0 ? (
+                    <View style={styles.emptyState}>
+                      <Text style={styles.emptyTitle}>Δεν βρέθηκαν τεμάχια</Text>
+                      <Text style={styles.emptySubtitle}>Δοκίμασε να αλλάξεις τα φίλτρα.</Text>
+                    </View>
+                  ) : (
+                    <View>
+                      {modalPreviewItems.map((it) => {
+                        const y = yearOf(it.order_date || it.created_at) ?? '—'
+                        // γραμματική για 1/πολλά
+                        const pieceLabel = 1 === 1 ? 'τεμάχιο' : 'τεμάχια' // αν αργότερα ομαδοποιήσεις, άλλαξέ το ανά πλήθος
+                        return (
+                          <View
+                            key={it.id}
+                            style={{
+                              backgroundColor: '#fff',
+                              borderRadius: 14,
+                              padding: 12,
+                              marginBottom: 8,
+                              borderWidth: 1,
+                              borderColor: '#E5E7EB',
+                            }}
+                          >
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                              <Text style={{ fontWeight: '700', color: '#111827', flex: 1 }}>
+                                {`${normCat(it.category)} - ${(it.color || '—').toLowerCase()}`}
+                              </Text>
+                              <Text style={{ fontWeight: '700' }}>{fmtMoney(it.price)}</Text>
+                            </View>
+                            <Text style={{ color: '#6B7280', marginTop: 2 }}>
+                              {y} • 1 {pieceLabel}
+                            </Text>
+                            {/* Αν έχεις sqm: <Text style={{ color: '#6B7280' }}>{it.sqm} τ.μ.</Text> */}
+                          </View>
+                        )
+                      })}
+                    </View>
+                  )}
+                </ScrollView>
+              </View>
+            </View>
+            {/* /Body */}
+          </View>
+        </View>
+      </Modal>
+
+σ
+
+      {/* Full-screen Year Report */}
+      <Modal
+        visible={showYearReport && yearOpen != null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowYearReport(false)}
+      >
+        <View style={styles.detailsBackdrop}>
+          <View style={[styles.detailsCardXL, { paddingHorizontal: 0, paddingTop: 0 }]}>
+            {/* Header */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderColor: '#E5E7EB' }}>
+              <TouchableOpacity onPress={() => setShowYearReport(false)} style={[styles.actionGhostBtn, { paddingHorizontal: 8 }]}>
+                <Ionicons name="arrow-back" size={18} color="#6B7280" style={{ marginRight: 6 }} />
+                <Text style={styles.actionGhostText}>Πίσω</Text>
+              </TouchableOpacity>
+
+              <Text style={[styles.detailsInnerTitle, { flex: 1, textAlign: 'center' }]}>
+                Αναφορά έτους {yearOpen ?? '—'} — {fullName}
+              </Text>
+
+              <TouchableOpacity
+                onPress={() => {
+                if (yearOpen != null) {
+
+                  exportHistoryYearPDF(yearOpen)
+
+                  const exportData = {
+                    customerId: selectedCustomer?.id ?? '',
+                    year: yearOpen,
+                    filters: appliedFilters,
+                  }
+
+                  logExportHistoryPDF('system', exportData)
+                    .catch((e) => console.warn('logExportHistoryPDF failed:', e))
+                }
+              }}
+                style={styles.actionPrimaryBtn}
+                activeOpacity={0.9}
+              >
+                <Ionicons name="print-outline" size={18} color="#fff" style={{ marginRight: 8 }} />
+                <Text style={styles.actionPrimaryText}>Εξαγωγή pdf</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Σώμα — μόνο τα στοιχεία του έτους */}
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 14, paddingBottom: 24 }}>
+              {yearOpen != null && (() => {
+                const { totals, cat, color, ordersOfYear, itemsOfYear } = computeYearData(yearOpen)
+                return (
+                  <View>
+                    {/* Χρησιμοποίησε το ήδη υπάρχον render, ή το YearDetailView αν το εξάγεις */}
+                    {renderYearDetail(yearOpen)}
+                    {/* ή:
+                    <YearDetailView
+                      year={yearOpen}
+                      totals={totals}
+                      cat={cat}
+                      color={color}
+                      ordersOfYear={ordersOfYear}
+                      itemsOfYear={itemsOfYear}
+                      itemsByOrderAll={itemsByOrderAll}
+                    />
+                    */}
+                  </View>
+                )
+              })()}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
     </Page>
   )
 }
@@ -1508,6 +2858,92 @@ const styles = StyleSheet.create({
     color: '#fff', 
     fontWeight: '800' 
   },
+
+  cardPolish: {
+  borderWidth: 0,
+  borderColor: '#E5E7EB',
+  backgroundColor: '#FFFFFF',
+  borderRadius: 16,
+  padding: 10,
+},
+
+sectionTitleRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  marginBottom: 6,
+},
+sectionBadge: {
+  width: 28,
+  height: 28,
+  borderRadius: 14,
+  backgroundColor: '#EFF6FF',
+  alignItems: 'center',
+  justifyContent: 'center',
+  marginRight: 8,
+  borderWidth: 1,
+  borderColor: '#DBEAFE',
+},
+sectionTitleText: {
+  fontSize: 16,
+  fontWeight: '400',
+  color: '#111827',
+},
+
+sectionSubRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  marginBottom: 6,
+  paddingHorizontal: 2,
+  gap: 0,
+},
+sectionSubText: {
+  fontSize: 12,
+  color: '#6B7280',
+},
+dotSep: {
+  marginHorizontal: 6,
+  color: '#9CA3AF',
+  fontSize: 12,
+},
+
+groupTitle: {
+  fontSize: 12,
+  fontWeight: '800',
+  color: '#374151',
+  marginBottom: 8,
+  marginTop: 6,
+  textTransform: 'uppercase',
+  letterSpacing: 0.4,
+},
+
+hairline: {
+  height: 0.8,
+  backgroundColor: '#E5E7EB',  
+  marginVertical: 8,
+},
+
+notesViewBoxPolished: {
+  borderWidth: 1.5,
+  borderColor: '#E5E7EB',     // ίδιο γκρι με τα inputs
+  backgroundColor: '#F9FAFB', // απαλό γκρι, όχι μπλε
+  borderRadius: 10,           // ίδιο radius με τα υπόλοιπα
+  paddingHorizontal: 10,
+  paddingVertical: 8,
+  minHeight: 160,
+},
+
+
+roHelperRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  marginTop: 8,
+  gap: 6,
+},
+roHelperText: {
+  fontSize: 12,
+  color: '#6B7280',
+},
+
 
   label: {
     fontSize: 12,
@@ -1707,30 +3143,31 @@ const styles = StyleSheet.create({
 }) as any,
 
 
-  detailsUnifiedCard: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1.5,
-    borderColor: '#E5E7EB', 
-    borderRadius: 12,
-    padding: 12,
-    overflow: 'hidden',
+detailsUnifiedCard: {
+  flex: 1,
+  backgroundColor: '#FFFFFF',
+  borderWidth: 0,             
+  borderRadius: 16,           
+  paddingVertical: 8,         
+  paddingHorizontal: 10,
+  overflow: 'hidden',
 
-    ...(Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOpacity: 0.08, 
-        shadowOffset: { width: 0, height: 6 },
-        shadowRadius: 10,
-      },
-      android: {
-        elevation: 4, 
-      },
-      web: {
-        boxShadow: '0 6px 18px rgba(0, 0, 0, 0.08)', 
-      } as any,
-    }) as object),
-  },
+  ...(Platform.select({
+    ios: {
+      shadowColor: '#000',
+      shadowOpacity: 0.06,
+      shadowOffset: { width: 0, height: 4 },
+      shadowRadius: 8,
+    },
+    android: {
+      elevation: 3,
+    },
+    web: {
+      boxShadow: '0 4px 12px rgba(0, 0, 0, 0.06)',
+    } as any,
+  }) as object),
+},
+
 
   /* Εσωτερική μπάρα ενεργειών μέσα στο card */
   detailsInnerHeader: {
@@ -1918,9 +3355,12 @@ itemEditCard: {
 },
 
   colLeftScroll: {
-    flex: 1.2,
-    minHeight: 0, 
+    flex: 1,
+    padding: 10,
+    backgroundColor: '#F9FAFB',  
+    borderRadius: 12,
   },
+
 
   detailsColRight: {
     flex: 1,
@@ -2287,5 +3727,306 @@ noOutline: Platform.select({
   web:  { outlineStyle: 'none', outlineWidth: 0, boxShadow: 'none' },
   default: {}
 }) as any,
+
+
+yearBlock: {
+  borderWidth: 2,
+  borderColor: '#F1F1F3',
+  borderRadius: 12,
+  padding: 12,
+  marginBottom: 16,
+  backgroundColor: '#fff',
+},
+yearHeaderRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  marginBottom: 8,
+},
+yearTitle: {
+  fontSize: 16,
+  fontWeight: '700',
+  color: '#111827',
+},
+summaryRow: {
+  flexDirection: 'row',
+  gap: 10,
+  marginBottom: 12,
+},
+summaryBox: {
+  flex: 1,
+  borderWidth: 2,
+  borderColor: '#F1F1F3',
+  borderRadius: 10,
+  paddingHorizontal: 10,
+  paddingVertical: 10,
+  backgroundColor: '#FAFAFB',
+},
+summaryLabel: { fontSize: 12, color: '#6B7280', fontWeight: '700', marginBottom: 2 },
+summaryValue: { fontSize: 16, color: '#111827', fontWeight: '800' },
+summaryMuted: { fontSize: 16, color: '#9CA3AF', fontWeight: '700' },
+
+cardSection: { marginTop: 8, paddingTop: 8, borderTopWidth: 1.5, borderTopColor: '#E5E7EB' },
+sectionTitle: { fontSize: 14, color: '#111827', fontWeight: '700', marginBottom: 8 },
+muted: { color: '#6B7280' },
+
+legendWrap: { marginTop: 10, alignSelf: 'stretch' },
+legendRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 3 },
+legendDot: { width: 12, height: 12, borderRadius: 9999 },
+
+ legendText: {
+    fontSize: 14,
+    color: '#111827',
+  },
+orderBriefRow: {
+  paddingVertical: 6,
+  borderBottomWidth: 1,
+  borderBottomColor: '#F3F4F6',
+},
+orderBriefTitle: { fontWeight: '800', color: '#111827' },
+orderBriefMeta: { color: '#6B7280', marginTop: 2, fontSize: 12 },
+
+itemBriefRow: {
+  paddingVertical: 6,
+  borderBottomWidth: 1,
+  borderBottomColor: '#F3F4F6',
+},
+itemBriefTitle: { fontWeight: '700', color: '#111827' },
+itemBriefMeta: { color: '#6B7280', marginTop: 2, fontSize: 12 },
+
+filtersCard: {
+  width: '60%',
+  maxWidth: 820,
+  backgroundColor: '#fff',
+  borderRadius: 14,
+  padding: 14,
+  ...(Platform.select({
+    ios: { shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 8 } },
+    android: { elevation: 8 },
+    web: { boxShadow: '0 18px 40px rgba(0,0,0,0.18)' } as any,
+  }) as object),
+},
+
+yearListRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  paddingVertical: 12,
+  paddingHorizontal: 12,
+  backgroundColor: '#FFFFFF',
+  borderRadius: 12,
+  borderWidth: 1.5,
+  borderColor: '#E5E7EB',
+},
+yearListLeft: {
+  flex: 1,
+},
+yearListTitle: {
+  fontSize: 16,
+  fontWeight: '800',
+  color: '#111827',
+},
+yearListSub: {
+  marginTop: 2,
+  fontSize: 13,
+  color: '#6B7280',
+},
+
+yearDetailHeader: {
+  flexDirection: 'row',       // Οριζόντια διάταξη
+  alignItems: 'center',       // Κεντραρισμένα κάθετα
+  paddingHorizontal: 10,
+  paddingBottom: 6,
+},
+
+ghostBtn: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  backgroundColor: '#F3F4F6', // Ανοιχτό γκρι
+  borderRadius: 8,
+  paddingHorizontal: 10,
+  paddingVertical: 8,
+  borderWidth: 1.5,
+  borderColor: '#E5E7EB',
+}, 
+ghostBtnText: {
+  color: '#374151',
+  fontWeight: '600',
+},
+
+primaryTinyBtn: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  backgroundColor: '#3B82F6', // Μπλε accent (ίδιο με το υπόλοιπο UI σου)
+  paddingHorizontal: 12,
+  paddingVertical: 8,
+  borderRadius: 8,
+  marginLeft: 6,
+},
+primaryTinyBtnText: {
+  color: '#fff',
+  fontWeight: '700',
+},
+
+chip: {
+  paddingHorizontal: 10,
+  paddingVertical: 6,
+  borderRadius: 9999,
+  borderWidth: 1.5,
+  borderColor: '#E5E7EB',
+  backgroundColor: '#FFFFFF',
+  marginRight: 6,
+},
+chipText: {
+  color: '#374151',
+  fontSize: 12,
+},
+
+/* ---------- Styles για τα Reusable UI bits (History) ---------- */
+
+// SectionCard
+sectionCard: {
+  marginTop: 8,
+  paddingTop: 8,
+  borderTopWidth: 1.5,
+  borderTopColor: '#E5E7EB',
+},
+sectionCardHeader: {
+  flexDirection: 'row',
+  alignItems: 'center',
+},
+sectionCardTitle: {
+  fontSize: 14,
+  color: '#111827',
+  fontWeight: '700',
+},
+
+// StatTile
+statRow: {
+  flexDirection: 'row',
+  gap: 10,
+  marginBottom: 12,
+},
+statTile: {
+  flex: 1,
+  borderWidth: 2,
+  borderColor: '#F1F1F3',
+  borderRadius: 12,
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+  backgroundColor: '#FAFAFB',
+},
+statTileLabel: {
+  fontSize: 12,
+  color: '#6B7280',
+  fontWeight: '700',
+  marginBottom: 2,
+},
+statTileValue: {
+  fontSize: 16,
+  color: '#111827',
+  fontWeight: '800',
+},
+
+
+
+// YearRow (κάρτα έτους στη λίστα)
+yearRowCard: {
+  backgroundColor: '#FFFFFF',
+  borderRadius: 12,
+  borderWidth: 1.5,
+  borderColor: '#E5E7EB',
+  paddingVertical: 12,
+  paddingHorizontal: 12,
+  ...(Platform.select({
+    ios: { shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 3 } },
+    android: { elevation: 2 },
+    web: { boxShadow: '0 6px 12px rgba(0,0,0,0.04)', cursor: 'pointer' } as any,
+  }) as object),
+},
+yearBadge: {
+  width: 32,
+  height: 32,
+  borderRadius: 8,
+  backgroundColor: '#DBEAFE',
+  alignItems: 'center',
+  justifyContent: 'center',
+},
+yearBadgeText: {
+  color: '#1D4ED8',
+  fontWeight: '800',
+  fontSize: 12,
+},
+yearRowTitle: {
+  fontSize: 16,
+  fontWeight: '800',
+  color: '#111827',
+},
+yearRowSub: {
+  marginTop: 2,
+  fontSize: 13,
+  color: '#6B7280',
+},
+
+entryCard: {
+  flexDirection: 'row',
+  alignItems: 'stretch',
+  borderWidth: 1.5,
+  borderColor: '#E5E7EB',
+  borderRadius: 12,
+  backgroundColor: '#FFFFFF',
+  marginBottom: 8,
+  ...(Platform.select({
+    ios: { shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 3 } },
+    android: { elevation: 2 },
+    web: { boxShadow: '0 6px 12px rgba(0,0,0,0.04)' } as any,
+  }) as object),
+},
+entryAccent: {
+  width: 4,
+  backgroundColor: '#93C5FD',
+  borderTopLeftRadius: 12,
+  borderBottomLeftRadius: 12,
+},
+entryBody: {
+  flex: 1,
+  paddingVertical: 10,
+  paddingHorizontal: 10,
+},
+entryTopRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  marginBottom: 4,
+},
+entryTitle: { fontSize: 14, color: '#111827', fontWeight: '800' },
+entryDate: { fontSize: 12, color: '#6B7280' },
+entryMetaRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  flexWrap: 'wrap',
+  gap: 10,
+  marginTop: 2,
+},
+entryMeta: { fontSize: 12, color: '#374151' },
+entryMetaStrong: { fontSize: 13, color: '#111827', fontWeight: '800' },
+
+colorBadge: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  borderWidth: 1.5,
+  borderColor: '#E5E7EB',
+  borderRadius: 9999,
+  paddingHorizontal: 8,
+  paddingVertical: 4,
+  backgroundColor: '#FFFFFF',
+},
+colorDot: {
+  width: 10,
+  height: 10,
+  borderRadius: 9999,
+  marginRight: 6,
+},
+colorBadgeText: { fontSize: 12, color: '#111827' },
+
+
 
 })

@@ -65,8 +65,9 @@ type PieceItem = {
   shelf?: string
   status?: 'άπλυτο' | 'πλυμένο'
   workType?: 'Επιστροφή' | 'Φύλλαξη'
-  saved?: boolean          // already existed item
-  newlyAdded?: boolean     // new item added
+  orderDate?: string
+  saved?: boolean          
+  newlyAdded?: boolean    
   dirty?: boolean          
 }
 
@@ -127,10 +128,23 @@ export default function EditOrderScreen() {
     shelf: '',
     status: 'άπλυτο' as 'άπλυτο' | 'πλυμένο',
     workType: 'Επιστροφή' as 'Επιστροφή' | 'Φύλλαξη',
+    lengthM: '',
+    widthM: '',
   })
   const [statusOpen, setStatusOpen] = useState(false)
   const activePiece = pieceModalIndex !== null ? pieces[pieceModalIndex] : null
   const activeCategory = activePiece?.category ?? null
+
+  const dimensionsCategories = useMemo(
+    () => new Set(['Μοκέτα', 'Χαλί', 'Φλοκάτι', 'Διαδρομάκι']),
+    []
+  )
+  const needsDimensions = dimensionsCategories.has(activeCategory ?? '')
+
+  const lengthVal = parseFloat((pieceForm.lengthM || '').replace(',', '.'))
+  const widthVal = parseFloat((pieceForm.widthM || '').replace(',', '.'))
+  const hasBoth = Number.isFinite(lengthVal) && Number.isFinite(widthVal)
+  const areaSqm = hasBoth ? (lengthVal * widthVal) : 0
 
   const paymentLabels: Record<string, string> = {
     card: 'Κάρτα',
@@ -172,6 +186,7 @@ export default function EditOrderScreen() {
           status: (it.status as ('άπλυτο' | 'πλυμένο')) ?? 'άπλυτο',
           workType: (it.storage_status as ('Επιστροφή' | 'Φύλλαξη')) ?? 'Επιστροφή',
           cost: (typeof it.price === 'number' ? it.price.toFixed(2) : (it.price ?? '0.00')).toString(),
+          orderDate: it.order_date || order.orderDate || '',
           saved: true,
           newlyAdded: false,
           dirty: false,
@@ -182,7 +197,7 @@ export default function EditOrderScreen() {
           setRemovedItemIds([]) 
         }
       } catch (err) {
-        console.error('❌ loadData error:', err)
+        console.error(' loadData error:', err)
         Alert.alert('Σφάλμα', 'Αποτυχία φόρτωσης της παραγγελίας.')
       } finally {
         if (!cancelled) setLoading(false)
@@ -311,6 +326,7 @@ export default function EditOrderScreen() {
       cost: '0.00',
       status: 'άπλυτο',
       workType: 'Επιστροφή',
+      orderDate: (ord.date && ord.date.length === 10) ? ord.date : '',
       saved: false,
       newlyAdded: true,
       dirty: true, 
@@ -331,6 +347,8 @@ export default function EditOrderScreen() {
       shelf: p.shelf ?? '',
       status: p.status ?? 'άπλυτο',
       workType: p.workType ?? 'Επιστροφή',
+      lengthM: '',
+      widthM: '',
     })
     setPieceModalOpen(true)
   }
@@ -397,6 +415,7 @@ export default function EditOrderScreen() {
             price: parseFloat((p.cost || '0').toString().replace(',', '.')) || 0,
             status: p.status ?? 'άπλυτο',
             storage_status: p.workType ?? 'Επιστροφή',
+            order_date: (p.orderDate && p.orderDate.length === 10) ? p.orderDate : undefined,
             })
             created.push(rec)
         }
@@ -426,6 +445,7 @@ export default function EditOrderScreen() {
             price: parseFloat((p.cost || '0').toString().replace(',', '.')) || 0,
             status: p.status ?? 'άπλυτο',
             storage_status: p.workType ?? 'Επιστροφή',
+            order_date: (p.orderDate && p.orderDate.length === 10) ? p.orderDate : undefined,
             })
         }
         // clean flags
@@ -917,140 +937,200 @@ export default function EditOrderScreen() {
       </Modal>
 
       {/* ===== Modal: Νέο/Επεξεργασία Τεμαχίου ===== */}
-      <Modal
-        visible={pieceModalOpen}
-        animationType="fade"
-        transparent
-        statusBarTranslucent
-        onRequestClose={closePieceModal}
+      {/* ===== Modal: Νέο/Επεξεργασία Τεμαχίου ===== */}
+<Modal
+  visible={pieceModalOpen}
+  animationType="fade"
+  transparent
+  statusBarTranslucent
+  onRequestClose={closePieceModal}
+>
+  <View style={styles.modalBackdrop}>
+    {/* ΜΟΝΟ ΕΝΑΣ WRAPPER ΓΙΑ ΟΛΟ ΤΟ ΠΕΡΙΕΧΟΜΕΝΟ */}
+    <View style={[styles.modalCard, needsDimensions && styles.modalCardTall]}>
+      <View style={styles.modalHeader}>
+        <Image
+          source={require('../../assets/images/box.png')}
+          style={{ width: 70, height: 70, marginBottom: 8 }}
+          resizeMode="contain"
+        />
+        <Text style={styles.modalTitle}>
+          {activePiece?.id ? 'Επεξεργασία τεμαχίου' : 'Νέο τεμάχιο'}
+        </Text>
+        <Text style={styles.modalSubtitle}>
+          #{orderId?.slice(0, 6)?.toUpperCase?.()}
+        </Text>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={{
+          paddingBottom: 4,  
+          paddingTop: 15,      
+        }}
+        keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Image
-                source={require('../../assets/images/box.png')}
-                style={{ width: 70, height: 70, marginBottom: 8 }}
-                resizeMode="contain"
-              />
-              <Text style={styles.modalTitle}>{activePiece?.id ? 'Επεξεργασία τεμαχίου' : 'Νέο τεμάχιο'}</Text>
-              <Text style={styles.modalSubtitle}>#{orderId?.slice(0, 6)?.toUpperCase?.()}</Text>
-            </View>
+        {/* 1) Κατηγορία / Χρώμα */}
+        <View style={styles.row2}>
+          <View style={[styles.inputWrap, styles.flex1]}>
+            <Text style={styles.label}>Κατηγορία</Text>
+            <TextInput
+              value={activeCategory ?? '—'}
+              editable={false}
+              selectTextOnFocus={false}
+              style={[styles.input, styles.lockedInput]}
+              placeholder="—"
+            />
+          </View>
 
-            <ScrollView contentContainerStyle={{ paddingBottom: 12 }} keyboardShouldPersistTaps="handled">
-              <View style={styles.row2}>
-                <View style={[styles.inputWrap, styles.flex1]}>
-                  <Text style={styles.label}>Κατηγορία</Text>
-                  <TextInput
-                    value={activeCategory ?? '—'}
-                    editable={false}
-                    selectTextOnFocus={false}
-                    style={[styles.input, styles.lockedInput]}
-                    placeholder="—"
-                  />
-                </View>
-
-                <View style={[styles.inputWrap, styles.flex1]}>
-                  <Text style={styles.label}>Χρώμα *</Text>
-                  <TextInput
-                    value={pieceForm.color}
-                    onChangeText={(v) => setPieceForm(s => ({ ...s, color: v }))}
-                    style={styles.input}
-                    placeholder="π.χ. κόκκινο, μπλε..."
-                    placeholderTextColor="#6B7280"
-                  />
-                </View>
-              </View>
-
-              <View style={styles.row2}>
-                <View style={[styles.inputWrap, styles.flex1]}>
-                  <Text style={styles.label}>Κωδικός τεμαχίου</Text>
-                  <TextInput
-                    value={pieceForm.code}
-                    onChangeText={(v) => setPieceForm(s => ({ ...s, code: v.toUpperCase() }))}
-                    style={[styles.input, !isCodeValid() && pieceForm.code ? styles.inputError : null]}
-                    placeholder="CHR001"
-                    placeholderTextColor="#6B7280"
-                    autoCapitalize="characters"
-                    maxLength={6}
-                  />
-                  {!isCodeValid() && pieceForm.code ? (
-                    <Text style={styles.inputHintError}>Μορφή XXX999 (π.χ. CHR001)</Text>
-                  ) : null}
-                </View>
-
-                <View style={[styles.inputWrap, styles.flex1]}>
-                  <Text style={styles.label}>Ράφι</Text>
-                  <TextInput
-                    value={pieceForm.shelf}
-                    onChangeText={(v) => setPieceForm(s => ({ ...s, shelf: v.toUpperCase() }))}
-                    style={styles.input}
-                    placeholder="π.χ. Α1"
-                    placeholderTextColor="#6B7280"
-                    autoCapitalize="characters"
-                    maxLength={4}
-                  />
-                </View>
-              </View>
-
-              <View style={styles.row2}>
-                <View style={[styles.inputWrap, styles.flex1]}>
-                  <Text style={styles.label}>Κατάσταση</Text>
-                  <Pressable onPress={() => setStatusOpen(v => !v)} style={styles.fakeInput}>
-                    <Text style={styles.fakeInputText}>{pieceForm.status}</Text>
-                    <Ionicons name={statusOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#666" />
-                  </Pressable>
-                  {statusOpen && (
-                    <View style={styles.dropdownMenu}>
-                      {(['άπλυτο', 'πλυμένο'] as const).map((opt, i) => (
-                        <View key={opt}>
-                          {i > 0 && <View style={styles.dropdownDivider} />}
-                          <Pressable
-                            style={styles.dropdownItem}
-                            onPress={() => { setPieceForm(s => ({ ...s, status: opt })); setStatusOpen(false) }}
-                          >
-                            <Text style={styles.dropdownItemText}>{opt}</Text>
-                          </Pressable>
-                        </View>
-                      ))}
-                    </View>
-                  )}
-                </View>
-
-                <View style={[styles.inputWrap, styles.flex1]}>
-                  <Text style={styles.label}>Τύπος Εργασίας *</Text>
-                  <View style={styles.chipRow}>
-                    {(['Επιστροφή', 'Φύλλαξη'] as const).map(opt => {
-                      const active = pieceForm.workType === opt
-                      return (
-                        <Pressable
-                          key={opt}
-                          onPress={() => setPieceForm(s => ({ ...s, workType: opt }))}
-                          style={[styles.chip, active && styles.chipActive]}
-                        >
-                          <Text style={[styles.chipText, active && styles.chipTextActive]}>{opt}</Text>
-                        </Pressable>
-                      )
-                    })}
-                  </View>
-                </View>
-              </View>
-            </ScrollView>
-
-            <View style={styles.modalActions}>
-              <Pressable style={styles.secondaryBtn} onPress={closePieceModal}>
-                <Text style={styles.secondaryBtnText}>Ακύρωση</Text>
-              </Pressable>
-              <Pressable style={[styles.primaryBtn, { marginLeft: 12 }]} onPress={savePieceModal}>
-                <Text style={styles.primaryBtnText}>Αποθήκευση</Text>
-              </Pressable>
-            </View>
+          <View style={[styles.inputWrap, styles.flex1]}>
+            <Text style={styles.label}>Χρώμα *</Text>
+            <TextInput
+              value={pieceForm.color}
+              onChangeText={(v) => setPieceForm(s => ({ ...s, color: v }))}
+              style={styles.input}
+              placeholder="π.χ. κόκκινο, μπλε..."
+              placeholderTextColor="#6B7280"
+            />
           </View>
         </View>
 
-        
-        
+        {/* 2) Κωδικός / Ράφι */}
+        <View style={styles.row2}>
+          <View style={[styles.inputWrap, styles.flex1]}>
+            <Text style={styles.label}>Κωδικός τεμαχίου</Text>
+            <TextInput
+              value={pieceForm.code}
+              onChangeText={(v) => setPieceForm(s => ({ ...s, code: v.toUpperCase() }))}
+              style={[styles.input, !isCodeValid() && pieceForm.code ? styles.inputError : null]}
+              placeholder="CHR001"
+              placeholderTextColor="#6B7280"
+              autoCapitalize="characters"
+              maxLength={6}
+            />
+            {!isCodeValid() && pieceForm.code ? (
+              <Text style={styles.inputHintError}>Μορφή XXX999 (π.χ. CHR001)</Text>
+            ) : null}
+          </View>
 
-      </Modal>
+          <View style={[styles.inputWrap, styles.flex1]}>
+            <Text style={styles.label}>Ράφι</Text>
+            <TextInput
+              value={pieceForm.shelf}
+              onChangeText={(v) => setPieceForm(s => ({ ...s, shelf: v.toUpperCase() }))}
+              style={styles.input}
+              placeholder="π.χ. Α1"
+              placeholderTextColor="#6B7280"
+              autoCapitalize="characters"
+              maxLength={4}
+            />
+          </View>
+        </View>
+
+        {/* 3) Διαστάσεις (για Μοκέτα/Χαλί/Φλοκάτι/Διαδρομάκι) */}
+        {needsDimensions && (
+          <>
+            <Text style={[styles.label, { marginTop: 8 }]}>Διαστάσεις (μέτρα)</Text>
+            <View style={styles.row2}>
+              <View style={[styles.inputWrap, styles.flex1]}>
+                <Text style={styles.label}>Μήκος (προαιρετικό)</Text>
+                <TextInput
+                  value={pieceForm.lengthM}
+                  onChangeText={(v) => {
+                    const clean = v.replace(/[^\d.,]/g, '')
+                    setPieceForm(s => ({ ...s, lengthM: clean }))
+                  }}
+                  style={styles.input}
+                  placeholder="Μήκος (προαιρετικό)"
+                  placeholderTextColor="#6B7280"
+                  keyboardType={Platform.select({ ios: 'decimal-pad', android: 'numeric', default: 'numeric' })}
+                  inputMode="decimal"
+                />
+              </View>
+
+              <View style={[styles.inputWrap, styles.flex1]}>
+                <Text style={styles.label}>Πλάτος (προαιρετικό)</Text>
+                <TextInput
+                  value={pieceForm.widthM}
+                  onChangeText={(v) => {
+                    const clean = v.replace(/[^\d.,]/g, '')
+                    setPieceForm(s => ({ ...s, widthM: clean }))
+                  }}
+                  style={styles.input}
+                  placeholder="Πλάτος (προαιρετικό)"
+                  placeholderTextColor="#6B7280"
+                  keyboardType={Platform.select({ ios: 'decimal-pad', android: 'numeric', default: 'numeric' })}
+                  inputMode="decimal"
+                />
+              </View>
+            </View>
+
+            {hasBoth && (
+              <View style={{ marginTop: 4 }}>
+                <Text style={[styles.label, { fontWeight: '600' }]}>
+                  Επιφάνεια: {areaSqm.toFixed(2)} τ.μ.
+                </Text>
+              </View>
+            )}
+          </>
+        )}
+
+        {/* 4) Κατάσταση / Τύπος */}
+        <View style={styles.row2}>
+          <View style={[styles.inputWrap, styles.flex1, styles.dropdownHost]}>
+            <Text style={styles.label}>Κατάσταση</Text>
+            <Pressable onPress={() => setStatusOpen(v => !v)} style={styles.fakeInput}>
+              <Text style={styles.fakeInputText}>{pieceForm.status}</Text>
+              <Ionicons name={statusOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#666" />
+            </Pressable>
+            {statusOpen && (
+              <View style={[styles.dropdownMenu, styles.dropdownMenuAbove]}>
+                {(['άπλυτο', 'πλυμένο'] as const).map((opt, i) => (
+                  <View key={opt}>
+                    {i > 0 && <View style={styles.dropdownDivider} />}
+                    <Pressable
+                      style={styles.dropdownItem}
+                      onPress={() => { setPieceForm(s => ({ ...s, status: opt })); setStatusOpen(false) }}
+                    >
+                      <Text style={styles.dropdownItemText}>{opt}</Text>
+                    </Pressable>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+
+          <View style={[styles.inputWrap, styles.flex1]}>
+            <Text style={styles.label}>Τύπος Εργασίας *</Text>
+            <View style={styles.chipRow}>
+              {(['Επιστροφή', 'Φύλλαξη'] as const).map(opt => {
+                const active = pieceForm.workType === opt
+                return (
+                  <Pressable
+                    key={opt}
+                    onPress={() => setPieceForm(s => ({ ...s, workType: opt }))}
+                    style={[styles.chip, active && styles.chipActive]}
+                  >
+                    <Text style={[styles.chipText, active && styles.chipTextActive]}>{opt}</Text>
+                  </Pressable>
+                )
+              })}
+            </View>
+          </View>
+        </View>
+      </ScrollView>
+
+      <View style={styles.modalActions}>
+        <Pressable style={styles.secondaryBtn} onPress={closePieceModal}>
+          <Text style={styles.secondaryBtnText}>Ακύρωση</Text>
+        </Pressable>
+        <Pressable style={[styles.primaryBtn, { marginLeft: 12 }]} onPress={savePieceModal}>
+          <Text style={styles.primaryBtnText}>Αποθήκευση</Text>
+        </Pressable>
+      </View>
+    </View>
+  </View>
+</Modal>
+
 
       
     </Page>
@@ -1216,6 +1296,19 @@ modalActions: {
   dropdownItemText: { fontSize: 15, color: '#333' },
   dropdownDivider: { height: 1, backgroundColor: '#EFEFEF' },
 
+  dropdownHost: {
+  position: 'relative',
+},
+
+dropdownMenuAbove: {
+  position: 'absolute',
+  left: 0,
+  right: 0,
+  bottom: '100%',   
+  marginTop: 0,
+  marginBottom: -20, 
+  zIndex: 50,
+},
   /* ===== Order Section ===== */
   orderIconFab: {
     position: 'absolute',
@@ -1482,7 +1575,7 @@ modalActions: {
     paddingHorizontal: 16,
     paddingVertical: 28,
     maxHeight: '100%',
-    height: 565,
+    height: 505,
     ...(Platform.select({
       ios: { shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } },
       android: { elevation: 8 },
@@ -1551,4 +1644,8 @@ modalActions: {
     ...(Platform.select({ ios: { shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } }, android: { elevation: 2 }, web: { cursor: 'pointer' } as any }) as object),
   },
   addPieceSmallBtnText: { color: '#fff', fontWeight: '400', marginRight: 2 },
+
+  modalCardTall: {
+    minHeight: 620,     // ή 580/600 αν θες περισσότερο χώρο
+  },
 });

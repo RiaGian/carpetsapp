@@ -19,6 +19,7 @@
       }
     },
 
+    
     "android": {
       "package": "com.carpetsapp.carpetsapp",
       "edgeToEdgeEnabled": true,

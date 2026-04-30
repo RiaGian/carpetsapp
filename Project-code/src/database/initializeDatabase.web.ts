@@ -41,6 +41,7 @@ const adapterAny = (database as any).adapter
 console.log('WM adapter wrapper  →', adapterAny?.constructor?.name)
 console.log('WM underlying adapter →', adapterAny?._underlyingAdapter?.constructor?.name || adapterAny?.adapter?.constructor?.name)
 ;(globalThis as any).db = database
+;(globalThis as any).database = database
 
 // === Dev helpers για web console ===
 const collections = [

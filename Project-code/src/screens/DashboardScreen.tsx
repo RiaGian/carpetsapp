@@ -4,8 +4,12 @@ import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
+import { Q } from '@nozbe/watermelondb';
+import { LinearGradient } from 'expo-linear-gradient';
 import AppHeader from '../components/AppHeader';
 import Page from '../components/Page';
+import ActivityLog from '../database/models/ActivityLog';
+import { listHistoryItems, listHistoryOrders, type HistoryItem, type HistoryOrder } from '../services/history';
 import { colors } from '../theme/colors';
 
 
@@ -20,6 +24,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import { observeCustomers } from '../services/customer';
 
 type CustomersPreview = { count: number; names: string[] };
+type ShelfPreview = { code: string; count: number };
+type WarehousePreview = { totalShelves: number; shelves: ShelfPreview[] };
 
 export default function DashboardScreen() {
   const ref = useRef<any>(null);
@@ -37,6 +43,20 @@ export default function DashboardScreen() {
 
   const [fallbackName, setFallbackName] = useState<string | null>(null);
   const [customersPreview, setCustomersPreviewLocal] = useState<CustomersPreview | null>(null);
+
+  const [historyItemsPreview, setHistoryItemsPreview] = useState<HistoryItem[]>([]);
+  const [historyOrdersPreview, setHistoryOrdersPreview] = useState<HistoryOrder[]>([]);
+
+
+  const [warehousePreview, setWarehousePreview] = useState<WarehousePreview | null>(null);
+
+  
+  const [activityCounts, setActivityCounts] = useState({
+    authentication: 0,
+    orders: 0,
+    customers: 0,
+  });
+  const [activityTotal, setActivityTotal] = useState(0);
 
   //  params -->  fallback
   React.useEffect(() => {
@@ -59,6 +79,18 @@ export default function DashboardScreen() {
     [fromParams.name, fallbackName]
   );
 
+  const getCategoryFromAction = (action: string):
+    'authentication' | 'customers' | 'orders' | 'items' | 'shelves' | 'history' | 'system' => {
+    const A = (action || '').toUpperCase();
+    if (A.includes('LOGIN') || A.includes('LOGOUT') || A.includes('PASSWORD') || A.includes('DEVICE') || A.includes('SESSION'))
+      return 'authentication';
+    if (A.includes('CUSTOMER')) return 'customers';
+    if (A.includes('ORDER')) return 'orders';
+    if (A.includes('ITEM')) return 'items';
+    if (A.includes('SHELF')) return 'shelves';
+    if (A.includes('HISTORY') || A.includes('EXPORT') || A.includes('VIEW')) return 'history';
+    return 'system';
+  };
   //  live observe of customer on dashboard
   useFocusEffect(
     useCallback(() => {
@@ -74,6 +106,65 @@ export default function DashboardScreen() {
       return () => sub.unsubscribe();
     }, [])
   );
+
+  React.useEffect(() => {
+  let cancelled = false;
+  (async () => {
+    try {
+      const [items, orders] = await Promise.all([
+        listHistoryItems({ limit: 8 }),
+        listHistoryOrders({ limit: 4 }),
+      ]);
+      if (!cancelled) {
+        setHistoryItemsPreview(items || []);
+        setHistoryOrdersPreview(orders || []);
+      }
+    } catch (e) {
+      console.error('history preview load failed', e);
+      if (!cancelled) {
+        setHistoryItemsPreview([]);
+        setHistoryOrdersPreview([]);
+      }
+    }
+  })();
+  return () => { cancelled = true; };
+  }, []);
+
+  // live observe : ActivityLog 
+  React.useEffect(() => {
+    const col = database.get<ActivityLog>('activity_logs');
+    const sub = col
+      .query(Q.sortBy('timestamp', Q.desc))
+      .observe()
+      .subscribe((rows: any[]) => {
+        const counts = { authentication: 0, orders: 0, customers: 0 };
+        for (const r of rows) {
+          const cat =
+            (r.category as string) || getCategoryFromAction(r.action || '');
+          if (cat === 'authentication') counts.authentication++;
+          else if (cat === 'orders') counts.orders++;
+          else if (cat === 'customers') counts.customers++;
+        }
+        setActivityCounts(counts);
+        setActivityTotal(rows.length);
+      });
+
+    return () => sub.unsubscribe();
+  }, []);
+
+  React.useEffect(() => {
+
+  const mock: WarehousePreview = {
+    totalShelves: 4,
+    shelves: [
+      { code: 'A1', count: 3 },
+      { code: 'A2', count: 2 },
+      { code: 'B1', count: 1 },
+      { code: 'B2', count: 0 }, // Άδειο
+    ],
+  };
+  setWarehousePreview(mock);
+}, []);
 
   // Actions
   const logout = async () => {
@@ -102,6 +193,7 @@ export default function DashboardScreen() {
   ];
 
   return (
+    
     <Page>
       <AppHeader onLogout={logout} />
 
@@ -118,16 +210,21 @@ export default function DashboardScreen() {
               onPress={c.onPress}
               isWide={isWide}
               customersPreview={c.key === 'customers' ? customersPreview : null}
+              historyItemsPreview={c.key === 'history' ? historyItemsPreview : null}
+              historyOrdersPreview={c.key === 'history' ? historyOrdersPreview : null}
+              warehousePreview={c.key === 'warehouse' ? warehousePreview : null}
+              activityCounts={activityCounts}
             />
           ))}
         </View>
+
 
         {/* Κάτω mini cards — χωρίς icons, με χρώμα ανά κάρτα */}
         <View style={styles.statsRow}>
           <StatCard title="Συνολικοί Πελάτες" value={String(customersPreview?.count ?? 0)} color="#B8C8FF" />
           <StatCard title="Τεμάχια στην Αποθήκη" value="14" color="#F5A5C0" />
-          <StatCard title="Καταγραφές Log" value="32" color="#A3E3BB" />
-          <StatCard title="Σύνολο Δεδομένων" value="128" color="#C3B2F7" />
+          <StatCard title="Καταγραφές Log" value={String(activityTotal)} color="#A3E3BB" />
+          <StatCard title="Σύνολο Δεδομένων" value="-" color="#C3B2F7" />
         </View>
       </View>
 
@@ -144,11 +241,11 @@ export default function DashboardScreen() {
 }
 
 // dashboard card
-function DashboardCard({ kind, title, bg, icon, onPress, isWide, customersPreview }: any) {
+function DashboardCard({ kind, title, bg, icon, onPress, isWide, customersPreview, historyItemsPreview, historyOrdersPreview, activityCounts,warehousePreview, }: any) {
   const { previews } = usePreview();
   const effectivePreview = customersPreview ?? previews.customers;
   const [hovered, setHovered] = useState(false);
-
+  
   return (
     <Pressable
       onPress={onPress}
@@ -159,44 +256,287 @@ function DashboardCard({ kind, title, bg, icon, onPress, isWide, customersPrevie
         {
           backgroundColor: bg,
           width: isWide ? '23%' : '100%',
-          transform: [{ scale: hovered ? 1.08 : 1 }],
+          transform: [{ scale: hovered ? 1.04 : 1 }],
+          ...getShadow('rgba(59,130,246,0.12)'),
           ...(Platform.OS === 'web'
-            ? { transition: 'transform 0.2s ease-in-out' } as any
+            ? { transition: 'transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out' } as any
             : {}),
         },
       ]}
     >
-      <View style={styles.cardHeader}>
-        <Ionicons name={icon as any} size={22} color="#1F2A44" style={{ marginRight: 8 }} />
-        <Text style={styles.cardTitle}>{title}</Text>
-      </View>
+      <LinearGradient
+        colors={[`${bg}00`, `${bg}`, `${bg}`]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.cardInner}
+      >
+        {/* glossy rim για web */}
+        {Platform.OS === 'web' ? <View style={styles.glossRim} /> : null}
 
-      {/* 👇 Εμφάνιση όλων των πελατών, χωρίς limit */}
-      {kind === 'customers' && effectivePreview && (
-        <View style={styles.previewNoContainer}>
-          <View style={styles.previewHeaderRow}>
-            <Text style={styles.previewHeaderText}>Συνολικοί Πελάτες</Text>
-            <View style={styles.previewBadge}>
-              <Text style={styles.previewBadgeText}>{effectivePreview.count}</Text>
-            </View>
-          </View>
+        {/* header */}
+        <View style={styles.cardHeader}>
+          <Ionicons
+            name={icon as any}
+            size={22}
+            color="#1F2A44"
+            style={{ marginRight: 8 }}
+          />
+          <Text style={styles.cardTitle}>{title}</Text>
+        </View>
 
-          {/* Όλοι οι πελάτες — ακόμη κι αν “κοπούν” */}
-          <View style={styles.previewChipsWrap}>
-            {effectivePreview.names.map((n: string, idx: number) => (
-              <View key={`${n}-${idx}`} style={styles.previewChip}>
-                <Ionicons name="person-outline" size={14} color={colors.primary} style={{ marginRight: 6 }} />
-                <Text style={styles.previewChipText} numberOfLines={1} ellipsizeMode="tail">
-                  {n || '—'}
+        {/* περιεχόμενο ανά είδος */}
+        {kind === 'customers' && effectivePreview && (
+          <View style={styles.previewNoContainer}>
+            <View style={styles.previewHeaderRow}>
+              <Text style={styles.previewHeaderText}>Συνολικοί Πελάτες</Text>
+              <View style={styles.previewBadge}>
+                <Text style={styles.previewBadgeText}>
+                  {effectivePreview.count}
                 </Text>
               </View>
-            ))}
+            </View>
+
+            <View style={styles.previewChipsWrap}>
+              {effectivePreview.names.map((n: string, idx: number) => (
+                <View key={`${n}-${idx}`} style={styles.previewChip}>
+                  <Ionicons
+                    name="person-outline"
+                    size={14}
+                    color={colors.primary}
+                    style={{ marginRight: 6 }}
+                  />
+                  <Text
+                    style={styles.previewChipText}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {n || '—'}
+                  </Text>
+                </View>
+              ))}
+            </View>
           </View>
-        </View>
-      )}
+        )}
+
+        {kind === 'warehouse' && (
+          <View style={styles.hminiClip}>
+            <WarehouseMiniCard
+              onPressOpenWarehouse={onPress}
+              preview={warehousePreview}
+            />
+          </View>
+        )}
+
+        {kind === 'history' && (
+          <View style={styles.hminiClip}>
+            <HistoryMiniCard
+              onPressGoHistory={onPress}
+              itemsCount={(historyItemsPreview || []).length}
+              ordersCount={(historyOrdersPreview || []).length}
+            />
+          </View>
+        )}
+
+        {kind === 'activity' && (
+          <View style={styles.hminiClip}>
+            <ActivityMiniCard
+              onPressOpenLog={onPress}
+              counts={activityCounts}
+            />
+          </View>
+        )}
+      </LinearGradient>
     </Pressable>
+
+  );
+  
+}
+
+
+function HistoryMiniCard({
+  onPressGoHistory,
+  itemsCount,
+  ordersCount,
+}: {
+  onPressGoHistory?: () => void;
+  itemsCount: number;
+  ordersCount: number;
+}) {
+  return (
+    <View style={styles.hminiWrap}>
+     
+
+      {/* Μικρή search bar (ψευδο-input) */}
+      <Pressable style={styles.hminiSearch} onPress={onPressGoHistory}>
+        <Ionicons name="search-outline" size={16} color="#6B7280" style={{ marginRight: 6 }} />
+        <Text style={styles.hminiSearchText} numberOfLines={1}>
+          Αναζήτηση σε όλα τα δεδομένα...
+        </Text>
+      </Pressable>
+
+      {/* 4 mini “dropdowns” (ψευδο κουμπιά) */}
+      <View style={styles.hminiGrid2}>
+        <Pressable style={styles.hminiDrop}>
+          <Text style={styles.hminiDropText}>Όλα ▾</Text>
+        </Pressable>
+        <Pressable style={styles.hminiDrop}>
+          <Text style={styles.hminiDropText}>Όλα τα έτη ▾</Text>
+        </Pressable>
+      </View>
+      <View style={styles.hminiGrid2}>
+        <Pressable style={styles.hminiDrop}>
+          <Text style={styles.hminiDropText}>Νεότερα πρώτα ▾</Text>
+        </Pressable>
+        <Pressable style={styles.hminiDrop}>
+          <Text style={styles.hminiDropText}>Κατηγορία ▾</Text>
+        </Pressable>
+      </View>
+
+      {/* CTA */}
+      <Pressable style={styles.hminiCTA} onPress={onPressGoHistory}>
+        <Text style={styles.hminiCTAText}>Κλικ για πλήρες ιστορικό</Text>
+      </Pressable>
+
+      {/* Ανάλυση Ιστορικού */}
+      <View style={styles.hminiAnalysis}>
+        <Text style={styles.hminiAnalysisTitle}>Ανάλυση Ιστορικού</Text>
+
+        <View style={styles.hminiStatRow}>
+          <View style={styles.hminiStatBadge}>
+            <Ionicons name="cube-outline" size={14} color="#1F2A44" />
+          </View>
+          <Text style={styles.hminiStatLabel}>Τεμάχια</Text>
+          <View style={{ flex: 1 }} />
+          <Text style={styles.hminiStatValue}>{itemsCount}</Text>
+        </View>
+
+        <View style={styles.hminiDivider} />
+
+        <View style={styles.hminiStatRow}>
+          <View style={styles.hminiStatBadge}>
+            <Ionicons name="cart-outline" size={14} color="#1F2A44" />
+          </View>
+          <Text style={styles.hminiStatLabel}>Παραγγελίες</Text>
+          <View style={{ flex: 1 }} />
+          <Text style={styles.hminiStatValue}>{ordersCount}</Text>
+        </View>
+      </View>
+    </View>
   );
 }
+
+
+function ActivityMiniCard({
+  onPressOpenLog,
+  counts,
+}: {
+  onPressOpenLog?: () => void;
+  counts: { authentication: number; orders: number; customers: number };
+}) {
+  const rows = [
+    { key: 'authentication', label: 'Πιστοποίηση', icon: 'lock-closed', color: '#8B5CF6', value: counts.authentication },
+    { key: 'orders',         label: 'Παραγγελίες',   icon: 'cart-outline',  color: '#F59E0B', value: counts.orders },
+    { key: 'customers',      label: 'Πελάτες',       icon: 'people-outline',color: '#3B82F6', value: counts.customers },
+  ];
+
+  return (
+    <View style={styles.alogWrap}>
+      {/* Search bar */}
+      <Pressable style={styles.hminiSearch} onPress={onPressOpenLog}>
+        <Ionicons name="search-outline" size={16} color="#6B7280" style={{ marginRight: 6 }} />
+        <Text style={styles.hminiSearchText} numberOfLines={1}>
+          Αναζήτηση δραστηριοτήτων...
+        </Text>
+      </Pressable>
+
+      {/* 3 φίλτρα */}
+      <View style={styles.alogGrid3}>
+        <Pressable style={styles.hminiDrop}><Text style={styles.hminiDropText}>Σύνδεση ▾</Text></Pressable>
+        <Pressable style={styles.hminiDrop}><Text style={styles.hminiDropText}>Ράφια ▾</Text></Pressable>
+        <Pressable style={styles.hminiDrop}><Text style={styles.hminiDropText}>Σήμερα ▾</Text></Pressable>
+      </View>
+
+      {/* Ανάλυση Log */}
+      <View style={styles.hminiAnalysis}>
+        <Text style={styles.hminiAnalysisTitle}>Ανάλυση Log</Text>
+        {rows.map((r) => (
+          <View key={r.key} style={styles.hminiStatRow}>
+            <View style={[styles.hminiStatBadge, { backgroundColor: '#EEF2FF' }]}>
+              <Ionicons name={r.icon as any} size={14} color={r.color} />
+            </View>
+            <Text style={styles.hminiStatLabel}>{r.label}</Text>
+            <View style={{ flex: 1 }} />
+            <Text style={styles.hminiStatValue}>{r.value}</Text>
+          </View>
+        ))}
+      </View>
+
+      {/* CTA */}
+      <Pressable style={styles.hminiCTA} onPress={onPressOpenLog}>
+        <Text style={styles.hminiCTAText}>Άνοιγμα Log Δραστηριοτήτων</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function WarehouseMiniCard({
+  onPressOpenWarehouse,
+  preview,
+}: {
+  onPressOpenWarehouse?: () => void;
+  preview: WarehousePreview | null;
+}) {
+  const total = preview?.totalShelves ?? 0;
+  const shelves = preview?.shelves ?? [];
+
+  return (
+    <View style={styles.wminiWrap}>
+      {/* Header με badge "X ράφια" */}
+      <View style={styles.wminiHeader}>
+        <View style={{ flex: 1 }} />
+        <View style={styles.wminiBadge}>
+          <Text style={styles.wminiBadgeText}>{total} ράφια</Text>
+        </View>
+      </View>
+
+      {/* Search bar (ψευδο-input) */}
+      <Pressable style={styles.hminiSearch} onPress={onPressOpenWarehouse}>
+        <Ionicons name="search-outline" size={16} color="#6B7280" style={{ marginRight: 6 }} />
+        <Text style={styles.hminiSearchText} numberOfLines={1}>
+          Αναζήτηση ραφιού, κωδικού ή τεμαχίου...
+        </Text>
+      </Pressable>
+
+      {/* Grid ραφιών */}
+      <View style={styles.wminiGrid}>
+        {shelves.map((s) => {
+          const empty = s.count === 0;
+          return (
+            <Pressable
+              key={s.code}
+              style={[styles.wminiShelf, empty && styles.wminiShelfEmpty]}
+              onPress={onPressOpenWarehouse}
+            >
+              <View style={styles.wminiShelfHeader}>
+                <Text style={styles.wminiShelfCode}>{s.code}</Text>
+                <Ionicons name="cube-outline" size={16} color="#1F2A44" />
+              </View>
+              <Text style={[styles.wminiShelfCount, empty && styles.wminiShelfEmptyText]}>
+                {empty ? 'Άδειο' : `${s.count} τεμάχ${s.count === 1 ? 'ιο' : 'ια'}`}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {/* CTA */}
+      <Pressable style={styles.hminiCTA} onPress={onPressOpenWarehouse}>
+        <Text style={styles.hminiCTAText}>Κλικ για διαχείριση αποθήκης</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 
 
 function StatCard({
@@ -228,6 +568,12 @@ function StatCard({
   );
 }
 
+const getShadow = (c = 'rgba(0,0,0,0.1)') =>
+  Platform.select({
+    ios:   { shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 12, shadowOffset: { width: 0, height: 8 } },
+    android: { elevation: 6 },
+    web:   { boxShadow: `0 10px 24px ${c}, 0 2px 8px rgba(0,0,0,0.06)` } as any,
+  });
 
 const styles = StyleSheet.create({
   content: { flex: 1, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'flex-start' },
@@ -241,20 +587,26 @@ const styles = StyleSheet.create({
   },
   gridWide: { flexDirection: 'row', justifyContent: 'space-between', flexWrap: 'nowrap' },
   card: {
-    borderRadius: 16,
-    width: '20%',
-    minHeight: 340,
-    marginHorizontal: 12,
-    paddingVertical: 20,
-    paddingHorizontal: 10,
-    alignItems: 'stretch',
-    justifyContent: 'flex-start',
-    ...(Platform.select({
-      ios: { shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, shadowOffset: { width: 0, height: 4 } },
-      android: { elevation: 2 },
-      web: { boxShadow: '0 6px 14px rgba(0,0,0,0.06)' } as any,
-    }) as object),
-  },
+  borderRadius: 18, // λίγο πιο μεγάλο για smooth καμπύλη
+  width: '20%',
+  minHeight: 340,
+  marginHorizontal: 12,
+  padding: 0, // επειδή έχουμε cardInner για padding
+  alignItems: 'stretch',
+  justifyContent: 'flex-start',
+  overflow: 'hidden',
+
+  // περίγραμμα
+  borderWidth: Platform.OS === 'web' ? 1 : StyleSheet.hairlineWidth,
+  borderColor: 'rgba(31,42,68,0.06)',
+
+  // εφέ σκιάς
+  ...(Platform.select({
+    ios: { shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 12, shadowOffset: { width: 0, height: 8 } },
+    android: { elevation: 6 },
+    web: { boxShadow: '0 10px 24px rgba(0,0,0,0.06), 0 2px 8px rgba(0,0,0,0.04)' } as any,
+  }) as object),
+},
   cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   cardTitle: { fontSize: 18, fontWeight: '400', color: '#1F2A44' },
 
@@ -324,6 +676,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     paddingVertical: 18,
     paddingHorizontal: 14,
+    ...getShadow(),
     backgroundColor: 'rgba(255,255,255,0.95)',
     borderWidth: 1,
     alignItems: 'center',
@@ -365,4 +718,296 @@ const styles = StyleSheet.create({
       web: { boxShadow: '0 8px 18px rgba(0,0,0,0.18)', cursor: 'pointer' } as any,
     }) as object),
   },
+
+  /** Ιστορικό (mini) */
+histWrap: { marginTop: 16, alignSelf: 'stretch' },
+histHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, gap: 8 },
+histCounters: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 },
+
+histListClip: { position: 'relative', maxHeight: 170, overflow: 'hidden', alignSelf: 'stretch', gap: 8 },
+histMiniRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  borderWidth: 1.5,
+  borderColor: '#F1F1F3',
+  backgroundColor: '#fff',
+  borderRadius: 12,
+  paddingVertical: 8,
+  paddingHorizontal: 10,
+},
+histMiniLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 },
+histSquareIcon: { width: 32, height: 32, borderRadius: 10, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+histMiniTitle: { fontSize: 13, fontWeight: '400', color: '#111827' },
+histMiniSub: { fontSize: 12, color: '#6B7280', marginTop: 1 },
+histMiniDate: { fontSize: 12, color: '#6B7280' },
+
+histBottomFade: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 36 },
+
+/** Mini chips */
+chip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 9999, backgroundColor: '#EEF2FF' },
+chipText: { fontWeight: '800', color: '#1F2937', fontSize: 12 },
+chipGreen: { backgroundColor: '#DCFCE7' }, chipGreenText: { color: '#166534' },
+chipOrange: { backgroundColor: '#FFEDD5' }, chipOrangeText: { color: '#9A3412' },
+chipPurple: { backgroundColor: '#EDE9FE' }, chipPurpleText: { color: '#6D28D9' },
+chipRed: { backgroundColor: '#FEE2E2' }, chipRedText: { color: '#991B1B' },
+
+  /* ——— Utils για HistoryPreview ——— */
+  emptyState: { 
+    padding: 18, 
+    alignItems: 'center', 
+    justifyContent: 'center' 
+  },
+  emptyTitle: { 
+    fontSize: 15, 
+    color: '#111827', 
+    fontWeight: '400' 
+  },
+
+  pill: { 
+    backgroundColor: '#DBEAFE', 
+    paddingHorizontal: 10, 
+    paddingVertical: 6, 
+    borderRadius: 9999 
+  },
+  pillText: { 
+    color: '#1D4ED8', 
+    fontWeight: '800' 
+  },
+
+  /** ---- History mini card ---- */
+hminiWrap: {
+
+  marginTop: 0,
+  alignSelf: 'stretch',
+},
+
+hminiHeaderRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'flex-start',
+  backgroundColor: 'rgba(255, 255, 255, 0.25)',
+  borderRadius: 8,
+  paddingVertical: 8,
+  paddingHorizontal: 14,
+  marginBottom: 14,
+  alignSelf: 'flex-start'
+},
+hminiTitle: {
+  fontSize: 14,
+  fontWeight: '400',
+  color: '#111827',
+},
+
+/* search */
+hminiSearch: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  backgroundColor: 'rgba(255,255,255,0.25)',
+  borderRadius: 12,
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+  marginBottom: 8,
+  ...(Platform.select({
+    web: { boxShadow: '0 3px 8px rgba(0,0,0,0.08)' } as any,
+    ios: { shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 3 } },
+    android: { elevation: 2 },
+  }) as object),
+},
+hminiSearchText: {
+  color: '#6B7280',
+  fontSize: 13,
+},
+
+/* δύο-δύο μικρά dropdown κουμπιά */
+hminiGrid2: {
+  flexDirection: 'row',
+  gap: 6,
+  marginBottom: 8,
+},
+hminiDrop: {
+  flex: 1,
+  backgroundColor: 'rgba(255,255,255,0.25)',
+  borderRadius: 12,
+  paddingVertical: 10,
+  paddingHorizontal: 12,
+  alignItems: 'flex-start',
+  justifyContent: 'center',
+  minWidth: 0,
+  ...(Platform.select({
+    web: { boxShadow: '0 3px 8px rgba(0,0,0,0.08)' } as any,
+    ios: { shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 3 } },
+    android: { elevation: 2 },
+  }) as object),
+},
+hminiDropText: { fontSize: 13, color: '#1F2A44' },
+
+/* CTA */
+hminiCTA: {
+  marginTop: 6,
+  backgroundColor: '#EEF2FF',
+  borderRadius: 12,
+  paddingVertical: 8,
+  alignItems: 'center',
+  justifyContent: 'center',
+  ...(Platform.select({
+    web: { cursor: 'pointer' } as any,
+    ios: { shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 4 } },
+    android: { elevation: 2 },
+  }) as object),
+},
+hminiCTAText: {
+  color: '#1F3A8A',
+  fontWeight: '400',
+  fontSize: 14,
+},
+
+/* Ανάλυση Ιστορικού */
+hminiAnalysis: {
+  marginTop: 12,
+  backgroundColor: 'rgba(255,255,255,0.6)',
+  borderWidth: 1.5,
+  borderColor: '#E5E7EB',
+  borderRadius: 12,
+  padding: 8,
+},
+hminiAnalysisTitle: {
+  fontSize: 13,
+  color: '#111827',
+  fontWeight: '400',
+  marginBottom: 8,
+},
+hminiStatRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+},
+hminiStatBadge: {
+  width: 24,
+  height: 24,
+  borderRadius: 8,
+  backgroundColor: '#EEF2FF',
+  alignItems: 'center',
+  justifyContent: 'center',
+  marginRight: 8,
+},
+hminiStatLabel: {
+  fontSize: 13,
+  color: '#111827',
+},
+hminiStatValue: {
+  fontSize: 13,
+  color: '#111827',
+  fontWeight: '400',
+},
+hminiDivider: {
+  height: 1,
+  backgroundColor: '#F1F5F9',
+  marginVertical: 8,
+},
+
+hminiClip: {
+  alignSelf: 'stretch',
+  width: '100%',
+  marginTop: 20,     
+  maxHeight: 240,    
+  overflow: 'hidden' 
+},
+
+/* ---- Activity mini card ---- */
+alogWrap: {
+  alignSelf: 'stretch',
+},
+
+/* 3 στη σειρά */
+alogGrid3: {
+  flexDirection: 'row',
+  gap: 6, 
+  marginBottom: 6,
+},
+
+
+alogListClip: {
+  alignSelf: 'stretch',
+  width: '100%',
+  marginTop: 6,
+  maxHeight: 150,   
+  overflow: 'hidden',
+},
+
+
+cardInner: {
+  padding: 14,
+},
+glossRim: {
+  position: 'absolute',
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
+  borderRadius: 18,
+  pointerEvents: 'none',
+  borderWidth: 0,
+  
+},
+
+wminiWrap: {
+  alignSelf: 'stretch',
+},
+
+wminiHeader: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  marginBottom: 8,
+},
+wminiHeaderLeft: { flexDirection: 'row', alignItems: 'center' },
+wminiTitle: { fontSize: 14, color: '#1F2A44' },
+
+wminiBadge: {
+  backgroundColor: '#E9F9EF', // απαλό πράσινο όπως στο screenshot
+  paddingHorizontal: 10,
+  paddingVertical: 6,
+  borderRadius: 999,
+},
+wminiBadgeText: { color: '#0F5132', fontSize: 13 },
+
+wminiGrid: {
+  flexDirection: 'row',
+  flexWrap: 'wrap',
+  justifyContent: 'space-between',
+  rowGap: 10,
+  marginTop: 6,
+},
+
+wminiShelf: {
+  flexBasis: '48%',       // 👉 2 ανά σειρά
+  backgroundColor: 'rgba(255,255,255,0.75)',
+  borderRadius: 14,
+  borderWidth: 1.5,
+  borderColor: '#DDE7D9',
+  paddingVertical: 10,    // λίγο πιο compact
+  paddingHorizontal: 10,
+  ...(Platform.select({
+    web: { boxShadow: '0 3px 8px rgba(0,0,0,0.06)' } as any,
+    ios: { shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 3 } },
+    android: { elevation: 2 },
+  }) as object),
+},
+
+wminiShelfEmpty: {
+  backgroundColor: '#F7FBF8',
+  borderColor: '#E7F2EA',
+},
+wminiShelfHeader: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  marginBottom: 8,
+},
+wminiShelfCode: { fontSize: 15, color: '#1F2A44' },
+wminiShelfCount: { fontSize: 13, color: '#1F2A44' },
+wminiShelfEmptyText: { color: '#6B7280' },
+
+
+
 });
