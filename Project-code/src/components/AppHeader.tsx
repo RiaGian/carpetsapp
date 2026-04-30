@@ -1,23 +1,19 @@
 // src/components/AppHeader.tsx
-import { useFocusEffect } from '@react-navigation/native';
 import { router, useLocalSearchParams } from 'expo-router';
-import React from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useAuth } from '../state/AuthProvider'; // ✅ παίρνουμε τον τρέχοντα χρήστη
 import { colors } from '../theme/colors';
 
-// WatermelonDB fallback
-import { database } from '../database/initializeDatabase';
-import User from '../database/models/Users';
-
 type Props = {
-  showBack?: boolean;           // προαιρετικό "← Πίσω" αριστερά του logo
-  onLogout?: () => void;        // προαιρετικό override του logout
+  showBack?: boolean;   // δείξε κουμπί "Πίσω"
+  onLogout?: () => void; // custom logout handler (αν δεν δοθεί, θα γίνει signOut() από Auth)
 };
 
 export default function AppHeader({ showBack = false, onLogout }: Props) {
   const params = useLocalSearchParams<Record<string, string>>();
+  const { user, signOut } = useAuth(); // ✅ user από context (persistent)
 
-  // διάβασε όνομα από διάφορα κλειδιά στα params
+  // Ό,τι μπορεί να έχει έρθει από route params (δεύτερο fallback)
   const paramName =
     (params?.name as string) ||
     (params?.displayName as string) ||
@@ -25,43 +21,11 @@ export default function AppHeader({ showBack = false, onLogout }: Props) {
     (params?.user as string) ||
     '';
 
-  const [fallbackName, setFallbackName] = React.useState<string>('Χρήστης');
-
-  // Fallback DB load
-  React.useEffect(() => {
-    if (paramName) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const usersCol = database.get<User>('users');
-        const list = await usersCol.query().fetch();
-        if (!cancelled) setFallbackName(list[0] ? ((list[0] as any).name ?? 'Χρήστης') : 'Χρήστης');
-      } catch {
-        if (!cancelled) setFallbackName('Χρήστης');
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [paramName]);
-
-  // Επανέλεγξε κάθε φορά που η οθόνη επανέρχεται σε focus
-  useFocusEffect(
-    React.useCallback(() => {
-      if (paramName) return;
-      let cancelled = false;
-      (async () => {
-        try {
-          const usersCol = database.get<User>('users');
-          const list = await usersCol.query().fetch();
-          if (!cancelled) setFallbackName(list[0] ? ((list[0] as any).name ?? 'Χρήστης') : 'Χρήστης');
-        } catch {
-          if (!cancelled) setFallbackName('Χρήστης');
-        }
-      })();
-      return () => { cancelled = true; };
-    }, [paramName])
-  );
-
-  const displayName = paramName || fallbackName || 'Χρήστης';
+  // Τι θα δείξουμε τελικά:
+  // 1) user.name ή user.email από Auth
+  // 2) αλλιώς, paramName (αν υπάρχει)
+  // 3) αλλιώς, "Χρήστης"
+  const displayName = user?.name || user?.email || paramName || 'Χρήστης';
 
   const goBack = () => {
     try {
@@ -72,9 +36,14 @@ export default function AppHeader({ showBack = false, onLogout }: Props) {
     }
   };
 
-  const doLogout = () => {
+  const doLogout = async () => {
     if (onLogout) return onLogout();
-    router.replace('/');
+    try {
+      await signOut();            // ✅ καθάρισμα auth state + storage
+      router.replace('/');        // -> login
+    } catch {
+      router.replace('/');
+    }
   };
 
   return (
@@ -136,11 +105,11 @@ const styles = StyleSheet.create({
 
   rightRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
 
-  connectedText: { fontSize: 14, color: '#666', fontWeight: '600' },
-  userName: { color: colors.primary, fontWeight: '800' },
+  connectedText: { fontSize: 15, color: '#666', fontWeight: '400' },
+  userName: { color: colors.primary, fontWeight: '400', fontSize: 15 },
 
   textBtn: { paddingHorizontal: 6, paddingVertical: 4 },
-  textBtnLabel: { fontSize: 14, fontWeight: '700' },
+  textBtnLabel: { fontSize: 15, fontWeight: '400' },
   pressed: { opacity: 0.7 },
 
   divider: { height: 1, backgroundColor: '#E0E0E0', marginTop: 4, marginBottom: 12 },

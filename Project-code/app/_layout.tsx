@@ -1,22 +1,41 @@
+// app/_layout.tsx
 import { DatabaseProvider } from '@nozbe/watermelondb/react'
 import { Stack } from 'expo-router'
 import { useEffect, useState } from 'react'
 import { ActivityIndicator, View } from 'react-native'
 import { database, initializeDatabase } from '../src/database/initializeDatabase'
+import { seedUsers } from '../src/services/users'
+import { AuthProvider } from '../src/state/AuthProvider'; // ✅ added import
+import { PreviewProvider } from '../src/state/PreviewProvider'
 
-// It initializes the local WatermelonDB database before rendering any screens.
 export default function RootLayout() {
-
-  // if ready to use the DB
   const [ready, setReady] = useState(false)
 
   useEffect(() => {
-     // Initialize the WatermelonDB database when the app starts
-    initializeDatabase().finally(() => setReady(true))
+    let cancelled = false
+    ;(async () => {
+      try {
+        // Initialize the local database
+        await initializeDatabase()
+
+        if (cancelled) return
+
+        // Seed initial users ("system" + "admin@example.com") if not exist
+        await seedUsers()
+      } catch (err) {
+        console.error('Boot error:', err)
+      } finally {
+        // Allow the app to render after setup
+        if (!cancelled) setReady(true)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   if (!ready) {
-
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" color="#007AFF" />
@@ -24,11 +43,14 @@ export default function RootLayout() {
     )
   }
 
-  // When the database is ready, we wrap the whole app inside the DatabaseProvider
-  // This lets every screen and component use the same WatermelonDB connection
   return (
     <DatabaseProvider database={database}>
-      <Stack screenOptions={{ headerShown: false }} />
+      {/* Wrap the whole app with AuthProvider to enable global login state */}
+      <AuthProvider>
+        <PreviewProvider>
+          <Stack screenOptions={{ headerShown: false }} />
+        </PreviewProvider>
+      </AuthProvider>
     </DatabaseProvider>
   )
 }

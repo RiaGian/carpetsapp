@@ -4,6 +4,13 @@ import { children, field } from '@nozbe/watermelondb/decorators'
 export default class Customer extends Model {
   static table = 'customers'
 
+  //  1→N relation : @children(...)
+  static associations = {
+    orders:             { type: 'has_many',  foreignKey: 'customer_id' },
+    customer_phones:    { type: 'has_many',  foreignKey: 'customer_id' },
+    customer_addresses: { type: 'has_many',  foreignKey: 'customer_id' },
+  } as const
+
   @field('first_name') firstName!: string
   @field('last_name') lastName!: string
   @field('phone') phone!: string

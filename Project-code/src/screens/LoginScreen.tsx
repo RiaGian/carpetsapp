@@ -11,11 +11,11 @@ import {
   View
 } from 'react-native'
 import { logLoginSuccessConsole } from '../activity/logger'
-import { loginApi } from '../api/auth'
 import Divider from '../components/Divider'
 import TextField from '../components/TextField'
-import { initializeDatabase } from '../database/initializeDatabase'
 import { logLoginFailure, logLoginSuccess, printActivityLogs } from '../services/activitylog'
+import { signInPlain } from '../services/auth'
+import { useAuth } from '../state/AuthProvider'; // ✅ ΠΡΟΣΘΗΚΗ
 import { colors } from '../theme/colors'
 
 let LocalAuthentication: typeof import('expo-local-authentication') | undefined
@@ -96,94 +96,81 @@ function TypingText({
 
 /** LoginScreen */
 export default function LoginScreen() {
+  const { signIn } = useAuth() // ✅ ΠΡΟΣΘΗΚΗ
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
-
-  // Init DB μία φορά
-  useEffect(() => {
-    initializeDatabase().catch(err => console.warn('Init error', err))
-  }, [])
 
   async function onLogin(email: string, password: string) {
     try {
       setLoading(true)
       setErrorMessage('')
 
-      const res = await loginApi(email, password)
+      // από WatermelonDB 
+      const user = await signInPlain(email, password)
+      await signIn(user) // save user -- > storage + context 
 
-      if (res.ok) {
-        
-        Keyboard.dismiss()
-
-        // Web: καθάρισε active focus πριν τη μετάβαση
-        if (Platform.OS === 'web') {
-          const active = document.activeElement as HTMLElement | null
-          active?.blur()
-        }
-
-        // καταγραφω login στο activity_logs
-        await logLoginSuccess(
-          String(res.user.id),
-          res.user.email,
-          res.user.name,
-          Device.modelName || 'Unknown Device',
-          Platform.OS,
-          'unknown',
-          Constants.expoConfig?.version ?? '1.0.0'
-        )
-
-        // fetch - server
-        await fetch('http://localhost:4000/api/log', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            event: 'login',
-            payload: {
-              userId: res.user.id,
-              email: res.user.email,
-              platform: Platform.OS,
-            },
-          }),
-        })
-
-        // print logs 
-        await printActivityLogs()
-
-        // print logger
-        logLoginSuccessConsole(String(res.user.id), res.user.email)
-
-        // --> dashboard
-        router.push({
-          pathname: '/dashboard',
-          params: { name: res.user.name, email: res.user.email },
-        })
-      } else {
-        // Log failed login attempt
-        await logLoginFailure(
-          email,
-          'Invalid credentials',
-          Device.modelName || 'Unknown Device',
-          Platform.OS,
-          'unknown'
-        )
-        
-        setErrorMessage('Λάθος email ή κωδικός πρόσβασης')
+      Keyboard.dismiss()
+      if (Platform.OS === 'web') {
+        const active = document.activeElement as HTMLElement | null
+        active?.blur()
       }
-    } catch (err) {
+
+      console.log(`Επιτυχής σύνδεση: ${user.name} (${user.email}) [id=${user.id}]`)
+
+      // success login log
+      await logLoginSuccess(
+        String(user.id),
+        user.email,
+        user.name,
+        Device.modelName || 'Unknown Device',
+        Platform.OS,
+        'unknown',
+        Constants.expoConfig?.version ?? '1.0.0'
+      )
+
+      // server log
+      await fetch('http://localhost:4000/api/log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event: 'login',
+          payload: {
+            userId: user.id,
+            email:  user.email,
+            platform: Platform.OS,
+          },
+        }),
+      })
+
+      await printActivityLogs()
+      logLoginSuccessConsole(String(user.id), user.email)
+
+      // push --> dashboard
+      router.push({
+        pathname: '/dashboard',
+        params: { name: user.name, email: user.email },
+      })
+    } catch (err: any) {
       console.error('Σφάλμα κατά το login:', err)
-      
-      // Log failed login attempt
+
+      // loging failure log
       await logLoginFailure(
         email,
-        'Network error',
+        err?.message === 'Ο χρήστης δεν βρέθηκε' || err?.message === 'Λάθος κωδικός'
+          ? 'Invalid credentials'
+          : 'Network error',
         Device.modelName || 'Unknown Device',
         Platform.OS,
         'unknown'
       )
-      
-      setErrorMessage('Αποτυχία σύνδεσης με τον server. Ελέγξτε τη σύνδεσή σας.')
+
+      setErrorMessage(
+        err?.message === 'Ο χρήστης δεν βρέθηκε' || err?.message === 'Λάθος κωδικός'
+          ? 'Λάθος email ή κωδικός πρόσβασης'
+          : 'Αποτυχία σύνδεσης με τον server. Ελέγξτε τη σύνδεσή σας.'
+      )
     } finally {
       setLoading(false)
     }
@@ -222,7 +209,7 @@ export default function LoginScreen() {
 
       if (result.success) {
         Alert.alert('Καλωσήρθες', 'Επιτυχής ταυτοποίηση.')
-        // Αν έχεις user context, μπορείς να log-άρεις και εδώ:
+        // if user context --> μπορείς να log-άρεις και εδώ
         // await logLogin(userId, { method: 'biometric', platform: Platform.OS })
         router.push('/dashboard')
       } else {
