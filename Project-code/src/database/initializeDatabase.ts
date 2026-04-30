@@ -9,15 +9,16 @@ import CustomerAddress from './models/CustomerAddress'
 import CustomerPhone from './models/CustomerPhone'
 import Order from './models/Order'
 import OrderItem from './models/OrderItem'
-import Pickup from './models/Pickup'
 import Shelf from './models/Shelf'
 import User from './models/Users'
 import WarehouseItem from './models/WarehouseItem'
+// import { migrations } from './migrations/schemaMigrations'
 
 const adapter = new SQLiteAdapter({
   schema,
   dbName: 'localdb',
   jsi: true,
+  // migrations,
   onSetUpError: (error) => {
     console.error('WatermelonDB setup error (generic):', error)
   },
@@ -35,7 +36,6 @@ export const database = new Database({
     OrderItem,
     Shelf,
     WarehouseItem,
-    Pickup,
   ],
 })
 

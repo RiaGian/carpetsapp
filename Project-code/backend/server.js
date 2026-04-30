@@ -6,10 +6,10 @@ app.use(cors())
 app.use(express.json())
 
 // users - mock
-//let users = [
-//  { id: 1, name: 'Georgia Demo', email: 'demo@carpets.app', passwordHash: '1234' },
-//  { id: 2, name: 'Maria Example', email: 'user@example.com', passwordHash: 'abcd' },
-//]
+let users = [
+  { id: 1, name: 'Georgia Demo', email: 'demo@carpets.app', passwordHash: '1234' },
+  { id: 2, name: 'Maria Example', email: 'user@example.com', passwordHash: 'abcd' },
+]
 
 //Log endpoint 
 app.post('/api/log', (req, res) => {

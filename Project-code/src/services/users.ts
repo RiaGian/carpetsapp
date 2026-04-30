@@ -1,37 +1,30 @@
-import { Q } from '@nozbe/watermelondb'
-import { database } from '../database/initializeDatabase'
+import { Q } from '@nozbe/watermelondb';
+import { database } from '../database/initializeDatabase';
 
-export async function seedUsers() {
+// Adds a new user to the database — but only if the email doesn’t already exist. 
+//If the user already exists, it just returns the existing record.
+type NewUser = { email: string; password_hash: string; name: string }
+
+export async function addUserLocal(u: NewUser) {
   const users = database.get('users')
+  const exists = await users.query(Q.where('email', u.email)).fetch()
+  if (exists.length) return exists[0]
+  return await database.write(async () =>
+    users.create((r: any) => {
+      r.email = u.email
+      r.password_hash = u.password_hash
+      r.name = u.name
+      r.created_at = Date.now()
+    })
+  )
+}
 
-  await database.write(async () => {
-    // 1) ensure "system" (fixed id)
-    try {
-      await users.find('system')
-      console.log(' User "system" υπάρχει ήδη')
-    } catch {
-      await users.create((u: any) => {
-        u._raw.id = 'system'
-        u.email = 'system@example.com'
-        u.password_hash = '1234'
-        u.name = 'System User'
-        u.created_at = Date.now()
-      })
-      console.log(' Δημιουργήθηκε ο user "system"')
-    }
+export async function listUsers() {
+  const users = database.get('users')
+  return await users.query().fetch()
+}
 
-    // 2) ensure admin by email
-    const existing = await users.query(Q.where('email', 'admin@example.com')).fetch()
-    if (existing.length === 0) {
-      await users.create((u: any) => {
-        u.email = 'admin@example.com'
-        u.password_hash = '1234' 
-        u.name = 'Admin'
-        u.created_at = Date.now()
-      })
-      console.log('Δημιουργήθηκε ο admin user')
-    } else {
-      console.log(' Admin user υπάρχει ήδη')
-    }
-  })
+//DELETE IN PRODUCTIONN
+export async function resetDb() {
+  await database.unsafeResetDatabase()
 }

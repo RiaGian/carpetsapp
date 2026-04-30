@@ -41,11 +41,3 @@ app-example
 # generated native folders
 /ios
 /android
-/release/
-/dist/
-/out/
-/build/
-*.exe
-*.dmg
-*.AppImage
-*.asar

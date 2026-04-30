@@ -3,13 +3,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@react-native-async-storage/async-storage": "2.2.0",
     "cors": "^2.8.5",
-    "expo-print": "~15.0.7",
-    "expo-sharing": "~14.0.7",
-    "express": "^4.19.2",
-    "react-native-dropdown-picker": "^5.4.6",
-    "react-native-svg": "15.12.1"
+    "express": "^4.19.2"
   },
   "scripts": {
     "start": "node server.js"

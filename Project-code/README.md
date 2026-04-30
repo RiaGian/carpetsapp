@@ -11,7 +11,3 @@ npm start
 (Front)
 npm install
 npx expo start --web
-
----
-
-Maintainer: RiaGian
