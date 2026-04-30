@@ -1,7 +1,7 @@
 // src/services/orders.ts
 import { Q } from '@nozbe/watermelondb'
 import { database } from '../database/initializeDatabase'
-import { logCreateOrder, logDeleteOrder, logOrderPaymentUpdated, logOrderStatusChanged, logUpdateOrder, } from './activitylog'
+import { logCreateOrder, logDeleteOrder, logDeleteOrderItem, logOrderPaymentUpdated, logOrderStatusChanged, logUpdateOrder, } from './activitylog'
 
 /**  Types  */
 export type NewOrder = {
@@ -13,7 +13,9 @@ export type NewOrder = {
   orderDate: string             // string στο schema
   createdBy: string            // FK -> users.id
   orderStatus?: string   
-  hasDebt?: boolean       
+  hasDebt?: boolean 
+  receiptNumber?: string
+        
 }
 // update order
 export type UpdateOrder = Partial<{
@@ -26,6 +28,7 @@ export type UpdateOrder = Partial<{
   createdBy: string
   orderStatus: string 
   hasDebt: boolean      
+  receiptNumber: string
 }>
 
 /** CREATE */
@@ -53,6 +56,7 @@ export async function createOrder(data: NewOrder, userIdForLog: string = data.cr
       rec.orderDate      = data.orderDate
       rec.orderStatus    = (data.orderStatus ?? 'Νέα').trim()
       rec.hasDebt        = data.hasDebt ?? false
+      rec.receiptNumber  = (data as any).receiptNumber?.trim() || '-'
 
       const now          = Date.now()
       rec.createdAt      = now
@@ -144,6 +148,7 @@ export async function getOrderById(id: string) {
     lastModifiedAt: rec.lastModifiedAt,
     customerId: rec.customer?.id ?? rec.customer_id, 
     createdBy: rec.createdBy?.id ?? rec.created_by,
+    receiptNumber: rec.receiptNumber ?? rec._raw?.receipt_number ?? null,
   }
 }
 
@@ -203,6 +208,9 @@ export async function updateOrder(
         const val = Number(data.totalAmount)
         if (Number.isFinite(val)) r.totalAmount = val
       }
+      if (typeof data.receiptNumber !== 'undefined') {
+        r.receiptNumber = (data.receiptNumber ?? '').trim()
+      }
       if (typeof data.notes !== 'undefined') {
         r.notes = data.notes ?? ''
       }
@@ -235,7 +243,7 @@ export async function updateOrder(
 
   // Activity log (best-effort)
   try {
-    // === Ειδικά logs για πληρωμή & κατάσταση ===
+    // logs για πληρωμή & κατάσταση
     const oldPay = {
       paymentMethod: oldValues.paymentMethod ?? '',
       deposit: Number(oldValues.deposit ?? 0),
@@ -264,10 +272,10 @@ export async function updateOrder(
       await logOrderStatusChanged(userIdForLog, id, oldStatus, newStatus)
     }
 
-    // === Έλεγχος αν άλλαξε κάτι στα header fields ===
+    //  Έλεγχος αν άλλαξε κάτι στα header fields 
     const headerChanged = JSON.stringify(oldValues) !== JSON.stringify(newValues)
 
-    // === Κάλεσέ το ΜΟΝΟ αν υπήρξαν αλλαγές (header, πληρωμή ή status) ===
+    //Κάλεσέ το ΜΟΝΟ αν υπήρξαν αλλαγές (header, πληρωμή ή status)
     if (headerChanged || paymentChanged || statusChanged) {
       await logUpdateOrder(userIdForLog, id, oldValues, newValues)
     }
@@ -309,5 +317,92 @@ export async function deleteOrder(id: string, userIdForLog: string = 'system') {
     await logDeleteOrder(userIdForLog, id, snapshot)
   } catch (err) {
     console.warn('logDeleteOrder failed:', err)
+  }
+}
+
+
+
+export async function deleteOrderOnly(id: string) {
+  const orders = database.get('orders')
+  await database.write(async () => {
+    const rec: any = await orders.find(id)
+    await rec.destroyPermanently()
+  })
+}
+// DELETE ORDER, ORDER ITEMS, 
+export async function deleteOrderCascade(orderId: string, userIdForLog: string = 'system') {
+  const ordersColl = database.get('orders')
+  const itemsColl  = database.get('order_items')
+
+  let snapshotForLog: any = null
+
+  await database.write(async () => {
+    const orderRec: any = await ordersColl.find(orderId)
+
+    // Φέρε όλα τα items του order
+    const itemRows: any[] = await itemsColl
+      .query(Q.where('order_id', orderId))
+      .fetch()
+
+    // Snapshot για logging (order + items)
+    const itemsData = itemRows.map((r: any) => ({
+      id: r.id,
+      item_code: r.item_code ?? '',
+      category: r.category ?? '',
+      color: r.color ?? '',
+      price: Number(r.price ?? 0),
+      status: r.status ?? '',
+      storage_status: r.storage_status ?? '',
+      order_date: r.order_date ?? '',
+      created_at: Number(r.created_at ?? r._raw?.created_at ?? Date.now()),
+    }))
+
+    snapshotForLog = {
+      id: orderRec.id,
+      paymentMethod: orderRec.paymentMethod,
+      deposit:       orderRec.deposit,
+      totalAmount:   orderRec.totalAmount,
+      notes:         orderRec.notes,
+      orderDate:     orderRec.orderDate,
+      orderStatus:   orderRec.orderStatus,
+      hasDebt:       orderRec.hasDebt,
+      createdAt:     orderRec.createdAt,
+      customerId:    orderRec.customer?.id ?? orderRec.customer_id,
+      createdBy:     orderRec.createdBy?.id ?? orderRec.created_by,
+      items:         itemsData,
+    }
+
+    // Batch: σβήσε πρώτα τα items, μετά το order
+    const ops = [
+      ...itemRows.map((r: any) => r.prepareDestroyPermanently()),
+      orderRec.prepareDestroyPermanently(),
+    ]
+    await database.batch(...ops)
+  })
+
+  // Activity log (εκτός write): πρώτα ανά item, μετά η συνολική παραγγελία
+  try {
+    const items: any[] = Array.isArray(snapshotForLog?.items) ? snapshotForLog.items : []
+
+    // Κάλεσε όσες φορές χρειάζεται το logDeleteOrderItem
+    const perItemLogs = items.map((it: any) =>
+      logDeleteOrderItem(userIdForLog, snapshotForLog.id, it.id, {
+        ...it,
+        timestamp: new Date().toISOString(),
+      })
+    )
+
+    // Μην μπλοκάρεις το flow αν κάποιο αποτύχει
+    await Promise.allSettled(perItemLogs)
+
+    // Τέλος, log για την ίδια την παραγγελία (με όλο το snapshot)
+    await logDeleteOrder(
+      userIdForLog,
+      orderId,
+      { ...snapshotForLog, timestamp: new Date().toISOString() }
+    )
+
+  } catch (err) {
+    console.warn('cascade delete logs failed:', err)
   }
 }

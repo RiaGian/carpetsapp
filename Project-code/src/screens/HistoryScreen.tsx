@@ -9,11 +9,11 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+
   Text,
   TextInput,
   View,
 } from 'react-native'
-
 import AppHeader from '../components/AppHeader'
 import Page from '../components/Page'
 import { logFilterHistoryApplied } from '../services/activitylog'
@@ -288,6 +288,7 @@ function MetricTile({
 
 type TabKey = 'customers' | 'items' | 'orders'
 
+
 export default function HistoryScreen() {
   // active tab
   const [activeTab, setActiveTab] = React.useState<TabKey>('customers')
@@ -312,6 +313,64 @@ export default function HistoryScreen() {
   const [rowsItems, setRowsItems] = React.useState<HistoryItem[]>([])
   const [rowsOrders, setRowsOrders] = React.useState<HistoryOrder[]>([])
 
+  const [dateRange, setDateRange] = React.useState<{ start: string | null; end: string | null }>({
+    start: null,
+    end: null,
+  })
+  const [dateModalOpen, setDateModalOpen] = React.useState(false)
+
+  // calendar 
+  const [leftCursor, setLeftCursor] = React.useState(() => {
+    const d = new Date()
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`
+  })
+
+  const normalizeCode = (s?: string) =>
+  (s ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/^#/, '')         
+    .replace(/[^a-z0-9]/g, '') 
+    .trim()
+
+  const getOrderSearchTokens = (o: HistoryOrder) => {
+  const tokens = new Set<string>()
+
+  if (o.id) {
+    tokens.add(o.id)
+    if (o.id.length >= 6) tokens.add(o.id.slice(0, 6))
+  }
+
+  const maybe = [
+    (o as any).orderCode,
+    (o as any).order_code,
+    (o as any).code,
+    (o as any).number,
+    (o as any).orderNumber,
+  ]
+  for (const v of maybe) if (v) tokens.add(String(v))
+
+  // 🔑 Κρίσιμο: κανονικοποίηση με normalizeCode
+  return Array.from(tokens).map(normalizeCode)
+}
+
+const getItemSearchTokens = (it: HistoryItem) => {
+  const tokens = new Set<string>()
+  if (it.item_code) tokens.add(String(it.item_code))
+  if (it.id) {
+    tokens.add(it.id)
+    if (it.id.length >= 6) tokens.add(it.id.slice(0, 6))
+  }
+  return Array.from(tokens).map(normalizeCode) // ίδια κανονικοποίηση με orders
+}
+
+const matchesAnyItemCodeToken = (it: HistoryItem, tokens: string[]) => {
+  const toks = getItemSearchTokens(it)
+  return tokens.some(qt => toks.some(t => t.includes(qt)))
+}
+
+
   // delivered + no dept
   const deliveredRevenue = React.useMemo(() => {
   const norm = (s?: string) =>
@@ -335,31 +394,105 @@ export default function HistoryScreen() {
   }).format(sum)
 }, [rowsOrders])
 
+  const filters = React.useMemo<HistoryFilters>(() => {
+    const yf = yearFrom !== 'Όλα' ? Number(yearFrom) : null
+    const yt = yearTo !== 'Όλα' ? Number(yearTo) : null
+    return {
+      search: search.trim() || undefined,
+      yearFrom: yf,
+      yearTo: yt,
+      category: category !== 'Όλες' ? category : null,
+      status: status !== 'Όλα' ? status : null,
+      customerId: customerId,
+      storageStatus: storageStatus !== 'Όλες' ? storageStatus : null,
+
+      dateFrom: dateRange.start || undefined,
+      dateTo:   dateRange.end   || undefined,
+      limit: 200,
+    }
+  }, [search, yearFrom, yearTo, category, status, storageStatus, customerId, dateRange])
 
 
-  // 🔹 Expanded ανά πελάτη (inline)
+    // Σπάει το query σε “code-like” tokens (#, γράμματα/αριθμοί)
+  const extractOrderCodeTokens = (q: string) =>
+    q
+      .split(/[,\s]+/)
+      .map(t => t.replace(/^#/, ''))
+      .map(t =>
+        (t || '')
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/\p{Diacritic}/gu, '')
+          .replace(/[^a-z0-9]/g, '')
+          .trim()
+      )
+      .filter(t => t.length >= 2) // μικρό threshold για prefix/contains
+
+  const matchesAnyOrderCodeToken = (order: HistoryOrder, tokens: string[]) => {
+    const toks = getOrderSearchTokens(order) // ήδη φτιάχνεις id/number/code tokens
+    return tokens.some(qt => toks.some(t => t.includes(qt)))
+  }
+  
+  const includesGreekInsensitive = (hay: string | undefined, needle: string) => {
+    const n = (needle || '').trim()
+    if (!hay || !n) return false
+    const norm = (s: string) =>
+      s.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '')
+    return norm(hay).includes(norm(n))
+  }
+
+  const uniq = <T,>(arr: T[]) => Array.from(new Set(arr))
+
+
+
+  // map: orderId -> order
+  const ordersById = React.useMemo(() => {
+    const m = new Map<string, HistoryOrder>()
+    for (const o of rowsOrders) m.set(o.id, o)
+    return m
+  }, [rowsOrders])
+
+  // map: orderId -> items[]
+  const itemsByOrderId = React.useMemo(() => {
+    const m = new Map<string, HistoryItem[]>()
+    for (const it of rowsItems) {
+      if (!it.orderId) continue
+      if (!m.has(it.orderId)) m.set(it.orderId, [])
+      m.get(it.orderId)!.push(it)
+    }
+    return m
+  }, [rowsItems])
+
+  // map: customerId -> { orders[], items[] }  (μέσω orders + items)
+  const byCustomerId = React.useMemo(() => {
+    const res = new Map<string, { orders: HistoryOrder[]; items: HistoryItem[] }>()
+    const pushOrder = (cid: string, o: HistoryOrder) => {
+      if (!res.has(cid)) res.set(cid, { orders: [], items: [] })
+      res.get(cid)!.orders.push(o)
+    }
+    const pushItem = (cid: string, it: HistoryItem) => {
+      if (!res.has(cid)) res.set(cid, { orders: [], items: [] })
+      res.get(cid)!.items.push(it)
+    }
+    for (const o of rowsOrders) {
+      const cid = (o as any).customerId || (o as any).customer_id
+      if (cid) pushOrder(cid, o)
+    }
+    for (const it of rowsItems) {
+      const oid = it.orderId
+      const cid = oid ? ((ordersById.get(oid) as any)?.customerId || (ordersById.get(oid) as any)?.customer_id) : null
+      if (cid) pushItem(cid, it)
+    }
+    return res
+  }, [rowsOrders, rowsItems, ordersById])
+
+
   const [expandedCustomerId, setExpandedCustomerId] = React.useState<string | null>(null)
   const [expandedLoading, setExpandedLoading] = React.useState(false)
   const [expandedOrders, setExpandedOrders] = React.useState<HistoryOrder[]>([])
   const [expandedItems, setExpandedItems] = React.useState<HistoryItem[]>([])
 
-  const loadExpandedForCustomer = React.useCallback(async (custId: string) => {
-    setExpandedLoading(true)
-    try {
-      const [rOrders, rItems] = await Promise.all([
-        listHistoryOrders({ ...filters, customerId: custId }),
-        listHistoryItems({ ...filters, customerId: custId }),
-      ])
-      setExpandedOrders(rOrders)
-      setExpandedItems(rItems)
-    } catch (e) {
-      console.error('load expanded customer failed', e)
-      setExpandedOrders([])
-      setExpandedItems([])
-    } finally {
-      setExpandedLoading(false)
-    }
-  }, []) 
+
 
   // year
   const yearOptions = React.useMemo(() => {
@@ -371,21 +504,7 @@ export default function HistoryScreen() {
   }, [])
 
 
-    // helpers: build filters object
-  const filters = React.useMemo<HistoryFilters>(() => {
-    const yf = yearFrom !== 'Όλα' ? Number(yearFrom) : null
-    const yt = yearTo !== 'Όλα' ? Number(yearTo) : null
-    return {
-      search: search.trim() || undefined,
-      yearFrom: yf,
-      yearTo: yt,
-      category: category !== 'Όλες' ? category : null,
-      status: status !== 'Όλα' ? status : null,
-      customerId: customerId, // <- ID από το dropdown
-      storageStatus: storageStatus !== 'Όλες' ? storageStatus : null,
-      limit: 200,
-    }
-  }, [search, yearFrom, yearTo, category, status, storageStatus, customerId])
+
 
   //  user from AuthProvider
   const { user: authUser, loading: authContextLoading } = useAuth()
@@ -417,150 +536,285 @@ export default function HistoryScreen() {
     return () => clearTimeout(t)
   }, [filters, authUser, authContextLoading])
 
-  // choose customers -> orders -> order_items of these orders
+
+
   React.useEffect(() => {
-  let cancelled = false
+    let cancelled = false
 
-  async function loadAll() {
-    try {
-      // 1️⃣ Φόρτωση πελατών για dropdown (μένει ως έχει)
-      const all = await listHistoryCustomers({ limit: 1000 })
-      const opts = all.map(c => {
-        const name = `${(c.firstName || '').trim()} ${(c.lastName || '').trim()}`.trim() || 'Χωρίς όνομα'
-        const label = c.phone ? `${name} • ${c.phone}` : name
-        return { id: c.id, label }
-      })
-      if (!cancelled) setCustomerOpts(opts)
+    async function loadCombined() {
+      setLoading(true)
+      try {
 
-      // 2️⃣ Όταν έχει επιλεγεί πελάτης, ΦΟΡΤΩΝΟΥΜΕ με ΟΛΑ τα φίλτρα
-      if (customerId) {
-        setLoading(true)
+        const rawQ = (search || '').trim()
+        const codeTokens = extractOrderCodeTokens(rawQ)
+        const { search: _search, ...rest } = filters
+        const apiFilters = rawQ ? rest : filters
 
-        // ΠΕΡΝΑΜΕ τα τρέχοντα φίλτρα μαζί με το customerId
-        const orders = await listHistoryOrders({ ...filters, customerId })
+        // 1) Φόρτωσε πάντα τους πελάτες (πλήρες σύνολο, για closure)
+        const allCustomers = await listHistoryCustomers({ limit: 2000 })
         if (cancelled) return
 
-        const orderIds = orders.map(o => o.id)
-        const items = await listHistoryItems({ ...filters, customerId, orderIds })
-        if (cancelled) return
+        let orders: HistoryOrder[] = []
+        let items: HistoryItem[] = []
+
+        const itemsScoped = isItemScopedFiltersActive(filters)
+
+        if (itemsScoped) {
+          // Item-driven: Items → Orders
+          const fetchedItems = await listHistoryItems({ ...apiFilters, customerId })
+          if (cancelled) return
+          items = fetchedItems
+
+          const orderIds = uniq(items.map(i => i.orderId!).filter(Boolean))
+          if (orderIds.length) {
+            orders = await listHistoryOrders({ ...apiFilters, customerId, orderIds })
+            if (cancelled) return
+          } else {
+            orders = []
+          }
+        } else {
+          // Order-driven: Orders → Items
+          orders = await listHistoryOrders({ ...apiFilters, customerId })
+          if (cancelled) return
+
+          // Τοπικό φιλτράρισμα κωδικών (prefix/contains)
+          if (codeTokens.length > 0) {
+            orders = orders.filter(o => matchesAnyOrderCodeToken(o, codeTokens))
+          }
+
+          const orderIds = orders.map(o => o.id)
+          items = orderIds.length ? await listHistoryItems({ ...apiFilters, orderIds }) : []
+          if (cancelled) return
+        }
+
+        // Πελάτες που προκύπτουν από τις orders
+        const orderCustomerIds = new Set(
+          orders.map(o => (o as any).customerId || (o as any).customer_id).filter(Boolean) as string[]
+        )
+        let customers = allCustomers.filter(c => orderCustomerIds.has(c.id))
+
+
+        let ordersUniverse: HistoryOrder[] = orders
+        if (itemsScoped && rawQ && codeTokens.length === 0) {
+          try {
+            // Φέρε extra orders με τα ίδια filters (ΧΩΡΙΣ να περιοριστούν από items)
+            const extraOrders = await listHistoryOrders({ ...apiFilters, customerId })
+            if (!cancelled) {
+              const seen = new Set(orders.map(o => o.id))
+              ordersUniverse = orders.concat(extraOrders.filter(o => !seen.has(o.id)))
+            }
+          } catch (e) {
+            console.warn('extraOrders fetch failed (fallback to current orders)', e)
+          }
+        }
+
+        let itemsUniverse: HistoryItem[] = items
+        if (!itemsScoped && rawQ && codeTokens.length === 0) {
+          try {
+            // Φέρε items με τα ΦΙΛΤΡΑ (όχι περιορισμένα από orderIds)
+            const extraItems = await listHistoryItems({ ...apiFilters, customerId })
+            if (!cancelled) {
+              const seen = new Set(items.map(i => i.id))
+              itemsUniverse = items.concat(extraItems.filter(i => !seen.has(i.id)))
+            }
+          } catch (e) {
+            console.warn('extraItems fetch failed (fallback to current items)', e)
+          }
+        }
+
+        if (rawQ && codeTokens.length > 0) {
+          try {
+            // 1) Φέρε επιπλέον items με τα ίδια filters (ΟΧΙ περιορισμένα από orderIds)
+            const extraItems = await listHistoryItems({ ...apiFilters, customerId })
+            const seenItemIds = new Set(itemsUniverse.map(i => i.id))
+            const mergedItems = itemsUniverse.concat(extraItems.filter(i => !seenItemIds.has(i.id)))
+
+            // 2) Βρες τις παραγγελίες στις οποίες ανήκουν αυτά τα items και φέρε τυχόν ελλείπουσες
+            const candidateOrderIds = uniq(mergedItems.map(i => i.orderId!).filter(Boolean))
+            const haveOrder = new Set(ordersUniverse.map(o => o.id))
+            const missingOrderIds = candidateOrderIds.filter(id => !haveOrder.has(id))
+
+            let mergedOrders = ordersUniverse
+            if (missingOrderIds.length) {
+              const extraOrders = await listHistoryOrders({ ...apiFilters, customerId, orderIds: missingOrderIds })
+              const seenOrderIds = new Set(mergedOrders.map(o => o.id))
+              mergedOrders = mergedOrders.concat(extraOrders.filter(o => !seenOrderIds.has(o.id)))
+            }
+
+            itemsUniverse = mergedItems
+            ordersUniverse = mergedOrders
+          } catch (e) {
+            console.warn('code-like expansion failed', e)
+          }
+        }
+
+
+
+       // ---- Συνδυαστικό SEARCH (closure) ----
+      if (rawQ) {
+        if (codeTokens.length > 0) {
+          // CODE-LIKE: ψάχνουμε ΚΑΙ σε orders ΚΑΙ σε items
+          const hitOrderIds = new Set(
+            ordersUniverse
+              .filter(o => matchesAnyOrderCodeToken(o, codeTokens))
+              .map(o => o.id)
+          )
+
+          const hitItemIds = new Set(
+            itemsUniverse
+              .filter(it => matchesAnyItemCodeToken(it, codeTokens))
+              .map(it => it.id)
+          )
+
+          // Orders που ταιριάζουν άμεσα ή περιέχουν matching items
+          const itemOrderIds = new Set(
+            itemsUniverse
+              .filter(it => hitItemIds.has(it.id) && it.orderId)
+              .map(it => it.orderId as string)
+          )
+
+          const keepOrders = ordersUniverse.filter(o =>
+            hitOrderIds.has(o.id) || itemOrderIds.has(o.id)
+          )
+          const keepOrderIds = new Set(keepOrders.map(o => o.id))
+
+          const keepItems = itemsUniverse.filter(it =>
+            hitItemIds.has(it.id) || (it.orderId && keepOrderIds.has(it.orderId))
+          )
+
+          const custOf = (o: HistoryOrder) => (o as any).customerId || (o as any).customer_id
+          const keepCustomerIds = new Set(
+            keepOrders.map(o => custOf(o)).filter(Boolean) as string[]
+          )
+          const keepCustomers = allCustomers.filter(c => keepCustomerIds.has(c.id))
+
+          orders = keepOrders
+          items  = keepItems
+          customers = keepCustomers
+        } else {
+          // TEXT search: match σε 3 οντότητες + closure
+          const hitC = new Set(
+            allCustomers
+              .filter(c =>
+                includesGreekInsensitive(`${c.firstName || ''} ${c.lastName || ''}`, rawQ) ||
+                includesGreekInsensitive(c.phone || '', rawQ)
+              )
+              .map(c => c.id)
+          )
+
+          const hitO = new Set(
+            ordersUniverse
+              .filter(o =>
+                includesGreekInsensitive(o.customerName || '', rawQ) ||
+                includesGreekInsensitive(o.paymentMethod || '', rawQ)
+              )
+              .map(o => o.id)
+          )
+
+          const hitI = new Set(
+            itemsUniverse
+              .filter(i =>
+                includesGreekInsensitive(i.item_code || `#${i.id.slice(0,6)}`, rawQ) ||
+                includesGreekInsensitive(i.category || '', rawQ) ||
+                includesGreekInsensitive(i.color || '', rawQ)
+              )
+              .map(i => i.id)
+          )
+
+          const custOf = (o: HistoryOrder) => (o as any).customerId || (o as any).customer_id
+          
+          const itemOrderIds = new Set(
+            itemsUniverse.filter(i => hitI.has(i.id) && i.orderId).map(i => i.orderId as string)
+          )
+
+          const keepOrders = ordersUniverse.filter(o =>
+            hitO.has(o.id) ||
+            (custOf(o) && hitC.has(custOf(o))) ||
+            itemOrderIds.has(o.id)
+          )
+          const keepOrderIds = new Set(keepOrders.map(o => o.id))
+
+          const keepItems = itemsUniverse.filter(
+            i => hitI.has(i.id) || (i.orderId && keepOrderIds.has(i.orderId))
+          )
+          const keepCustomerIds = new Set(
+            keepOrders.map(o => custOf(o)).filter(Boolean) as string[]
+          )
+          for (const id of hitC) keepCustomerIds.add(id)
+
+          const keepCustomers = allCustomers.filter(c => keepCustomerIds.has(c.id))
+          orders = keepOrders
+          items = keepItems
+          customers = keepCustomers
+        }
+      }
+
+
+        // Περιορισμός σε συγκεκριμένο πελάτη (ΤΕΛΕΥΤΑΙΟ)
+        if (customerId) {
+          customers = customers.filter(c => c.id === customerId)
+          const allowedOrderIds = new Set(
+            orders
+              .filter(o => ((o as any).customerId || (o as any).customer_id) === customerId)
+              .map(o => o.id)
+          )
+          orders = orders.filter(o => allowedOrderIds.has(o.id))
+          items = items.filter(i => i.orderId && allowedOrderIds.has(i.orderId))
+        }
 
         if (!cancelled) {
+          setRowsCustomers(customers)
           setRowsOrders(orders)
           setRowsItems(items)
         }
+      } catch (e) {
+        console.error('loadCombined failed', e)
+        if (!cancelled) {
+          setRowsCustomers([])
+          setRowsOrders([])
+          setRowsItems([])
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
       }
-    } catch (e) {
-      console.error('load customers/orders/items failed', e)
-    } finally {
-      if (!cancelled) setLoading(false)
     }
-  }
 
-  loadAll()
-  return () => { cancelled = true }
-  // 👉 Πολύ σημαντικό: εξαρτώμαστε και από τα filters,
-  // ώστε να ξανα-φορτώνει σωστά όταν αλλάζουν (ό,τι σειρά και να τα βάλεις).
-  }, [customerId, filters])
+    loadCombined()
+    return () => { cancelled = true }
+    }, [filters, customerId, search])
 
-  // update callback --> filters
   React.useEffect(() => {
-    
-    loadExpandedForCustomer
-  }, [filters])
-
-  // PREFETCH 
-React.useEffect(() => {
-  let cancelled = false
-  async function run() {
-    setLoading(true)
+    if (!expandedCustomerId) return
+    setExpandedLoading(true)
     try {
-      const itemsScoped = isItemScopedFiltersActive(filters)
+      const custOrders = rowsOrders.filter(
+        o => ((o as any).customerId || (o as any).customer_id) === expandedCustomerId
+      )
+      const orderIdSet = new Set(custOrders.map(o => o.id))
+      const custItems = rowsItems.filter(i => i.orderId && orderIdSet.has(i.orderId))
 
-      // load customers
-      const rCustomers = await listHistoryCustomers(filters)
-      if (cancelled) return
-      setRowsCustomers(rCustomers)
-
-      if (!itemsScoped) {
-        // only item-scoped filter --> generic items+orders
-        const [rItems, rOrders] = await Promise.all([
-          listHistoryItems(filters),
-          listHistoryOrders(filters),
-        ])
-        if (cancelled) return
-        setRowsItems(rItems)
-        setRowsOrders(rOrders)
-      } else {
-        //  item-scoped --> runItemsFirst() 
-      }
+      setExpandedOrders(custOrders)
+      setExpandedItems(custItems)
     } catch (e) {
-      console.error('history load failed', e)
+      console.error('expand failed', e)
+      setExpandedOrders([])
+      setExpandedItems([])
     } finally {
-      if (!cancelled) setLoading(false)
+      setExpandedLoading(false)
     }
-  }
-  run()
-  return () => { cancelled = true }
-}, [filters])
+  }, [expandedCustomerId, rowsOrders, rowsItems])
 
 
   React.useEffect(() => {
-  let cancelled = false
+    const opts = rowsCustomers.map(c => {
+      const name = `${(c.firstName || '').trim()} ${(c.lastName || '').trim()}`.trim() || 'Χωρίς όνομα'
+      const label = c.phone ? `${name} • ${c.phone}` : name
+      return { id: c.id, label }
+    })
+    setCustomerOpts(opts)
+  }, [rowsCustomers])
 
-  async function runItemsFirst() {
-    try {
-      //ONLY item-scoped filters (category, ..)
-      if (!isItemScopedFiltersActive(filters)) return
 
-      setLoading(true)
-
-      // load items
-      const items = await listHistoryItems(filters)
-      if (cancelled) return
-
-      
-      setRowsItems(items)
-
-      // clean orders if NOT items
-      if (items.length === 0) {
-        setRowsOrders([])      
-        return                 
-      }
-
-      // find orderIds of items
-      const orderIdSet = new Set<string>()
-      for (const it of items) {
-        if (it.orderId) orderIdSet.add(it.orderId)
-      }
-      const orderIds = Array.from(orderIdSet)
-
-      // if NOT orderIds --> CLEAN orders
-      if (orderIds.length === 0) {
-        setRowsOrders([])
-        return
-      }
-
-      // load these orders
-      const orders = await listHistoryOrders({ ...filters, orderIds })
-      if (cancelled) return
-
-      setRowsOrders(orders)
-    } catch (e) {
-      console.error('items→orders load failed', e)
-      if (!cancelled) {
-        setRowsItems([])
-        setRowsOrders([])
-      }
-    } finally {
-      if (!cancelled) setLoading(false)
-    }
-  }
-
-  runItemsFirst()
-  return () => {
-    cancelled = true
-  }
-}, [filters])
 
 
 
@@ -766,7 +1020,6 @@ React.useEffect(() => {
                             } else {
                               // open new
                               setExpandedCustomerId(item.id)
-                              await loadExpandedForCustomer(item.id)
                             }
                           }}
                           style={styles.cardRow}
@@ -784,17 +1037,31 @@ React.useEffect(() => {
                               {item.phone || '—'}
                             </Text>
                           </View>
-                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                            <Text style={styles.rowRight}>
-                              {new Date(item.createdAt).toLocaleDateString('el-GR')}
-                            </Text>
-                            <Ionicons
-                              name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                              size={18}
-                              color="#9CA3AF"
-                              style={{ marginLeft: 6 }}
-                            />
-                          </View>
+                          {(() => {
+                            const summary = byCustomerId.get(item.id)
+                            const ordersCount = summary?.orders.length ?? 0
+                            const itemsCount  = summary?.items.length ?? 0
+                            return (
+                              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                <View style={[styles.pill, { marginRight: 6 }]}>
+                                  <Text style={styles.pillText}>Παραγγελίες {ordersCount}</Text>
+                                </View>
+                                <View style={[styles.pill, { marginRight: 10 }]}>
+                                  <Text style={styles.pillText}>Τεμάχια {itemsCount}</Text>
+                                </View>
+                                <Text style={styles.rowRight}>
+                                  {new Date(item.createdAt).toLocaleDateString('el-GR')}
+                                </Text>
+                                <Ionicons
+                                  name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                                  size={18}
+                                  color="#9CA3AF"
+                                  style={{ marginLeft: 6 }}
+                                />
+                              </View>
+                            )
+                          })()}
+
                         </Pressable>
 
                         {/* Inline expanded panel */}
@@ -964,7 +1231,7 @@ React.useEffect(() => {
               <Text style={styles.emptyTitle}>Δεν βρέθηκαν παραγγελίες</Text>
             </View>
           ) : (
-            <FlatList
+           <FlatList
               data={rowsOrders}
               keyExtractor={(it) => it.id}
               ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
@@ -974,9 +1241,7 @@ React.useEffect(() => {
                     <View style={styles.pill}>
                       <Text style={styles.pillText}>#{item.id.slice(0, 6).toUpperCase()}</Text>
                     </View>
-                        
                     <OrderStatusChip status={item.order_status} />
-
                     <View style={{ flex: 1 }} />
                     <Text style={styles.moneyText}>
                       {new Intl.NumberFormat('el-GR', {
@@ -986,7 +1251,6 @@ React.useEffect(() => {
                       }).format(item.totalAmount ?? 0)}
                     </Text>
                   </View>
-
                   <View style={{ marginTop: 6 }}>
                     <Text style={styles.rowSub}>
                       {item.customerName || '—'} • {item.paymentMethod || '—'}

@@ -8,16 +8,32 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
   useWindowDimensions
 } from 'react-native';
+import { Calendar, LocaleConfig } from 'react-native-calendars';
 import AppHeader from '../components/AppHeader';
 import Page from '../components/Page';
 import { database } from '../database/initializeDatabase';
 import ActivityLog from '../database/models/ActivityLog';
 import { useAuth } from '../state/AuthProvider';
 
+
+LocaleConfig.locales['el'] = {
+  monthNames: [
+    'Ιανουάριος','Φεβρουάριος','Μάρτιος','Απρίλιος','Μάιος','Ιούνιος',
+    'Ιούλιος','Αύγουστος','Σεπτέμβριος','Οκτώβριος','Νοέμβριος','Δεκέμβριος'
+  ],
+  monthNamesShort: [
+    'Ιαν','Φεβ','Μαρ','Απρ','Μαϊ','Ιουν','Ιουλ','Αυγ','Σεπ','Οκτ','Νοε','Δεκ'
+  ],
+  dayNames: [
+    'Κυριακή','Δευτέρα','Τρίτη','Τετάρτη','Πέμπτη','Παρασκευή','Σάββατο'
+  ],
+  dayNamesShort: ['Κυρ','Δευ','Τρι','Τετ','Πεμ','Παρ','Σαβ'],
+  today: 'Σήμερα',
+};
+LocaleConfig.defaultLocale = 'el';
 
 // Helper για κοινό padding ανάλογα με το πλάτος
 const edgePaddingForWidth = (w: number) => {
@@ -59,6 +75,8 @@ const PALETTE = {
   update:         { from: '#3B82F6', to: '#2563EB' },
   error:          { from: '#DC5A5A', to: '#B91C1C' },
 };
+
+
 
 
 // for categories
@@ -176,6 +194,76 @@ export default function ActivityLogScreen() {
     console.error('❌ Error loading activity logs:', error);
   }
 }, [])
+
+  // === helpers για format ===
+const pad = (n: number) => (n < 10 ? `0${n}` : String(n));
+const toYMD = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const ym = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-01`;
+const addMonthsStr = (ymStr: string, delta: number) => {
+  const [y, m] = ymStr.split('-').map(Number);
+  const d = new Date(y, (m - 1) + delta, 1);
+  return ym(d);
+};
+
+
+  const [leftMonth, setLeftMonth] = useState(ym(new Date()));
+  const rightMonth = addMonthsStr(leftMonth, 1);
+
+
+  const buildMarkedDates = () => {
+    const marked: Record<string, any> = {};
+    if (!startDate) return marked;
+
+    const startStr = toYMD(startDate);
+    const end = endDate ? new Date(toYMD(endDate)) : new Date(startStr);
+    const start = new Date(startStr);
+
+
+    let d = new Date(start);
+    while (d <= end) {
+      const ds = toYMD(d);
+      marked[ds] = { color: '#BFDBFE', textColor: '#111827' }; 
+      d.setDate(d.getDate() + 1);
+    }
+
+
+    marked[startStr] = { ...(marked[startStr] || {}), startingDay: true, color: '#2563EB', textColor: '#fff' };
+    const endStr = toYMD(end);
+    marked[endStr] = { ...(marked[endStr] || {}), endingDay: true, color: '#2563EB', textColor: '#fff' };
+
+    return marked;
+  };
+
+    // Button label helper 
+  const formatRangeLabel = () => {
+    const fmt = (iso?: string) => {
+      if (!iso) return '';
+      return new Date(iso).toLocaleDateString('el-GR'); // μόνο ημερομηνία
+    };
+
+    if (dateFrom && dateTo) return `${fmt(dateFrom)} – ${fmt(dateTo)}`;
+    if (dateFrom) return `${fmt(dateFrom)} – …`;
+    return 'Ημερομηνία';
+  };
+
+
+  const onPickDay = (dateObj: { dateString: string }) => {
+    const picked = new Date(dateObj.dateString);
+   
+    if (!startDate || (startDate && endDate)) {
+      setStartDate(picked);
+      setEndDate(undefined as any); 
+      return;
+    }
+
+    if (picked < startDate) {
+
+      setStartDate(picked);
+    } else {
+      setEndDate(picked);
+    }
+  };
+
 
 
   // Load activity logs from database
@@ -416,17 +504,16 @@ export default function ActivityLogScreen() {
                 </Text>
                 <Ionicons name={showCategoryDropdown ? "chevron-up" : "chevron-down"} size={16} color="#6B7280" />
               </Pressable>
-              
             </View>
             
             <View style={styles.advancedFilterContainer}>
               <Pressable
                 style={styles.advancedFilterButton}
-                onPress={() => setShowDatePicker(true)}
+                onPress={() => setShowDatePicker(v => !v)}
               >
                 <Ionicons name="calendar" size={20} color="#6B7280" />
-                <Text style={styles.advancedFilterText}>Ημερομηνία</Text>
-                <Ionicons name="chevron-down" size={16} color="#6B7280" />
+                <Text style={styles.advancedFilterText}>{formatRangeLabel()}</Text>
+                <Ionicons name={showDatePicker ? "chevron-up" : "chevron-down"} size={16} color="#6B7280" />
               </Pressable>
             </View>
 
@@ -443,8 +530,109 @@ export default function ActivityLogScreen() {
               </Pressable>
             </View>
           </View>
-          
+
+          {showDatePicker && (
+            <View style={styles.dateDropdownSmall}>
+              <View style={styles.dateDropdownHeader}>
+                <Text style={styles.dateDropdownTitle}>Επιλογή περιόδου</Text>
+                <Pressable onPress={() => setShowDatePicker(false)}>
+                  <Ionicons name="close" size={20} color="#6B7280" />
+                </Pressable>
+              </View>
+
+              <View style={styles.dateDropdownCalendars}>
+                <Calendar
+                  firstDay={1}
+                  key={leftMonth}
+                  current={leftMonth}
+                  markingType="period"
+                  markedDates={buildMarkedDates()}
+                  onDayPress={onPickDay}
+                  enableSwipeMonths
+                  onMonthChange={(m) => setLeftMonth(`${m.year}-${pad(m.month)}-01`)}
+                  onPressArrowLeft={(subtractMonth) => {
+                    const next = addMonthsStr(leftMonth, -1);
+                    setLeftMonth(next);    
+                    subtractMonth?.();     
+                  }}
+                  onPressArrowRight={(addMonth) => {
+                    const next = addMonthsStr(leftMonth, +1);
+                    setLeftMonth(next);
+                    addMonth?.();          
+                  }}
+                  theme={{
+                    textDayFontSize: 14,
+                    textMonthFontSize: 15,
+                    todayTextColor: '#3B82F6',
+                    selectedDayBackgroundColor: '#2563EB',
+                    monthTextColor: '#111827',
+                    arrowColor: '#111827',
+                  }}
+                  style={{ width: 260 }}
+                />
+
+                <Calendar
+                  firstDay={1}
+                  key={`right-${rightMonth}`}
+                  current={rightMonth} 
+                  markingType="period"
+                  markedDates={buildMarkedDates()}
+                  onDayPress={onPickDay}
+                  enableSwipeMonths={false}
+                  onPressArrowLeft={(subtractMonth) => {
+                    const next = addMonthsStr(leftMonth, -1);
+                    setLeftMonth(next);
+                    subtractMonth?.();
+                  }}
+                  onPressArrowRight={(addMonth) => {
+                    const next = addMonthsStr(leftMonth, +1);
+                    setLeftMonth(next);
+                    addMonth?.();
+                  }}
+                  theme={{
+                    textDayFontSize: 14,
+                    textMonthFontSize: 15,
+                    todayTextColor: '#3B82F6',
+                    selectedDayBackgroundColor: '#2563EB',
+                    monthTextColor: '#111827',
+                    arrowColor: '#111827',
+                  }}
+                  style={{ width: 260 }}
+                />
+              </View>
+
+              <View style={styles.dateDropdownButtons}>
+                <Pressable
+                  style={styles.clearBtn}
+                  onPress={() => {
+                    setDateFrom('');
+                    setDateTo('');
+                    setStartDate(new Date());
+                    setEndDate(new Date());
+                    setShowDatePicker(false);
+                  }}
+                >
+                  <Text style={styles.clearText}>Καθαρισμός</Text>
+                </Pressable>
+
+                <Pressable
+                  style={styles.applyBtn}
+                  onPress={() => {
+                    if (!startDate) return setShowDatePicker(false);
+                    setDateFrom(startDate.toISOString());
+                    setDateTo((endDate || startDate).toISOString());
+                    setShowDatePicker(false);
+                  }}
+                >
+                  <Text style={styles.applyText}>Εφαρμογή</Text>
+                </Pressable>
+              </View>
+            </View>
+          )}
+
+
         </View>
+
 
         {/* Summary Cards */}
         <View style={styles.summaryCards}>
@@ -698,139 +886,7 @@ export default function ActivityLogScreen() {
         </Pressable>
       </Modal>
 
-      {/* Date Picker Modal */}
-      <Modal visible={showDatePicker} transparent animationType="fade">
-        <Pressable 
-          style={styles.datePickerModalOverlay}
-          onPress={() => setShowDatePicker(false)}
-        >
-          <Pressable onPress={(e) => e.stopPropagation()}>
-            <View style={styles.datePickerModalContainer}>
-              <View style={styles.datePickerModalHeader}>
-                <Text style={styles.datePickerModalTitle}>Επιλογή Περιόδου</Text>
-                <Pressable onPress={() => setShowDatePicker(false)} style={styles.datePickerModalCloseButton}>
-                  <Ionicons name="close" size={24} color="#6B7280" />
-                </Pressable>
-              </View>
-              
-              <View style={styles.datePickerModalContent}>
-                <View style={styles.datePickerSection}>
-                <Text style={styles.datePickerLabel}>Από:</Text>
-                <View style={styles.datePickerRow}>
-                  <Text style={styles.datePickerValue}>
-                    {startDate.toLocaleDateString('el-GR')}
-                  </Text>
-                  <Pressable 
-                    style={styles.datePickerButton}
-                    onPress={() => {
-                      const newDate = new Date(startDate);
-                      newDate.setDate(newDate.getDate() - 1);
-                      setStartDate(newDate);
-                    }}
-                  >
-                    <Ionicons name="chevron-back" size={16} color="#6B7280" />
-                  </Pressable>
-                  <Pressable 
-                    style={styles.datePickerButton}
-                    onPress={() => {
-                      const newDate = new Date(startDate);
-                      newDate.setDate(newDate.getDate() + 1);
-                      setStartDate(newDate);
-                    }}
-                  >
-                    <Ionicons name="chevron-forward" size={16} color="#6B7280" />
-                  </Pressable>
-                </View>
-                <View style={styles.timePickerRow}>
-                  <Text style={styles.timePickerLabel}>Ώρα:</Text>
-                  <TextInput
-                    style={styles.timeInput}
-                    value={startTime}
-                    onChangeText={setStartTime}
-                    placeholder="HH:MM"
-                    placeholderTextColor="#9CA3AF"
-                  />
-                </View>
-              </View>
-              
-              <View style={styles.datePickerSection}>
-                <Text style={styles.datePickerLabel}>Έως:</Text>
-                <View style={styles.datePickerRow}>
-                  <Text style={styles.datePickerValue}>
-                    {endDate.toLocaleDateString('el-GR')}
-                  </Text>
-                  <Pressable 
-                    style={styles.datePickerButton}
-                    onPress={() => {
-                      const newDate = new Date(endDate);
-                      newDate.setDate(newDate.getDate() - 1);
-                      setEndDate(newDate);
-                    }}
-                  >
-                    <Ionicons name="chevron-back" size={16} color="#6B7280" />
-                  </Pressable>
-                  <Pressable 
-                    style={styles.datePickerButton}
-                    onPress={() => {
-                      const newDate = new Date(endDate);
-                      newDate.setDate(newDate.getDate() + 1);
-                      setEndDate(newDate);
-                    }}
-                  >
-                    <Ionicons name="chevron-forward" size={16} color="#6B7280" />
-                  </Pressable>
-                </View>
-                <View style={styles.timePickerRow}>
-                  <Text style={styles.timePickerLabel}>Ώρα:</Text>
-                  <TextInput
-                    style={styles.timeInput}
-                    value={endTime}
-                    onChangeText={setEndTime}
-                    placeholder="HH:MM"
-                    placeholderTextColor="#9CA3AF"
-                  />
-                </View>
-              </View>
-              
-              <View style={styles.datePickerActions}>
-                <Pressable
-                  style={styles.datePickerClearButton}
-                  onPress={() => {
-                    setDateFrom('');
-                    setDateTo('');
-                    setShowDatePicker(false);
-                  }}
-                >
-                  <Text style={styles.datePickerClearText}>Καθαρισμός</Text>
-                </Pressable>
-                
-                <Pressable
-                  style={styles.datePickerApplyButton}
-                  onPress={() => {
-                    // Combine date and time for start
-                    const startDateTime = new Date(startDate);
-                    const [startHour, startMinute] = startTime.split(':').map(Number);
-                    startDateTime.setHours(startHour || 0, startMinute || 0, 0, 0);
-                    
-                    // Combine date and time for end
-                    const endDateTime = new Date(endDate);
-                    const [endHour, endMinute] = endTime.split(':').map(Number);
-                    endDateTime.setHours(endHour || 23, endMinute || 59, 59, 999);
-                    
-                    // Set the datetime strings
-                    setDateFrom(startDateTime.toISOString());
-                    setDateTo(endDateTime.toISOString());
-                    setShowDatePicker(false);
-                  }}
-                >
-                  <Text style={styles.datePickerApplyText}>Εφαρμογή</Text>
-                </Pressable>
-              </View>
-              </View>
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
+     
 
       {/* Action Dropdown Modal */}
       <Modal visible={showActionDropdown} transparent animationType="fade">
@@ -847,7 +903,13 @@ export default function ActivityLogScreen() {
             </View>
             
             <View style={styles.actionModalContent}>
-              <ScrollView showsVerticalScrollIndicator={false}>
+              <ScrollView
+                showsVerticalScrollIndicator={true}     
+                persistentScrollbar={true}             
+                indicatorStyle="default"    
+                contentContainerStyle={{ paddingBottom: 8 }}
+                style={{ maxHeight: 420 }}          
+              >
                 {[
                   { value: 'all', label: 'Όλες οι ενέργειες' },
                   // Authentication
@@ -933,6 +995,8 @@ export default function ActivityLogScreen() {
   </Page>
   );
 }
+
+
 const styles = StyleSheet.create({
 
   sectionHeaderGradient: {
@@ -1014,6 +1078,8 @@ statusTagGradient: {
     flexDirection: 'row',
     marginBottom: 24,
     gap: 12,
+    position: 'relative',
+  zIndex: 9000,   
   },
   summaryCards: {
     flexDirection: 'row',
@@ -1298,127 +1364,8 @@ statusTagGradient: {
     color: '#3B82F6',
     fontWeight: '600',
   },
-  datePickerModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  datePickerModalContainer: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    width: '100%',
-    maxWidth: 400,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 8,
-  },
-  datePickerModalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-  },
-  datePickerModalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#374151',
-  },
-  datePickerModalCloseButton: {
-    padding: 4,
-  },
-  datePickerModalContent: {
-    padding: 20,
-  },
-  datePickerSection: {
-    marginBottom: 16,
-  },
-  datePickerLabel: {
-    fontSize: 14,
-    color: '#6B7280',
-    fontWeight: '500',
-    marginBottom: 8,
-  },
-  datePickerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F9FAFB',
-    borderRadius: 8,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
-  datePickerValue: {
-    flex: 1,
-    fontSize: 14,
-    color: '#374151',
-    fontWeight: '500',
-  },
-  datePickerButton: {
-    padding: 8,
-    marginLeft: 8,
-    backgroundColor: '#F3F4F6',
-    borderRadius: 6,
-  },
-  datePickerActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 16,
-    gap: 12,
-  },
-  datePickerClearButton: {
-    flex: 1,
-    paddingVertical: 12,
-    backgroundColor: '#F3F4F6',
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  datePickerClearText: {
-    fontSize: 14,
-    color: '#6B7280',
-    fontWeight: '600',
-  },
-  datePickerApplyButton: {
-    flex: 1,
-    paddingVertical: 12,
-    backgroundColor: '#3B82F6',
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  datePickerApplyText: {
-    fontSize: 14,
-    color: '#FFFFFF',
-    fontWeight: '600',
-  },
-  timePickerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 8,
-    gap: 12,
-  },
-  timePickerLabel: {
-    fontSize: 14,
-    color: '#6B7280',
-    fontWeight: '500',
-    minWidth: 40,
-  },
-  timeInput: {
-    flex: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    fontSize: 14,
-    color: '#374151',
-    textAlign: 'center',
-  },
+
+
   actionFilterContainer: {
     marginTop: 8,
   },
@@ -1560,5 +1507,172 @@ advancedFilterButton: {
   width: '100%',
   minHeight: 58,
 },
+
+
+doubleCalendarRow: {
+    flexDirection: 'row',
+    gap: 16,
+    justifyContent: 'space-between',
+    flexWrap: 'nowrap', 
+    marginBottom: 12,
+  },
+  calendar: {
+    borderRadius: 12,
+     width: 300,     
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E5E7EB',
+    padding: 6,
+    flexGrow: 1,
+    minWidth: 300, // για tablet/web· σε κινητό θα στοιχίσει κάθετα λόγω wrap
+  },
+  timePickersWrap: {
+    flexDirection: 'row',
+    gap: 24,
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    marginTop: 8,
+  },
+
+
+  datePickerModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.25)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  datePickerModalContainer: {
+    width: '95%',
+    maxWidth: 830,  
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 16,
+  },
+  datePickerModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  datePickerModalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  datePickerModalCloseButton: {
+    padding: 6,
+  },
+  datePickerActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 12,
+    marginTop: 12,
+  },
+  datePickerClearButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    backgroundColor: '#F3F4F6',
+  },
+  datePickerApplyButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    backgroundColor: '#2563EB',
+  },
+  datePickerClearText: { color: '#111827', fontWeight: '600' },
+  datePickerApplyText: { color: 'white', fontWeight: '600' },
+
+  // time inputs (αν δεν υπάρχουν ήδη)
+  datePickerSection: { minWidth: 260 },
+  datePickerLabel: { color: '#4B5563', marginBottom: 4, fontWeight: '600' },
+  datePickerValue: { color: '#111827', marginBottom: 8 },
+  timePickerRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  timePickerLabel: { color: '#6B7280' },
+  timeInput: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    minWidth: 80,
+    color: '#111827',
+  },
+
+  dateDropdown: {
+    marginTop: 8,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E5E7EB',
+    padding: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+
+  dateDropdownSmall: {
+  position: 'absolute',
+  top: 72, 
+  right: 720,
+  zIndex: 1000,
+  backgroundColor: '#fff',
+  borderRadius: 10,
+  borderWidth: 1,
+  borderColor: '#E5E7EB',
+  padding: 10,
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: 6 },
+  shadowOpacity: 0.15,
+  shadowRadius: 10,
+  elevation: 6,
+  width: 540,
+},
+dateDropdownHeader: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  marginBottom: 6,
+},
+dateDropdownTitle: {
+  fontSize: 14,
+  fontWeight: '600',
+  color: '#111827',
+},
+dateDropdownCalendars: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+},
+dateDropdownButtons: {
+  flexDirection: 'row',
+  justifyContent: 'flex-end',
+  marginTop: 8,
+  gap: 6,
+},
+clearBtn: {
+  paddingVertical: 6,
+  paddingHorizontal: 12,
+  backgroundColor: '#F3F4F6',
+  borderRadius: 8,
+},
+clearText: {
+  fontSize: 13,
+  color: '#374151',
+  fontWeight: '600',
+},
+applyBtn: {
+  paddingVertical: 6,
+  paddingHorizontal: 12,
+  backgroundColor: '#3B82F6',
+  borderRadius: 8,
+},
+applyText: {
+  fontSize: 13,
+  color: 'white',
+  fontWeight: '700',
+},
+
 
 });

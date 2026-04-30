@@ -70,6 +70,10 @@ export default function WarehouseScreen() {
   const [selectedShelfDetail, setSelectedShelfDetail] = useState<ShelfData | null>(null);
   const [showOverview, setShowOverview] = useState(false)
   const [showItemsModal, setShowItemsModal] = useState(false);
+
+  const [shelfSearchIndexById, setShelfSearchIndexById] = useState<Record<string, string>>({});
+  const [shelfSearchIndexByCode, setShelfSearchIndexByCode] = useState<Record<string, string>>({});
+
   
   // Get current user ID for logging
   const getCurrentUserId = async () => {
@@ -98,30 +102,69 @@ export default function WarehouseScreen() {
 
   // Load shelves from database
   const loadShelves = useCallback(async () => {
+  try {
+    const shelvesCollection = database.get<Shelf>('shelves');
+    const shelvesData = await shelvesCollection.query().fetch();
+    
+    // Transform shelves to match our interface
+    const transformedShelves: ShelfData[] = shelvesData.map((shelf: any) => ({
+      id: shelf.id,
+      code: shelf.code || '',
+      barcode: shelf.barcode || shelf.code || '',
+      floor: shelf.floor || 1,
+      capacity: shelf.capacity || 0,
+      notes: shelf.notes || '',
+      item_count: shelf.item_count || 0,
+      created_at: shelf.created_at || Date.now()
+    }));
+
+
+    transformedShelves.sort((a, b) => b.created_at - a.created_at);
+
+    setShelves(transformedShelves);
+
     try {
-      const shelvesCollection = database.get<Shelf>('shelves');
-      const shelvesData = await shelvesCollection.query().fetch();
-      
-      // Transform shelves to match our interface
-      const transformedShelves: ShelfData[] = shelvesData.map((shelf: any) => ({
-        id: shelf.id,
-        code: shelf.code || '',
-        barcode: shelf.barcode || shelf.code || '',
-        floor: shelf.floor || 1,
-        capacity: shelf.capacity || 0,
-        notes: shelf.notes || '',
-        item_count: shelf.item_count || 0,
-        created_at: shelf.created_at || Date.now()
-      }));
+      const allItems = await listAllActiveWarehouseItems();
 
-      // Sort by creation time (newest first) so new shelves appear right after the add card
-      transformedShelves.sort((a, b) => b.created_at - a.created_at);
+      const byId: Record<string, string> = {};
+      const byCode: Record<string, string> = {};
 
-      setShelves(transformedShelves);
-    } catch (error) {
-      console.error('❌ Error loading shelves:', error);
+      for (const it of allItems) {
+
+        const sid   = (it as any)?.shelf_id   != null ? String((it as any).shelf_id)   : '';
+        const scode = (it as any)?.shelf_code ? String((it as any).shelf_code)         : '';
+
+
+        const tokens = [
+          it.item_code,
+          it.customer_name,
+          it.color,
+          it.category,
+          it.status,
+          it.storage_status,
+          it.order_date,
+        ]
+          .filter((x): x is string => !!x) 
+          .map(x => x.toString().toLowerCase());
+
+        const blob = ' ' + tokens.join(' ');
+
+        if (sid)   byId[sid]     = (byId[sid]     || '') + blob;
+        if (scode) byCode[scode] = (byCode[scode] || '') + blob;
+      }
+
+      setShelfSearchIndexById(byId);
+      setShelfSearchIndexByCode(byCode);
+    } catch (e) {
+      console.error(' building shelf search index failed', e);
+      setShelfSearchIndexById({});
+      setShelfSearchIndexByCode({});
     }
-  }, []);
+  } catch (error) {
+    console.error(' Error loading shelves:', error);
+  }
+}, []);
+
 
   useFocusEffect(
     useCallback(() => {
@@ -130,10 +173,27 @@ export default function WarehouseScreen() {
   )
 
   // Filter shelves based on search query
-  const filteredShelves = shelves.filter(shelf =>
-    shelf.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    shelf.notes?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredShelves = shelves.filter((shelf) => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return true;
+
+    // Αναζήτηση στα πεδία του ραφιού
+    const inShelfFields =
+      shelf.code.toLowerCase().includes(q) ||
+      (shelf.notes ?? '').toLowerCase().includes(q) ||
+      (shelf.barcode ?? '').toLowerCase().includes(q);
+
+    const itemsBlob = (
+      shelfSearchIndexById[shelf.id] ||
+      shelfSearchIndexByCode[shelf.code] ||
+      ''
+    ).toLowerCase();
+
+    const inItemsOnShelf = itemsBlob.includes(q);
+
+    return inShelfFields || inItemsOnShelf;
+  });
+
 
   const goBack = () => router.push('/dashboard');
 
@@ -1177,80 +1237,77 @@ function EditItemModal({
 
 // delete items
 function DeleteItemConfirmModal({
-  visible,
-  item,
-  shelf,
-  userId = 'system',
-  onClose,
-  onDeleted,
-}: {
-  visible: boolean
-  item: any | null
-  shelf: ShelfData
-  userId?: string
-  onClose: () => void
-  onDeleted: (deletedId: string) => void
-}) {
-  const [deleting, setDeleting] = useState(false)
+    visible,
+    item,
+    shelf,                 // ← έγινε προαιρετικό
+    userId = 'system',
+    onClose,
+    onDeleted,
+  }: {
+    visible: boolean
+    item: any | null
+    shelf?: ShelfData       // ← εδώ η αλλαγή
+    userId?: string
+    onClose: () => void
+    onDeleted: (deletedId: string) => void
+  }) {
+    const [deleting, setDeleting] = useState(false)
 
-  if (!item) return null
+    if (!item) return null
 
-  const onConfirm = async () => {
-    try {
-      setDeleting(true)
-      // Διαγράφει από warehouse_items (κάνει inactive την ενεργή τοποθέτηση) ΚΑΙ γράφει logRemoveItemFromShelf
-      await removeItemFromShelf({ orderItemId: item.id, userId })
-      onDeleted(item.id)
-    } catch (e) {
-      console.error('❌ removeItemFromShelf failed', e)
-    } finally {
-      setDeleting(false)
+    const onConfirm = async () => {
+      try {
+        setDeleting(true)
+        await removeItemFromShelf({ orderItemId: item.id, userId })
+        onDeleted(item.id)
+      } catch (e) {
+        console.error('❌ removeItemFromShelf failed', e)
+      } finally {
+        setDeleting(false)
+      }
     }
-  }
 
-  return (
-    <Modal visible={visible} transparent animationType="fade">
-      <View style={styles.editOverlay}>
-        <Pressable style={styles.editBackdrop} onPress={onClose}>
-          <Pressable onPress={(e) => e.stopPropagation()}>
-            <View style={styles.editContainer}>
-              {/* Header */}
-              <View style={styles.editHeader}>
-                <Text style={styles.editTitle}>Διαγραφή Τεμαχίου</Text>
-                <Pressable onPress={onClose} hitSlop={8}>
-                  <Ionicons name="close" size={22} color="#374151" />
-                </Pressable>
-              </View>
+    return (
+      <Modal visible={visible} transparent animationType="fade">
+        <View style={styles.editOverlay}>
+          <Pressable style={styles.editBackdrop} onPress={onClose}>
+            <Pressable onPress={(e) => e.stopPropagation()}>
+              <View style={styles.editContainer}>
+                <View style={styles.editHeader}>
+                  <Text style={styles.editTitle}>Διαγραφή Τεμαχίου</Text>
+                  <Pressable onPress={onClose} hitSlop={8}>
+                    <Ionicons name="close" size={22} color="#374151" />
+                  </Pressable>
+                </View>
 
-              {/* Message */}
-              <View style={{ paddingVertical: 8 }}>
-                <Text>Είστε σίγουροι ότι θέλετε να διαγράψετε το τεμάχιο “{item.item_code}”;</Text>
-                {shelf?.code ? (
-                  <Text style={{ marginTop: 6, fontSize: 12, color: '#6B7280' }}>
-                    Ράφι: {shelf.code}
-                  </Text>
-                ) : null}
-              </View>
+                <View style={{ paddingVertical: 8 }}>
+                  <Text>Είστε σίγουροι ότι θέλετε να διαγράψετε το τεμάχιο “{item.item_code}”;</Text>
+                  {shelf?.code ? (
+                    <Text style={{ marginTop: 6, fontSize: 12, color: '#6B7280' }}>
+                      Ράφι: {shelf.code}
+                    </Text>
+                  ) : null}
+                </View>
 
-              {/* Actions */}
-              <View style={styles.actionsRow}>
-                <Pressable onPress={onClose} style={styles.cancelBtn}>
-                  <Text style={styles.cancelText}>Ακύρωση</Text>
-                </Pressable>
-                <Pressable disabled={deleting} onPress={onConfirm} style={styles.dangerBtn}>
-                  <Ionicons name="trash" size={16} color="#FFFFFF" />
-                  <Text style={styles.dangerText}>
-                    {deleting ? 'Διαγράφεται…' : 'Διαγραφή'}
-                  </Text>
-                </Pressable>
+                <View style={styles.actionsRow}>
+                  <Pressable onPress={onClose} style={styles.cancelBtn}>
+                    <Text style={styles.cancelText}>Ακύρωση</Text>
+                  </Pressable>
+                  <Pressable disabled={deleting} onPress={onConfirm} style={styles.dangerBtn}>
+                    <Ionicons name="trash" size={16} color="#FFFFFF" />
+                    <Text style={styles.dangerText}>
+                      {deleting ? 'Διαγράφεται…' : 'Διαγραφή'}
+                    </Text>
+                  </Pressable>
+                </View>
               </View>
-            </View>
+            </Pressable>
           </Pressable>
-        </Pressable>
-      </View>
-    </Modal>
-  )
+        </View>
+      </Modal>
+    )
 }
+
 
 function ItemsModal({
   visible,
@@ -1260,9 +1317,25 @@ function ItemsModal({
   onClose: () => void
 }) {
   const { width, height } = useWindowDimensions()
+  const { user } = useAuth()
+  const currentUserId = String(user?.id || 'system')
+
   const [loading, setLoading] = useState(false)
   const [items, setItems] = useState<any[]>([])
   const [q, setQ] = useState('')
+
+  // ΦΙΛΤΡΑ
+  type StatusFilter = 'all' | 'washed' | 'unwashed'
+  type StorageFilter = 'all' | 'keep' | 'return'
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [storageFilter, setStorageFilter] = useState<StorageFilter>('all')
+  const [shelfFilter, setShelfFilter] = useState<string>('all') // φίλτρο ραφιού
+
+  // Modals για edit/delete
+  const [showEdit, setShowEdit] = useState(false)
+  const [editItem, setEditItem] = useState<any | null>(null)
+  const [showDelete, setShowDelete] = useState(false)
+  const [deleteItem, setDeleteItem] = useState<any | null>(null)
 
   const noWebOutline = Platform.select({
     web: {
@@ -1294,57 +1367,73 @@ function ItemsModal({
     load()
   }, [visible])
 
-  // Απλή search (case-insensitive) σε πολλα πεδία
-  const filtered = items.filter((it) => {
-    const txt = q.trim().toLowerCase()
+  // helpers
+  const lc = (s: any) => String(s || '').toLowerCase()
+  const isWashed   = (s: string) => ['πλυμένο','πλυμενο','clean','washed','completed','ok'].some(k => lc(s).includes(k))
+  const isUnwashed = (s: string) => ['άπλυτο','απλυτο','dirty','unwashed','pending'].some(k => lc(s).includes(k))
+  const isKeep     = (s: string) => ['φύλαξη','φυλαξη','keep','storage'].some(k => lc(s).includes(k))
+  const isReturn   = (s: string) => ['επιστροφή','επιστροφη','return','pickup'].some(k => lc(s).includes(k))
+
+  // μοναδικά ράφια για chips
+  const uniqueShelves = Array.from(new Set(items.map((it: any) => it.shelf_code).filter(Boolean))) as string[]
+
+  // 1) Search (πιάνει και ράφι: shelf_code)
+  const searched = items.filter((it) => {
+    const txt = lc(q).trim()
     if (!txt) return true
     return (
-      String(it.item_code || '').toLowerCase().includes(txt) ||
-      String(it.customer_name || '').toLowerCase().includes(txt) ||
-      String(it.color || '').toLowerCase().includes(txt) ||
-      String(it.category || '').toLowerCase().includes(txt) ||
-      String(it.shelf_code || '').toLowerCase().includes(txt) ||
-      String(it.status || '').toLowerCase().includes(txt) ||
-      String(it.storage_status || '').toLowerCase().includes(txt) ||
-      String(it.order_date || '').toLowerCase().includes(txt)
+      lc(it.item_code).includes(txt) ||
+      lc(it.customer_name).includes(txt) ||
+      lc(it.color).includes(txt) ||
+      lc(it.category).includes(txt) ||
+      lc(it.shelf_code).includes(txt) ||   // ← ράφι
+      lc(it.status).includes(txt) ||
+      lc(it.storage_status).includes(txt) ||
+      lc(it.order_date).includes(txt)
     )
   })
 
+  // 2) Εφαρμογή φίλτρων
+  const filtered = searched.filter((it) => {
+    const st = lc(it.status)
+    const ss = lc(it.storage_status)
+    const sc = lc(it.shelf_code)
+
+    const passStatus =
+      statusFilter === 'all' ||
+      (statusFilter === 'washed' && isWashed(st)) ||
+      (statusFilter === 'unwashed' && isUnwashed(st))
+
+    const passStorage =
+      storageFilter === 'all' ||
+      (storageFilter === 'keep' && isKeep(ss)) ||
+      (storageFilter === 'return' && isReturn(ss))
+
+    const passShelf = shelfFilter === 'all' || sc === lc(shelfFilter)
+
+    return passStatus && passStorage && passShelf
+  })
+
   type ChipKind = 'status' | 'storage' | 'category'
-
   function ChipColors(label: string, kind: ChipKind) {
-    const v = (label || '').toLowerCase().trim()
-
-    // default ουδέτερο
+    const v = lc(label)
     let bg = '#F3F4F6', bd = '#E5E7EB', fg = '#374151'
-
     if (kind === 'status') {
-      if (['πλυμένο','clean','washed','completed','ok'].some(k => v.includes(k))) {
-        bg = '#ECFDF5'; bd = '#A7F3D0'; fg = '#065F46'   // πράσινο
-      } else if (['άπλυτο','απλυτο','dirty','unwashed','pending'].some(k => v.includes(k))) {
-        bg = '#FEF2F2'; bd = '#FECACA'; fg = '#991B1B'   // κόκκινο
-      } else if (['σε εξέλιξη','επεξεργασία','processing','in progress'].some(k => v.includes(k))) {
-        bg = '#EFF6FF'; bd = '#BFDBFE'; fg = '#1E3A8A'   // μπλε
+      if (isWashed(v)) { bg = '#ECFDF5'; bd = '#A7F3D0'; fg = '#065F46' }
+      else if (isUnwashed(v)) { bg = '#FEF2F2'; bd = '#FECACA'; fg = '#991B1B' }
+      else if (['σε εξέλιξη','επεξεργασία','processing','in progress'].some(k => v.includes(k))) {
+        bg = '#EFF6FF'; bd = '#BFDBFE'; fg = '#1E3A8A'
       } else if (['αναμονή','waiting','hold'].some(k => v.includes(k))) {
-        bg = '#FFFBEB'; bd = '#FDE68A'; fg = '#92400E'   // κίτρινο
+        bg = '#FFFBEB'; bd = '#FDE68A'; fg = '#92400E'
       }
     }
-
     if (kind === 'storage') {
-      if (['φύλαξη','φυλαξη','keep','storage'].some(k => v.includes(k))) {
-        bg = '#EEF2FF'; bd = '#C7D2FE'; fg = '#3730A3'   // indigo
-      } else if (['επιστροφή','επιστροφη','return','pickup'].some(k => v.includes(k))) {
-        bg = '#FDF2F8'; bd = '#FBCFE8'; fg = '#9D174D'   // ροζ/ματζέντα
-      }
+      if (isKeep(v)) { bg = '#EEF2FF'; bd = '#C7D2FE'; fg = '#3730A3' }
+      else if (isReturn(v)) { bg = '#FDF2F8'; bd = '#FBCFE8'; fg = '#9D174D' }
     }
-
-    if (kind === 'category') {
-      bg = '#F1F5F9'; bd = '#E2E8F0'; fg = '#0F172A'     // slate ουδέτερο
-    }
-
+    if (kind === 'category') { bg = '#F1F5F9'; bd = '#E2E8F0'; fg = '#0F172A' }
     return { bg, bd, fg }
   }
-
   function Chip({ label, kind }: { label: string; kind: ChipKind }) {
     const { bg, bd, fg } = ChipColors(label, kind)
     return (
@@ -1362,132 +1451,205 @@ function ItemsModal({
     )
   }
 
+  const FilterBtn = ({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) => (
+    <Pressable onPress={onPress} style={[styles.filterBtn, active && styles.filterBtnActive]}>
+      <Text style={[styles.filterBtnText, active && styles.filterBtnTextActive]}>{label}</Text>
+    </Pressable>
+  )
+
+  const ShelfChip = ({ code }: { code: string }) => (
+    <Pressable onPress={() => setShelfFilter(code)} style={[styles.filterBtn, shelfFilter===code && styles.filterBtnActive]}>
+      <Text style={[styles.filterBtnText, shelfFilter===code && styles.filterBtnTextActive]}>{code}</Text>
+    </Pressable>
+  )
+
   if (!visible) return null
 
   return (
-    <Modal visible={visible} transparent animationType="fade">
-      <Pressable style={styles.itemsModalOverlay} onPress={onClose}>
-        <Pressable onPress={(e) => e.stopPropagation()}>
-          <View
-            style={[
-              styles.itemsModalContainer,
-              { width: CARD_W, maxWidth: CARD_W, height: CARD_H },
-            ]}
-          >
-            {/* Header */}
-            <View style={styles.itemsModalHeader}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <Ionicons name="list" size={20} color="#374151" />
-                <Text style={styles.itemsModalTitle}>Τεμάχια Αποθήκης</Text>
-                <Text style={{ color: '#6B7280', fontSize: 12 }}>
-                  ({loading ? '…' : filtered.length})
-                </Text>
-              </View>
-              <Pressable onPress={onClose} hitSlop={8}>
-                <Ionicons name="close" size={20} color="#374151" />
-              </Pressable>
-            </View>
-
-            {/* Περιεχόμενο */}
-            <View style={styles.itemsModalContent}>
-              {/* Search */}
-              <View style={[styles.searchContainer, { marginTop: 6 }]}>
-                <Ionicons name="search-outline" size={20} color={colors.primary} style={styles.searchIcon} />
-                <TextInput
-                  style={[styles.searchInput, noWebOutline]}
-                  placeholder="Αναζήτηση: κωδικός, πελάτης, χρώμα, ράφι, κατάσταση…"
-                  placeholderTextColor="#9CA3AF"
-                  value={q}
-                  onChangeText={setQ}
-                />
-              </View>
-
-              {/* Λίστα */}
-              <ScrollView
-                style={{ flex: 1, marginTop: 10 }}
-                contentContainerStyle={{ paddingBottom: 12 }}
-                showsVerticalScrollIndicator
-              >
-                {loading ? (
-                  <View style={styles.emptyItemsContainer}>
-                    <Ionicons name="sync" size={28} color="#9CA3AF" />
-                    <Text style={styles.emptyItemsText}>Φόρτωση τεμαχίων…</Text>
-                  </View>
-                ) : filtered.length === 0 ? (
-                  <View style={styles.emptyItemsContainer}>
-                    <Ionicons name="cube-outline" size={40} color="#9CA3AF" />
-                    <Text style={styles.emptyItemsText}>Δεν βρέθηκαν τεμάχια</Text>
-                  </View>
-                ) : (
-                  <View style={{ gap: 8 }}>
-                    {filtered.map((it) => (
-                      <View key={it.id} style={styles.itemRow}>
-                        {/* Αριστερά */}
-                        <View style={{ flex: 1 }}>
-                          {/* Κωδικός + Κατηγορία */}
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                            <Text style={styles.itemCode}>
-                              {it.item_code || `#${String(it.id).slice(0, 6).toUpperCase()}`}
-                            </Text>
-                            {!!it.category && <Chip label={it.category} kind="category" />}
-                          </View>
-
-                          {/* Πελάτης */}
-                          <Text style={styles.itemOwner}>{it.customer_name || 'Χωρίς πελάτη'}</Text>
-
-                          {/* Ημερομηνία */}
-                          {!!it.order_date && (
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                              <Ionicons name="calendar-outline" size={14} color="#6B7280" />
-                              <Text style={[styles.itemInfo, { marginLeft: 4 }]}>{it.order_date}</Text>
-                            </View>
-                          )}
-
-                          {/* Ράφι */}
-                          {!!it.shelf_code && (
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                              <Ionicons name="cube-outline" size={14} color="#6B7280" />
-                              <Text style={[styles.itemInfo, { marginLeft: 4 }]}>Ράφι: {it.shelf_code}</Text>
-                            </View>
-                          )}
-
-                          {/* Χρώμα */}
-                          {!!it.color && (
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                              <Ionicons name="color-palette-outline" size={14} color="#6B7280" />
-                              <Text style={[styles.itemInfo, { marginLeft: 4 }]}>{it.color}</Text>
-                            </View>
-                          )}
-
-
-                          {/* Chips για κατάσταση & φύλαξη */}
-                          <View style={{ flexDirection: 'row', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-                            {!!it.status && <Chip label={it.status} kind="status" />}
-                            {!!it.storage_status && <Chip label={it.storage_status} kind="storage" />}
-                          </View>
-                        </View>
-
-                        {/* Δεξιά – μελλοντικά actions */}
-                      </View>
-                    ))}
-                  </View>
-
-                )}
-              </ScrollView>
-
-              {/* Actions */}
-              <View style={[styles.actionsRow, { justifyContent: 'flex-end', marginTop: 10 }]}>
-                <Pressable onPress={onClose} style={styles.cancelBtn}>
-                  <Text style={styles.cancelText}>Κλείσιμο</Text>
+    <>
+      <Modal visible={visible} transparent animationType="fade">
+        <Pressable style={styles.itemsModalOverlay} onPress={onClose}>
+          <Pressable onPress={(e) => e.stopPropagation()}>
+            <View
+              style={[
+                styles.itemsModalContainer,
+                { width: CARD_W, maxWidth: CARD_W, height: CARD_H },
+              ]}
+            >
+              {/* Header */}
+              <View style={styles.itemsModalHeader}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Ionicons name="list" size={20} color="#374151" />
+                  <Text style={styles.itemsModalTitle}>Τεμάχια Αποθήκης</Text>
+                  <Text style={{ color: '#6B7280', fontSize: 12 }}>
+                    ({loading ? '…' : filtered.length})
+                  </Text>
+                </View>
+                <Pressable onPress={onClose} hitSlop={8}>
+                  <Ionicons name="close" size={20} color="#374151" />
                 </Pressable>
               </View>
+
+              {/* Περιεχόμενο */}
+              <View style={styles.itemsModalContent}>
+                {/* Search */}
+                <View style={[styles.searchContainer, { marginTop: 6 }]}>
+                  <Ionicons name="search-outline" size={20} color={colors.primary} style={styles.searchIcon} />
+                  <TextInput
+                    style={[styles.searchInput, noWebOutline]}
+                    placeholder="Αναζήτηση: κωδικός, πελάτης, χρώμα, ράφι, κατάσταση…"
+                    placeholderTextColor="#9CA3AF"
+                    value={q}
+                    onChangeText={setQ}
+                  />
+                </View>
+
+                {/* Φίλτρα */}
+                <View style={styles.filterBar}>
+                  <View style={styles.filterGroup}>
+                    <Text style={styles.filterGroupLabel}>Κατάσταση:</Text>
+                    <FilterBtn label="Όλα" active={statusFilter==='all'} onPress={() => setStatusFilter('all')} />
+                    <FilterBtn label="Πλυμένο" active={statusFilter==='washed'} onPress={() => setStatusFilter('washed')} />
+                    <FilterBtn label="Άπλυτο" active={statusFilter==='unwashed'} onPress={() => setStatusFilter('unwashed')} />
+                  </View>
+                  <View style={styles.filterGroup}>
+                    <Text style={styles.filterGroupLabel}>Κατάσταση:</Text>
+                    <FilterBtn label="Όλα" active={storageFilter==='all'} onPress={() => setStorageFilter('all')} />
+                    <FilterBtn label="Φύλαξη" active={storageFilter==='keep'} onPress={() => setStorageFilter('keep')} />
+                    <FilterBtn label="Επιστροφή" active={storageFilter==='return'} onPress={() => setStorageFilter('return')} />
+                  </View>
+                 
+                </View>
+
+                {/* Λίστα */}
+                <ScrollView
+                  style={{ flex: 1, marginTop: 10 }}
+                  contentContainerStyle={{ paddingBottom: 12 }}
+                  showsVerticalScrollIndicator
+                >
+                  {loading ? (
+                    <View style={styles.emptyItemsContainer}>
+                      <Ionicons name="sync" size={28} color="#9CA3AF" />
+                      <Text style={styles.emptyItemsText}>Φόρτωση τεμαχίων…</Text>
+                    </View>
+                  ) : filtered.length === 0 ? (
+                    <View style={styles.emptyItemsContainer}>
+                      <Ionicons name="cube-outline" size={40} color="#9CA3AF" />
+                      <Text style={styles.emptyItemsText}>Δεν βρέθηκαν τεμάχια</Text>
+                    </View>
+                  ) : (
+                    <View style={{ gap: 8 }}>
+                      {filtered.map((it) => (
+                        <View key={it.id} style={styles.itemRow}>
+                          {/* Αριστερά */}
+                          <View style={{ flex: 1 }}>
+                            {/* Κωδικός + Κατηγορία */}
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                              <Text style={styles.itemCode}>
+                                {it.item_code || `#${String(it.id).slice(0, 6).toUpperCase()}`}
+                              </Text>
+                              {!!it.category && <Chip label={it.category} kind="category" />}
+                            </View>
+
+                            {/* Πελάτης */}
+                            <Text style={styles.itemOwner}>{it.customer_name || 'Χωρίς πελάτη'}</Text>
+
+                            {/* Ημερομηνία */}
+                            {!!it.order_date && (
+                              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                <Ionicons name="calendar-outline" size={14} color="#6B7280" />
+                                <Text style={[styles.itemInfo, { marginLeft: 4 }]}>{it.order_date}</Text>
+                              </View>
+                            )}
+
+                            {/* Ράφι */}
+                            {!!it.shelf_code && (
+                              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                <Ionicons name="cube-outline" size={14} color="#6B7280" />
+                                <Text style={[styles.itemInfo, { marginLeft: 4 }]}>Ράφι: {it.shelf_code}</Text>
+                              </View>
+                            )}
+
+                            {/* Χρώμα */}
+                            {!!it.color && (
+                              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                <Ionicons name="color-palette-outline" size={14} color="#6B7280" />
+                                <Text style={[styles.itemInfo, { marginLeft: 4 }]}>{it.color}</Text>
+                              </View>
+                            )}
+
+                            {/* Chips για κατάσταση & φύλαξη */}
+                            <View style={{ flexDirection: 'row', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                              {!!it.status && <Chip label={it.status} kind="status" />}
+                              {!!it.storage_status && <Chip label={it.storage_status} kind="storage" />}
+                            </View>
+                          </View>
+
+                          {/* Actions δεξιά */}
+                          <View style={styles.actions}>
+                            <Pressable
+                              accessibilityLabel="Επεξεργασία τεμαχίου"
+                              onPress={() => { setEditItem(it); setShowEdit(true) }}
+                              android_ripple={{ color: '#E5E7EB' }}
+                              style={({ pressed }) => [styles.iconBtn, styles.editBtn, pressed && { opacity: 0.8 }]}
+                              hitSlop={8}
+                            >
+                              <Ionicons name="pencil" size={16} color="#374151" />
+                            </Pressable>
+
+                            <Pressable
+                              accessibilityLabel="Διαγραφή τεμαχίου"
+                              onPress={() => { setDeleteItem(it); setShowDelete(true) }}
+                              android_ripple={{ color: '#FCA5A5' }}
+                              style={({ pressed }) => [styles.iconBtn, styles.deleteBtn, pressed && { opacity: 0.9 }]}
+                              hitSlop={8}
+                            >
+                              <Ionicons name="trash" size={16} color="#FFFFFF" />
+                            </Pressable>
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </ScrollView>
+
+                {/* Actions */}
+                <View style={[styles.actionsRow, { justifyContent: 'flex-end', marginTop: 10 }]}>
+                  <Pressable onPress={onClose} style={styles.cancelBtn}>
+                    <Text style={styles.cancelText}>Κλείσιμο</Text>
+                  </Pressable>
+                </View>
+              </View>
             </View>
-          </View>
+          </Pressable>
         </Pressable>
-      </Pressable>
-    </Modal>
+      </Modal>
+
+      {/* Modals για edit/delete */}
+      <EditItemModal
+        visible={showEdit}
+        item={editItem}
+        onClose={() => { setShowEdit(false); setEditItem(null) }}
+        onSaved={(updated) => {
+          setItems(prev => prev.map(x => x.id === updated.id ? { ...x, ...updated } : x))
+          setShowEdit(false); setEditItem(null)
+        }}
+        userId={currentUserId}
+      />
+      <DeleteItemConfirmModal
+        visible={showDelete}
+        item={deleteItem}
+        onClose={() => { setShowDelete(false); setDeleteItem(null) }}
+        onDeleted={(deletedId) => {
+          setItems(prev => prev.filter(x => x.id !== deletedId))
+          setShowDelete(false); setDeleteItem(null)
+        }}
+        userId={currentUserId}
+      />
+    </>
   )
 }
+
 
 const styles = StyleSheet.create({
   safe: {
@@ -2308,6 +2470,49 @@ itemsModalOverlay: {
     flex: 1,
     padding: 16,
     ...(Platform.OS === 'web' ? { overflow: 'auto' as any } : null),
+  },
+
+  filterBar: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    gap: 14,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+
+  filterGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginRight: 24,
+  },
+  filterGroupLabel: {
+    fontSize: 12,
+    color: '#6B7280', 
+    marginRight: 2,
+  },
+  filterBtn: {
+    borderWidth: 1,
+    borderColor: '#E5E7EB', 
+    backgroundColor: '#F9FAFB',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  filterBtnActive: {
+    backgroundColor: '#EEF2FF', 
+    borderColor: '#C7D2FE', 
+  },
+  filterBtnText: {
+    fontSize: 12,
+    color: '#374151', 
+  },
+  filterBtnTextActive: {
+    color: '#3730A3', 
+    fontWeight: '600',
   },
 
 });

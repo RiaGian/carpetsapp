@@ -51,7 +51,18 @@ export async function createOrderItem(data: NewOrderItem, userIdForLog: string =
   let newRecord: any = null
 
   await database.write(async () => {
-    const orderModel = await orders.find(data.orderId)
+  const orderModel = await orders.find(data.orderId)
+
+  const existingItems = await (orderModel as any).items.fetch()
+
+    let finalOrderDate = data.order_date ?? new Date().toISOString().slice(0, 10)
+
+    if (existingItems.length > 0) {
+
+      const firstItem = existingItems[0]
+      finalOrderDate = firstItem.order_date ?? finalOrderDate
+    }
+
 
     newRecord = await items.create((rec: any) => {
       rec.order.set(orderModel)
@@ -61,7 +72,7 @@ export async function createOrderItem(data: NewOrderItem, userIdForLog: string =
       rec.price          = Number.isFinite(data.price) ? data.price : 0
       rec.status         = data.status ?? ''
       rec.storage_status = data.storage_status ?? ''
-      rec.order_date     = data.order_date ?? ''
+      rec.order_date     = finalOrderDate  // lock date
       rec.created_at     = data.created_at ?? Date.now()
     })
   })

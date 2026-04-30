@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { router } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
-import { Calendar } from 'react-native-calendars';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   Alert,
@@ -14,6 +14,7 @@ import {
   TextInput,
   View
 } from 'react-native';
+import { Calendar } from 'react-native-calendars';
 import AppHeader from '../components/AppHeader';
 import Page from '../components/Page';
 import { listCustomers } from '../services/customer';
@@ -152,6 +153,44 @@ export default function OrdersScreen() {
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isModalOpen, setModalOpen] = useState(false);
+  const [lockedDate, setLockedDate] = useState<string | null>(null);
+
+
+  // --- Fetch customers & refetch on focus ---
+  const fetchCustomers = useCallback(async () => {
+    try {
+      const rows: any[] = await listCustomers(500);
+      const mapped: CustomerRow[] = rows.map((r: any) => ({
+        id: r.id ?? r._raw?.id ?? '',
+        firstName: r.firstName ?? r._raw?.first_name ?? '',
+        lastName: r.lastName ?? r._raw?.last_name ?? '',
+        afm: r.afm ?? r._raw?.afm ?? '',
+        address: r.address ?? r._raw?.address ?? '',
+        phone:
+          r.phone ?? r.mobile ?? r.mobilePhone ?? r.telephone ??
+          r._raw?.phone ?? r._raw?.mobile ?? r._raw?.mobile_phone ?? r._raw?.telephone ?? '',
+      }));
+      setCustomers(mapped);
+    } catch (err) {
+      console.warn('Failed to load customers:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    // αρχικό load στο πρώτο άνοιγμα
+    fetchCustomers();
+  }, [fetchCustomers]);
+
+  useFocusEffect(
+    useCallback(() => {
+      // refetch κάθε φορά που η οθόνη παίρνει focus (επιστροφή από "Νέος πελάτης")
+      let cancelled = false;
+      (async () => {
+        if (!cancelled) await fetchCustomers();
+      })();
+      return () => { cancelled = true; };
+    }, [fetchCustomers])
+  );
 
   //pay 
   const [paymentOpen, setPaymentOpen] = useState(false);
@@ -174,7 +213,23 @@ export default function OrdersScreen() {
 
   const addOrder = () => setOrders(prev => [...prev, makeEmptyOrder()]);
 
+  useEffect(() => {
+    const firstDate = orders[0]?.date;
+    if (firstDate && firstDate.length === 10) {
+      setOrders(prev =>
+        prev.map((o, i) =>
+          i === 0 ? o : { ...o, date: firstDate }
+        )
+      );
+    }
+ 
+  }, [JSON.stringify(orders[0])]);
+
+
   const [successOpen, setSuccessOpen] = useState(false);
+
+  const redirectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
 
   const removeOrder = (index: number) => {
     setOrders(prev => {
@@ -342,6 +397,13 @@ export default function OrdersScreen() {
       sourceOrderIndex: index,
     }));
 
+
+    if (pieces.length === 0) {
+      setLockedDate(od);
+
+      setOrders(prev => prev.map(o => ({ ...o, date: od })));
+    }
+
     setPieces(prev => [...prev, ...newOnes]);
     setPiecesVisible(true);
 
@@ -373,7 +435,13 @@ export default function OrdersScreen() {
 
   // delete order items
   const removePiece = (index: number) => {
-    setPieces(prev => prev.filter((_, i) => i !== index));
+    setPieces(prev => {
+      const next = prev.filter((_, i) => i !== index);
+      if (next.length === 0) {
+        setLockedDate(null); 
+      }
+      return next;
+    });
   };
 
   const selectedCustomer = useMemo(() => customers.find(c => c.id === selectedId) || null, [customers, selectedId]);
@@ -390,31 +458,16 @@ export default function OrdersScreen() {
   // notes
   const [notes, setNotes] = useState('');
 
-  // Load customers 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const rows: any[] = await listCustomers(500);
-        if (cancelled) return;
+  const [receiptNumber, setReceiptNumber] = useState('');
 
-        const mapped: CustomerRow[] = rows.map((r: any) => ({
-          id: r.id ?? r._raw?.id ?? '',
-          firstName: r.firstName ?? r._raw?.first_name ?? '',
-          lastName: r.lastName ?? r._raw?.last_name ?? '',
-          afm: r.afm ?? r._raw?.afm ?? '',
-          address: r.address ?? r._raw?.address ?? '',
-          phone:
-          r.phone ?? r.mobile ?? r.mobilePhone ?? r.telephone ?? r._raw?.phone ?? r._raw?.mobile ?? r._raw?.mobile_phone ?? r._raw?.telephone ??
-          '',
-        }));
-        setCustomers(mapped);
-      } catch (err) {
-        console.warn('Failed to load customers:', err);
-      }
-    })();
-    return () => { cancelled = true; };
+
+  useEffect(() => {
+    return () => {
+      if (redirectTimer.current) clearTimeout(redirectTimer.current);
+    };
   }, []);
+
+
 
   // NEW: Search & Pagination state 
 const [searchValue, setSearchValue] = useState('');
@@ -446,8 +499,8 @@ const filteredCustomers = useMemo(() => {
 }, [customers, debouncedQuery]);
 
 //selidopoihsh
-const PAGE_SIZE = 5;                 
-const ROW_HEIGHT = 50;             
+const PAGE_SIZE = 10;                 
+const ROW_HEIGHT = 20;             
 const PAGE_ROWS = PAGE_SIZE;         
 const totalPages = Math.max(1, Math.ceil(filteredCustomers.length / PAGE_SIZE));
 const startIdx = (page - 1) * PAGE_SIZE;
@@ -531,6 +584,11 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
         clearFieldErr(0, 'customer'); // clear if chosen
       }
 
+      if (pieces.length === 0) {
+        Alert.alert('Προσοχή', 'Η παραγγελία πρέπει να περιέχει τουλάχιστον 1 τεμάχιο.');
+        return;
+      }
+
       // cheack if payment method is selected
       if (!paymentMethod) {
         flagFieldErr(0, { paymentMethod: 'required' });
@@ -604,6 +662,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
         orderDate: orderDateDefault,
         createdBy: currentUserId,
         orderStatus: 'Νέα',
+        receiptNumber: receiptNumber?.trim() || '-',
       };
 
       const created = await createOrder(payload, currentUserId);
@@ -635,15 +694,27 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
 
       setSubmitting(false);
       setSuccessOpen(true);
-    } catch (err) {
-      console.warn('createOrder failed:', err);
-      setSubmitting(false);
-      Alert.alert('Σφάλμα', 'Κάτι πήγε στραβά κατά την καταχώρηση.');
-    }
+
+      if (redirectTimer.current) clearTimeout(redirectTimer.current);
+      redirectTimer.current = setTimeout(() => {
+        onSuccessOk();
+      }, 2000);
+
+      } catch (err) {
+        console.warn('createOrder failed:', err);
+        setSubmitting(false);
+        Alert.alert('Σφάλμα', 'Κάτι πήγε στραβά κατά την καταχώρηση.');
+      }
   };
 
   // if order is success , return to dashboard
   const onSuccessOk = () => {
+
+
+    if (redirectTimer.current) {
+      clearTimeout(redirectTimer.current);
+      redirectTimer.current = null;
+    }
     setSuccessOpen(false);
     setModalOpen(false);
    
@@ -681,7 +752,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
         {/* Πελάτης */}
         <View style={styles.cardBox}>
           <View style={styles.inputWrapper}>
-            <Text style={[styles.inputLabel, { marginLeft: -50 }]}>
+            <Text style={[styles.inputLabel, { marginLeft: -50, fontSize: 18}]}>
               Πελάτης <Text style={styles.required}>*</Text>
             </Text>
 
@@ -689,7 +760,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
               onPress={() => setModalOpen(true)}
               style={[
                 styles.fakeInput,
-                fieldErrors[0]?.customer && styles.inputError, // ✅ κόκκινο περίγραμμα αν λείπει
+                fieldErrors[0]?.customer && styles.inputError,
               ]}
             >
               <Text
@@ -715,7 +786,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
         {/* Πληρωμή */}
         <View style={[styles.cardBox, { marginTop: 16 }]}>
           <View style={styles.inputWrapper}>
-            <Text style={[styles.inputLabel, { marginLeft: -50 }]}>
+            <Text style={[styles.inputLabel, { marginLeft: -50, fontSize: 18 }]}>
               Πληρωμή <Text style={styles.required}>*</Text>
             </Text>
 
@@ -770,12 +841,50 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
           </View>
         </View>
 
+        {/* Αρ. Δελτίου Παραλαβής */}
+        <View style={[styles.cardBox, styles.cardBoxLarge, { marginTop: 16 }]}>
+          <Text style={[styles.orderHeaderTitle, { paddingLeft: 0, marginBottom: 8 }]}>
+            Αρ. Δελτίου Παραλαβής (προαιρετικό)
+          </Text>
+
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'flex-start',
+              marginTop: 4,
+            }}
+          >
+            <TextInput
+              value={receiptNumber}
+              onChangeText={setReceiptNumber}
+              placeholder="Εισάγετε αριθμό"
+              placeholderTextColor="#9CA3AF"
+              keyboardType={Platform.select({
+                ios: 'number-pad',
+                android: 'numeric',
+                default: 'numeric',
+              })}
+              style={{
+                width: 880,
+                height: 42,
+                borderRadius: 10,
+                fontSize: 15,
+                paddingHorizontal: 12,
+                backgroundColor: 'rgba(240, 240, 240, 0.6)', 
+                borderColor: '#D1D5DB',
+                borderWidth: 1,
+                color: '#111827', 
+              }}
+            />
+          </View>
+        </View>
 
         {/* Προκαταβολή */}
         <View style={[styles.cardBox, { marginTop: 16 }]}>
           <View style={styles.inputWrapper}>
             <View style={styles.depositRow}>
-              <Text style={[styles.inputLabel, { marginLeft: -50 }]}>Προκαταβολή</Text>
+              <Text style={[styles.inputLabel, { marginLeft: -50, fontSize: 18 }]}>Προκαταβολή</Text>
               <Pressable onPress={toggleDeposit} style={[styles.toggleWrapSmall, depositEnabled && styles.toggleWrapOnSmall]}>
                 <View style={[styles.toggleKnobSmall, depositEnabled && styles.toggleKnobOnSmall]} />
               </Pressable>
@@ -906,18 +1015,32 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                   <Text style={styles.inputLabelInline}>Ημερομηνία</Text>
                   <View style={[styles.amountInputWrap, { position: 'relative' }]}>
                     <TextInput
-                      value={ord.date}
+                      value={
+                        pieces.length > 0
+                          ? (lockedDate || ord.date)  
+                          : ord.date                 
+                      }
                       onChangeText={(t) => onChangeOrderDateAt(idx, t)}
                       placeholder={ddmmyyyy()}
                       placeholderTextColor="#9CA3AF"
                       keyboardType="numeric"
                       maxLength={10}
-                      style={[styles.amountInput, { paddingRight: 34 }]} //calender icon
+                      editable={pieces.length === 0 && idx === 0}   
+                      selectTextOnFocus={pieces.length === 0 && idx === 0}
+                      style={[
+                        styles.amountInput,
+                        { paddingRight: 34, opacity: pieces.length > 0 ? 0.6 : 1 },
+                      ]}
                     />
+
 
                     {/* calender */}
                     <Pressable
-                      onPress={() => updateOrder(idx, { dateOpen: !ord.dateOpen })}
+                      onPress={() => {
+                        if (pieces.length === 0) { 
+                          updateOrder(idx, { dateOpen: !ord.dateOpen });
+                        }
+                      }}
                       style={{
                         position: 'absolute',
                         right: 8,
@@ -928,8 +1051,13 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                       hitSlop={8}
                       accessibilityLabel="Άνοιγμα ημερολογίου"
                     >
-                      <Ionicons name="calendar-outline" size={18} color="#6B7280" />
+                      <Ionicons
+                        name="calendar-outline"
+                        size={18}
+                        color={pieces.length > 0 ? '#bbb' : '#6B7280'} 
+                      />
                     </Pressable>
+
                   </View>
 
                   {/* Popover  */}
@@ -952,11 +1080,23 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                     }}
                   >
                     <Calendar
-                      initialDate={ddmmyyyyToISO(ord.date || ddmmyyyy())}
-                      current={ddmmyyyyToISO(ord.date || ddmmyyyy())}
+                      initialDate={ddmmyyyyToISO(
+
+                        (lockedDate ?? ord.date ?? ddmmyyyy())
+                      )}
+                      current={ddmmyyyyToISO(lockedDate ?? ord.date ?? ddmmyyyy())}
                       onDayPress={({ dateString }) => {
+
+                        if (pieces.length > 0) return;
+
                         const picked = isoToDDMMYYYY(dateString);
+
                         updateOrder(idx, { date: picked, dateOpen: false });
+
+                        if (idx === 0) {
+                          setOrders(prev => prev.map(o => ({ ...o, date: picked })));
+                        }
+
                         setPieces(prev =>
                           prev.map(p => (p.sourceOrderIndex === idx ? { ...p, orderDate: picked } : p))
                         );
@@ -965,6 +1105,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                       hideExtraDays
                       enableSwipeMonths
                     />
+
                   </View>
                   )}
 
@@ -1041,7 +1182,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                             setCodeErrors(prev => ({ ...prev, [idx]: false }));
                           }
                         }}
-                        placeholder="π.χ. ΧΧΧ999"
+                        placeholder="π.χ. X00000"
                         placeholderTextColor="#9CA3AF"
                         autoCapitalize="characters"
                         maxLength={6}
@@ -1207,7 +1348,9 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
           <View style={styles.totalIconFab}>
             <Ionicons name="calculator-outline" size={22} color="#fff" />
           </View>
-          <Text style={styles.totalHeaderTitle}>Συνολικό κόστος</Text>
+          <Text style={[styles.totalHeaderTitle, { fontSize: 18 }]}>
+            Συνολικό κόστος
+          </Text>
 
           <View style={{ gap: 8, marginTop: 8 }}>
             {/* Γραμμή: Σύνολο */}
@@ -1235,6 +1378,8 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
         </View>
 
 
+
+
         {/* Notes */}
         <View style={[styles.cardBox, styles.cardBoxLarge, { marginTop: 16 }]}>
           <Text style={[styles.orderHeaderTitle, { paddingLeft: 0, marginBottom: 8 }]}>Σημειώσεις</Text>
@@ -1258,7 +1403,11 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
           >
             <Text style={styles.cancelBtnOutlineText}>Ακύρωση</Text>
           </Pressable>
-          <Pressable style={styles.createBtn} onPress={onCreateOrder}>
+          <Pressable
+            style={[styles.createBtn, pieces.length === 0 && styles.createBtnDisabled]}
+            onPress={onCreateOrder}
+            disabled={pieces.length === 0}
+          >
             <Text style={styles.createBtnText}>Δημιουργία Παραγγελίας</Text>
           </Pressable>
         </View>
@@ -1277,7 +1426,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
 
             {/* (1) Υπολογισμοί ύψους/σελιδοποίησης (μέσα στο render για σαφήνεια) */}
             {(() => {
-              const ROW_HEIGHT = 50;               // ύψος κάθε γραμμής
+              const ROW_HEIGHT = 47;               // ύψος κάθε γραμμής
               const PAGE_ROWS = PAGE_SIZE;         // π.χ. 20
               const renderedRows = Math.min(PAGE_ROWS, pageItems.length);
               const LIST_HEIGHT = Math.min(
@@ -1291,7 +1440,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
               const TABLE_CARD_HEIGHT = HEADER_H + LIST_HEIGHT + (SHOW_PAGINATION ? PAGINATION_H : 0);
 
               return (
-                <View style={[styles.modalCard, { height: 565 }]}>
+                <View style={[styles.modalCard, { height: 855 }]}>
                   {/* Νέος Πελάτης  */}
                   <Pressable
                     onPress={() => {
@@ -1317,7 +1466,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                       <TextInput
                         value={searchValue}
                         onChangeText={setSearchValue}
-                        placeholder="Αναζήτηση με όνομα, ΑΦΜ, διεύθυνση ή κινητό"
+                        placeholder="Αναζήτηση με Όνομα, ΑΦΜ, Διεύθυνση ή Κινητό"
                         style={[styles.amountInput, { fontSize: 13, paddingVertical: 0 }]}
                         inputMode="text"
                         autoCorrect={false}
@@ -2482,5 +2631,8 @@ modalCardTall: {
   },
 
 
+  createBtnDisabled: {
+    opacity: 0.5
+  },
 
 });

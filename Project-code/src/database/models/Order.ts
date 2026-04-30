@@ -21,6 +21,8 @@ export default class Order extends Model {
   @field('order_date') orderDate!: string
   @field('order_status') orderStatus!: string
   @field('has_debt') hasDebt!: boolean
+  @field('receipt_number') receiptNumber!: string
   @date('created_at') createdAt!: number
   @date('last_modified_at') lastModifiedAt!: number
+  
 }

@@ -23,10 +23,10 @@ import { Circle, Svg } from 'react-native-svg'
 import AppHeader from '../components/AppHeader'
 import ConfirmModal from '../components/ConfirmModal'
 import Page from '../components/Page'
-import { logExportHistoryPDF, logFilterHistoryApplied, logViewCustomerHistory } from '../services/activitylog'
+import { logExportHistoryPDF, logViewCustomerHistory } from '../services/activitylog'
 import { createCustomer, deleteCustomer, observeCustomers, updateCustomer } from '../services/customer'
 import { listOrderItemsByCustomer, normId, updateOrderItem } from '../services/orderItems'
-import { observeOrdersByCustomer, updateOrder } from '../services/orders'
+import { deleteOrderCascade, observeOrdersByCustomer, updateOrder } from '../services/orders'
 import { useAuth } from '../state/AuthProvider'
 import { usePreview } from '../state/PreviewProvider'
 import { colors } from '../theme/colors'
@@ -140,6 +140,7 @@ type DBCustomer = {
   lastName: string
   phone: string | null
   address: string | null
+  city?: string
   afm: string | null
   notes: string | null
   createdAt: number
@@ -171,12 +172,22 @@ function FieldRow({
   editable,
   onChangeText,
   keyboardType,
+  onBlur,
+  error,         
+  errorMessage, 
+  maxLength,
+  inputMode,  
 }: {
   label: string
   value: string
   editable: boolean
   onChangeText?: (v: string) => void
   keyboardType?: 'default' | 'number-pad' | 'phone-pad' | 'decimal-pad'
+  onBlur?: () => void
+  error?: boolean          
+  errorMessage?: string    
+  maxLength?: number 
+  inputMode?: 'numeric' | 'text'
 }) {
   const [isFocused, setIsFocused] = React.useState(false)
   const inputRef = React.useRef<TextInput | null>(null)
@@ -197,49 +208,59 @@ function FieldRow({
       </Text>
 
       {editable ? (
-        <TextInput
-          ref={inputRef}
-          value={value}
-          onChangeText={onChangeText}
-          keyboardType={keyboardType || 'default'}
-          underlineColorAndroid="transparent"
-          placeholderTextColor="#9CA3AF"
-          onFocus={() => setIsFocused(true)}
-          onBlur={() => setIsFocused(false)}
-          style={[
-            {
-              backgroundColor: '#FFFFFF', // 🤍 λευκό φόντο
-              borderWidth: 1.5,
-              borderColor: isFocused ? '#3B82F6' : '#E5E7EB', // 🔵 απαλή μπλε απόχρωση όταν έχει focus
-              borderRadius: 10,
-              paddingHorizontal: 10,
-              paddingVertical: 6,
-              fontSize: 14,
-              color: '#111827',
-              height: 34,
-
-              // ✨ Εφέ φωτεινότητας + σκιά
-              ...(Platform.select({
-                ios: {
-                  shadowColor: '#3B82F6',
-                  shadowOpacity: isFocused ? 0.25 : 0.08,
-                  shadowRadius: isFocused ? 6 : 3,
-                  shadowOffset: { width: 0, height: isFocused ? 3 : 1 },
-                },
-                android: {
-                  elevation: isFocused ? 5 : 2,
-                },
-                web: {
-                  transition: 'all 0.15s ease-in-out',
-                  boxShadow: isFocused
-                    ? '0 0 6px rgba(59,130,246,0.4)' // 🔹 glow όταν εστιάζεται
-                    : '0 1px 3px rgba(0,0,0,0.06)', // απαλή σκιά όταν είναι idle
-                } as any,
-              }) as object),
-            },
-            styles.noFocusRingWeb,
-          ]}
-        />
+        <>
+          <TextInput
+            ref={inputRef}
+            value={value}
+            onChangeText={onChangeText}
+            keyboardType={keyboardType || 'default'}
+            underlineColorAndroid="transparent"
+            placeholderTextColor="#9CA3AF"
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => {
+              setIsFocused(false)
+              onBlur?.()
+            }}
+            maxLength={maxLength}
+            {...(Platform.OS === 'web' ? { inputMode } : {})}
+            style={[
+              {
+                backgroundColor: '#FFFFFF',
+                borderWidth: 1.5,
+                borderColor: error ? '#DC2626' : (isFocused ? '#3B82F6' : '#E5E7EB'),
+                borderRadius: 10,
+                paddingHorizontal: 10,
+                paddingVertical: 6,
+                fontSize: 14,
+                color: '#111827',
+                height: 34,
+                ...(Platform.select({
+                  ios: {
+                    shadowColor: error ? '#DC2626' : '#3B82F6',
+                    shadowOpacity: isFocused ? 0.25 : 0.08,
+                    shadowRadius: isFocused ? 6 : 3,
+                    shadowOffset: { width: 0, height: isFocused ? 3 : 1 },
+                  },
+                  android: {
+                    elevation: isFocused ? 5 : 2,
+                  },
+                  web: {
+                    transition: 'all 0.15s ease-in-out',
+                    boxShadow: isFocused
+                      ? '0 0 6px rgba(59,130,246,0.4)'
+                      : '0 1px 3px rgba(0,0,0,0.06)',
+                  } as any,
+                }) as object),
+              },
+              styles.noFocusRingWeb,
+            ]}
+          />
+          {!!error && !!errorMessage && (
+            <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>
+              {errorMessage}
+            </Text>
+          )}
+        </>
       ) : (
         <View
           style={{
@@ -259,6 +280,7 @@ function FieldRow({
     </View>
   )
 }
+
 
 /* helper: Badge  */
 function Badge({ label }: { label: string }) {
@@ -282,7 +304,7 @@ function KV({ label, value }: { label: string; value: string }) {
 /*  OrderCard  */
 function OrderCard({
   code, date, total, deposit, paymentMethod, notes, itemsCount,
-  expanded, onToggle, onViewItems, onEdit, onClose, status, onChangeStatus, hasDebt,
+  expanded, onToggle, onViewItems, onEdit, onClose, status, onChangeStatus, hasDebt, onDeletePress, receiptNumber,
 }: {
   code: string
   date: string
@@ -299,6 +321,9 @@ function OrderCard({
   status: string
   onChangeStatus: (v: string) => void
   hasDebt?: boolean
+  onDeletePress: () => void
+   receiptNumber?: string | null
+  
 }) {
   return (
     <TouchableOpacity activeOpacity={0.9} onPress={onToggle} style={styles.orderCard}>
@@ -310,6 +335,16 @@ function OrderCard({
         <Text style={styles.orderDateText}>{date}</Text>
         <View style={{ flex: 1 }} />
         <Text style={styles.orderTotalText}>{total}</Text>
+         <Pressable
+          onPress={(e: any) => {
+            if (Platform.OS === 'web' && e?.stopPropagation) e.stopPropagation()
+            onDeletePress()
+          }}
+          style={{ paddingHorizontal: 6, marginLeft: 6 }}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name="close" size={18} color="#9CA3AF" />
+        </Pressable>
       </View>
 
       {/* badges */}
@@ -323,6 +358,7 @@ function OrderCard({
       {expanded && (
         <View style={styles.orderDetailsBox}>
           <KV label="Ημερομηνία παραγγελίας" value={date} />
+          <KV label="Αρ. Δελτίου Παραλαβής" value={(receiptNumber || '').trim() || '—'} />
           <KV label="Αριθμός τεμαχίων" value={typeof itemsCount === 'number' ? String(itemsCount) : '—'} />
           <KV label="Συνολικό κόστος" value={total} />
           <KV label="Προκαταβολή" value={deposit} />
@@ -593,6 +629,26 @@ function YearRow({ year, subtitle, onPress }: { year: number; subtitle: string; 
   )
 }
 
+const normalizeAddrPairs = (v: string) => {
+  const pairs = v
+    .split('|')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .map(seg => {
+      const [addr, ...rest] = seg.split(',').map(x => x.trim()).filter(Boolean)
+      const city = (rest.join(', ') || '').trim()
+      return city ? `${addr}, ${city}` : addr
+    })
+  return pairs.join(' | ')
+}
+
+// πάρε την ΠΟΛΗ από το πρώτο ζεύγος ("Οδός, Πόλη | ...")
+const extractFirstCity = (v: string): string => {
+  const first = (v || '').split('|')[0] || ''
+  const parts = first.split(',').map(s => s.trim()).filter(Boolean)
+  return parts.length >= 2 ? parts.slice(1).join(', ') : ''
+}
+
 
 export default function CustomersScreen() {
 
@@ -619,6 +675,8 @@ export default function CustomersScreen() {
   const [addresses, setAddresses] = useState<string[]>([''])
   const [phones, setPhones] = useState<string[]>([''])
   const [afm, setAfm] = useState('')
+  const [pricePerSqm, setPricePerSqm] = useState('')
+  const [priceByCustomer, setPriceByCustomer] = useState<Record<string, string>>({})
   const [description, setDescription] = useState('') 
 
   // Delete confirm modal
@@ -640,11 +698,19 @@ export default function CustomersScreen() {
   const [orders, setOrders] = React.useState<any[]>([])
   const [ordersLoading, setOrdersLoading] = React.useState(false)
   const [expandedOrderId, setExpandedOrderId] = React.useState<string | null>(null)
+  const [editErr, setEditErr] = useState({
+    firstName: false,
+    lastName:  false,
+    phone:     false,
+    pairs:     false, 
+    afm:       false, 
+  })
   const [edit, setEdit] = useState({
     firstName: '',
     lastName: '',
     phone: '',
     address: '',
+    city: '',     
     afm: '',
     notesBase: '',     
     receiptNo: '',
@@ -672,6 +738,16 @@ const [filtersOpen, setFiltersOpen] = useState(false)
 
 const [yearOpen, setYearOpen] = useState<number | null>(null)
 const [showYearReport, setShowYearReport] = useState(false)
+
+const [afmError, setAfmError] = useState('')
+const [afmEditError, setAfmEditError] = useState('')
+
+const [confirmDeleteOrder, setConfirmDeleteOrder] = useState<{ orderId: string; code: string } | null>(null)
+
+const handleAfmChange = (text: string) => {
+  setAfm(text)
+  setAfmError('')  
+}
 
 // Filters state 
 type HistoryFilters = {
@@ -819,6 +895,28 @@ function groupItemsByOrder(items: any[]) {
   return map
 }
 
+async function allItemsWashedForOrder(customerId: string, orderId: string) {
+  try {
+    const rows: any[] = await listOrderItemsByCustomer(customerId, { limit: 5000 })
+    const oid = normId(orderId)
+
+    const items = rows.map((r: any) => {
+      const raw = r?._raw ?? {}
+      const rid = normId(r.order_id ?? r.orderId ?? raw.order_id ?? raw.orderId ?? '')
+      const status = (r.status ?? raw.status ?? '').toString().trim()
+      return { rid, status }
+    }).filter(it => it.rid === oid)
+
+    if (items.length === 0) return true
+    return items.every(it => it.status.toLowerCase() === 'πλυμένο')
+  } catch (e) {
+    console.error('allItemsWashedForOrder failed', e)
+    return true
+  }
+}
+
+
+
 
 React.useEffect(() => {
   if (!detailsOpen || !selectedCustomer) return;
@@ -842,6 +940,7 @@ React.useEffect(() => {
         lastModifiedAt: r.lastModifiedAt,
         status: r.orderStatus ?? 'Νέα',
         hasDebt: r.hasDebt ?? false,
+        receiptNumber: r.receiptNumber ?? r?._raw?.receiptNumber ?? r?._raw?.receipt_number ?? null,
       }));
 
       //  fetch ALL items for this customer (once)
@@ -851,6 +950,11 @@ React.useEffect(() => {
         const raw = r?._raw ?? {}
         const orderId =
           r.order_id ?? r.orderId ?? raw.order_id ?? raw.orderId ?? ''
+           const receiptNumber =
+            r.receiptNumber    ??
+            raw.receiptNumber  ??
+            raw.receipt_number ??
+            null
 
         return {
           id: r.id,
@@ -863,6 +967,7 @@ React.useEffect(() => {
           storage_status: r.storage_status ?? raw.storage_status ?? '',
           order_date: r.order_date ?? raw.order_date ?? '',
           created_at: r.created_at ?? raw.created_at,
+          receiptNumber,
         }
       })
 
@@ -1343,6 +1448,7 @@ const [itemEdit, setItemEdit] = useState({
           lastName: r.lastName || '',
           phone: r.phone || '',
           address: r.address || '',
+          city: r.city || '',  
           afm: r.afm || '',
           notes: r.notes || '',
           createdAt: r.createdAt,
@@ -1370,33 +1476,74 @@ const [itemEdit, setItemEdit] = useState({
 
   // load orders for each customer (relations)
   React.useEffect(() => {
-    if (!detailsOpen || activeTab !== 'orders' || !selectedCustomer) return
-    setOrdersLoading(true)
+    if (!detailsOpen || activeTab !== 'orders' || !selectedCustomer) return;
+
+    let cancelled = false;
+    setOrdersLoading(true);
 
     const sub = observeOrdersByCustomer(selectedCustomer.id, { limit: 200 })
-      .subscribe((rows: any[]) => {
-        const mapped = rows.map((r: any) => ({
-          id: r.id,                         // unique
-          customerId: selectedCustomer.id,
+      .subscribe(async (rows: any[]) => {
+        try {
+          if (cancelled) return;
 
-          // camelCase 
-          paymentMethod: r.paymentMethod,
-          deposit: r.deposit,
-          totalAmount: r.totalAmount,
-          notes: r.notes ?? null,
-          orderDate: r.orderDate,
-          createdAt: r.createdAt,
-          lastModifiedAt: r.lastModifiedAt,
-          itemsCount: null,
-          status: r.orderStatus ?? 'Νέα', 
-          hasDebt: r.hasDebt ?? false,
-        }))
-        setOrders(mapped)
-        setOrdersLoading(false)
-      })
+          //  map orders 
+          const mapped = rows.map((r: any) => ({
+            id: r.id,
+            customerId: selectedCustomer.id,
+            paymentMethod: r.paymentMethod ?? '',
+            deposit: r.deposit ?? null,
+            totalAmount: r.totalAmount ?? 0,
+            notes: r.notes ?? null,
+            orderDate: r.orderDate,
+            createdAt: r.createdAt,
+            lastModifiedAt: r.lastModifiedAt,
+            status: r.orderStatus ?? 'Νέα',
+            hasDebt: r.hasDebt ?? false,
+            receiptNumber:
+              r.receiptNumber ??
+              r?._raw?.receiptNumber ??
+              r?._raw?.receipt_number ??
+              null,
+          }));
 
-    return () => sub.unsubscribe()
-  }, [detailsOpen, activeTab, selectedCustomer])
+          // all items of the customer
+          const itemsRows: any[] = await listOrderItemsByCustomer(selectedCustomer.id, { limit: 5000 });
+          const itemsMapped = itemsRows.map((r: any) => {
+            const raw = r?._raw ?? {};
+            const orderId = r.order_id ?? r.orderId ?? raw.order_id ?? raw.orderId ?? '';
+            return {
+              id: r.id,
+              order_id: normId(orderId),
+              item_code: r.item_code ?? raw.item_code ?? '',
+              category: r.category ?? raw.category ?? '',
+              color: r.color ?? raw.color ?? '',
+              price: (r.price ?? raw.price) ?? 0,
+              status: r.status ?? raw.status ?? '',
+              storage_status: r.storage_status ?? raw.storage_status ?? '',
+              order_date: r.order_date ?? raw.order_date ?? '',
+              created_at: r.created_at ?? raw.created_at,
+            };
+          });
+
+          // itemsCount per order 
+          const byOrder = groupItemsByOrder(itemsMapped);
+          const withCounts = mapped.map(o => ({
+            ...o,
+            itemsCount: byOrder.get(normId(o.id))?.length ?? 0,
+          }));
+
+          if (!cancelled) setOrders(withCounts);
+        } catch (e) {
+          console.error('orders tab load failed', e);
+          if (!cancelled) Alert.alert('Σφάλμα', 'Αποτυχία φόρτωσης παραγγελιών.');
+        } finally {
+          if (!cancelled) setOrdersLoading(false);
+        }
+      });
+
+    return () => { cancelled = true; sub.unsubscribe(); };
+  }, [detailsOpen, activeTab, selectedCustomer]);
+
 
   React.useEffect(() => {
     if (!itemsOpen || !selectedCustomer) return
@@ -1411,6 +1558,11 @@ const [itemEdit, setItemEdit] = useState({
           const mapped = rows.map((r: any) => {
             const raw = r?._raw ?? {}
             const orderId = r.order_id ?? r.orderId ?? raw.order_id ?? raw.orderId ?? ''
+            const receiptNumber =
+              r.receiptNumber           ?? 
+              raw.receiptNumber         ?? 
+              raw.receipt_number        ?? 
+              null
             return {
               id: r.id,
               order_id: normId(orderId),                      
@@ -1422,6 +1574,7 @@ const [itemEdit, setItemEdit] = useState({
               storage_status: r.storage_status ?? raw.storage_status ?? '',
               order_date: r.order_date ?? raw.order_date ?? '',
               created_at: r.created_at ?? raw.created_at,
+              receiptNumber,
             }
           })
           console.log('[D] items mapped sample:', mapped[0])
@@ -1524,7 +1677,7 @@ const [itemEdit, setItemEdit] = useState({
     const nq = normalize(q)
     return customers.filter(c => {
       const fullName = `${c.firstName} ${c.lastName}`.trim()
-      const hay = [fullName, c.address ?? '', c.afm ?? '', c.phone ?? '', c.notes ?? '']
+      const hay = [fullName, c.address ?? '', c.city ?? '', c.afm ?? '', c.phone ?? '', c.notes ?? '']
         .map(x => normalize(x))
         .join(' | ')
       return hay.includes(nq) || hay.indexOf(nq) >= 0
@@ -1536,37 +1689,70 @@ const [itemEdit, setItemEdit] = useState({
     setFirstName(''); 
     setLastName('')
     setAddresses(['']); 
+    setCities(['']);  
     setPhones([''])
     setAfm(''); 
+    setAfmError(''); 
+    setPricePerSqm('')
     setDescription('')
     setErrors({ firstName: false, lastName: false, addresses: false, phones: false })
     setOpenForm(true)
   }
 
+  // when editing customer's info
+  function validateEdit() {
+    const next = {
+      firstName: !edit.firstName.trim(),
+      lastName:  !edit.lastName.trim(),
+      phone:     !edit.phone.trim(),
+      pairs:     !(pairsCombined.trim() || composePairs(edit.address, edit.city).trim()),
+      afm:       false,
+    }
+    setEditErr(next)
+    if (Object.values(next).some(Boolean)) {
+      Alert.alert('Συμπλήρωσε τα υποχρεωτικά πεδία', 'Όσα πεδία είναι κενά έχουν επισημανθεί.')
+      return false
+    }
+    return true
+  }
+  //Διεύθυνση, Πόλη | ...
+  const extractPrimaryCity = (combined: string) => {
+    const first = (combined ?? '').split('|')[0] ?? ''
+    const parts = first.split(',').map(s => s.trim())
+    // ό,τι υπάρχει μετά το πρώτο comma το θεωρούμε πόλη (υποστηρίζει και "Αθήνα, Κέντρο")
+    return parts.slice(1).join(', ')
+  }
+
+  const [pairsCombined, setPairsCombined] = useState('') // "addr, city | addr, city"
+
   // open customer card
   function openCustomerCard(customer: DBCustomer) {
-    // clean last history-data & state 
-    setYearOpen(null)
-    setHistOrders([])
-    setHistItems([])
     const { desc, receiptNo, pricePerSqm } = parseNotes(customer.notes)
     setSelectedCustomer(customer)
+
+    const addressPipe = customer.address || ''
+    const cityPipe    = customer.city    || ''
+    setPairsCombined(composePairs(addressPipe, cityPipe))   // <<— για το ενιαίο input
+
     setEdit({
       firstName: customer.firstName || '',
       lastName:  customer.lastName  || '',
       phone:     customer.phone     || '',
-      address:   customer.address   || '',
-      afm:       customer.afm       || '',
+      address:   addressPipe,   // raw pipes
+      city:      cityPipe,      // raw pipes
+      afm:       customer.afm   || '',
       notesBase: desc || '',
       receiptNo: receiptNo || '',
-      pricePerSqm: pricePerSqm || '',
+      pricePerSqm: priceByCustomer[customer.id] || '',
     })
     setActiveTab('details')
     setEditMode(false)
     setExpandedOrderId(null)
     setDetailsOpen(true)
   }
+
   function startEdit() { setEditMode(true) }
+
   function cancelEdit() {
     if (!selectedCustomer) return
     const { desc, receiptNo, pricePerSqm } = parseNotes(selectedCustomer.notes)
@@ -1575,52 +1761,168 @@ const [itemEdit, setItemEdit] = useState({
       lastName:  selectedCustomer.lastName  || '',
       phone:     selectedCustomer.phone     || '',
       address:   selectedCustomer.address   || '',
+      city:      selectedCustomer.city      || '',
       afm:       selectedCustomer.afm       || '',
       notesBase: desc || '',
       receiptNo: receiptNo || '',
       pricePerSqm: pricePerSqm || '',
     })
+    setPairsCombined(
+      composePairs(selectedCustomer.address || '', selectedCustomer.city || '')
+    )
     setEditMode(false)
   }
 
-  // UPDATE customer
-  async function saveEdit() {
-    const actorId = String(user?.id ?? (user as any)?.uid ?? (user as any)?._id ?? 'system')
-    if (!selectedCustomer) return
-    try {
-      const newNotes = composeNotes(edit.notesBase, edit.receiptNo, edit.pricePerSqm)
-      await updateCustomer(selectedCustomer.id, {
-        firstName: edit.firstName.trim(),
-        lastName:  edit.lastName.trim(),
-        phone:     edit.phone.trim(),
-        address:   edit.address.trim(),
-        afm:       edit.afm.trim(),
-        notes:     newNotes,
-      },actorId)
+  function askDeleteOrder(o: any) {
+    const code = `#${o.id.slice(0, 6).toUpperCase()}`
+    setConfirmDeleteOrder({ orderId: o.id, code })
+  }
 
-      // sync modal
-      setSelectedCustomer(prev =>
-        prev ? {
-          ...prev,
+async function doDeleteOrderNow(orderId: string) {
+  try {
+    const actorId = String(user?.id ?? (user as any)?.uid ?? (user as any)?._id ?? 'system')
+
+    // 1) Διαγραφή (items → order → log) με μία κλήση
+    await deleteOrderCascade(orderId, actorId)
+
+    // 2) Optimistic UI updates
+    setOrders(prev => prev.filter(o => o.id !== orderId))
+    setHistOrders(prev => prev.filter(o => o.id !== orderId))
+    setHistItems(prev => prev.filter(it => normId(it.order_id) !== normId(orderId)))
+    setExpandedOrderId(prev => (prev === orderId ? null : prev))
+
+    if (selectedCustomer) {
+      setPendingReturnsByCustomer(prev => {
+        const list = (prev[selectedCustomer.id] || []).filter(oid => oid !== orderId)
+        return { ...prev, [selectedCustomer.id]: list }
+      })
+    }
+
+    Alert.alert('OK', 'Η παραγγελία διαγράφηκε.')
+  } catch (e) {
+    console.error('Delete order failed:', e)
+    Alert.alert('Σφάλμα', 'Η διαγραφή παραγγελίας απέτυχε.')
+  } finally {
+    setConfirmDeleteOrder(null)
+  }
+}
+
+function setOrderStatusLocal(orderId: string, status: string, hasDebt?: boolean) {
+  setOrders(prev => prev.map(o =>
+    o.id === orderId ? { ...o, status, ...(hasDebt !== undefined ? { hasDebt } : {}) } : o
+  ))
+}
+
+async function persistOrderStatus(orderId: string, status: string, hasDebt?: boolean) {
+  try {
+    await updateOrder(orderId, { orderStatus: status, ...(hasDebt !== undefined ? { hasDebt } : {}) }, userId)
+  } catch (e) {
+    console.error('updateOrder failed', e)
+    Alert.alert('Σφάλμα', 'Η ενημέρωση κατάστασης απέτυχε.')
+  }
+}
+
+async function handleChangeStatus(item: any, nextStatus: string) {
+  const orderId = item.id
+
+  // Η δική σου υπάρχουσα ροή για "Παραδόθηκε"
+  if (nextStatus === 'Παραδόθηκε') {
+    setConfirmDelivered({ orderId })
+    return
+  }
+
+  // ΝΕΑ ροή για "Έτοιμη"
+  if (nextStatus === 'Έτοιμη') {
+    if (!selectedCustomer) {
+      // fallback: απλά θέσε "Έτοιμη" τοπικά + persist (hasDebt false όπως πριν)
+      setOrderStatusLocal(orderId, 'Έτοιμη', false)
+      persistOrderStatus(orderId, 'Έτοιμη', false)
+      return
+    }
+
+    const ok = await allItemsWashedForOrder(selectedCustomer.id, orderId)
+    if (ok) {
+      setOrderStatusLocal(orderId, 'Έτοιμη', false)
+      persistOrderStatus(orderId, 'Έτοιμη', false)
+    } else {
+      setConfirmReadyForce({ orderId }) // δείξε modal «Ναι/Όχι»
+    }
+    return
+  }
+
+  // Ό,τι άλλο status → όπως πριν: αλλάζουμε και καθαρίζουμε hasDebt
+  setOrderStatusLocal(orderId, nextStatus, false)
+  persistOrderStatus(orderId, nextStatus, false)
+}
+
+  // update customer
+  async function saveEdit() {
+    if (!selectedCustomer) return
+
+    if (!validateEdit()) return
+
+    const actorId = String(user?.id ?? (user as any)?.uid ?? (user as any)?._id ?? 'system')
+
+    try {
+      setAfmEditError('')
+      const newNotes = composeNotes(edit.notesBase, edit.receiptNo, edit.pricePerSqm)
+      const combinedSource = (pairsCombined && pairsCombined.trim())
+        ? pairsCombined
+        : composePairs(edit.address, edit.city)
+
+      const parsed = parsePairs(combinedSource)
+      const addressPipe = parsed.addressPipe.trim()  
+      const cityPipe    = parsed.cityPipe.trim()     
+
+      await updateCustomer(
+        selectedCustomer.id,
+        {
           firstName: edit.firstName.trim(),
           lastName:  edit.lastName.trim(),
           phone:     edit.phone.trim(),
-          address:   edit.address.trim(),
+          address:   addressPipe,
+          city:      cityPipe,
           afm:       edit.afm.trim(),
           notes:     newNotes,
-          lastModifiedAt: Date.now(),
-        } : prev
+        },
+        actorId
       )
+
+      setPriceByCustomer(prev => {
+        const next = { ...prev }
+        const v = (edit.pricePerSqm || '').trim()
+        if (v) next[selectedCustomer!.id] = Number(v).toFixed(2)
+        else delete next[selectedCustomer!.id]
+        return next
+      })
+
+      setSelectedCustomer(prev => prev ? {
+        ...prev,
+        firstName: edit.firstName.trim(),
+        lastName:  edit.lastName.trim(),
+        phone:     edit.phone.trim(),
+        address:   addressPipe,
+        city:      cityPipe,
+        afm:       edit.afm.trim(),
+        notes:     newNotes,
+        lastModifiedAt: Date.now(),
+      } : prev)
+
+      setPairsCombined(composePairs(addressPipe, cityPipe))
+
       setEditMode(false)
 
       setDetailsOpen(false)
-      router.replace('/customers') 
-
+      router.replace('/customers')
       Alert.alert('OK', 'Τα στοιχεία πελάτη ενημερώθηκαν.')
-    } catch (e) {
-      console.error('Update failed:', e)
-      Alert.alert('Σφάλμα', 'Η αποθήκευση απέτυχε.')
-    }
+      } catch (err: any) {
+        const msg = (err?.message ?? String(err)).toString()
+        if (msg.toLowerCase().includes('αφμ')) {
+          setAfmEditError(msg)   
+          return
+        }
+        Alert.alert('Σφάλμα', 'Η αποθήκευση απέτυχε.')
+      }
   }
 
   // edit customer's order
@@ -1630,19 +1932,28 @@ const [itemEdit, setItemEdit] = useState({
   }
 
   // Multi-input helpers
-  const addAddress = () => setAddresses(prev => [...prev, ''])
+  const addAddress = () => {
+    setAddresses([...addresses, ''])
+    setCities([...cities, ''])
+  }
   const addPhone = () => setPhones(prev => [...prev, ''])
   const updateAddress = (idx: number, val: string) =>
     setAddresses(prev => prev.map((a, i) => (i === idx ? val : a)))
   const updatePhone = (idx: number, val: string) =>
     setPhones(prev => prev.map((p, i) => (i === idx ? val : p)))
-  const removeAddress = (idx: number) => setAddresses(prev => prev.filter((_, i) => i !== idx))
+  const removeAddress = (index: number) => {
+    const newAddresses = addresses.filter((_, i) => i !== index)
+    const newCities = cities.filter((_, i) => i !== index)
+    setAddresses(newAddresses)
+    setCities(newCities)
+  }
   const removePhone = (idx: number) => setPhones(prev => prev.filter((_, i) => i !== idx))
 
   // INSERT new customer (as-is)
   async function handleSaveCustomer() {
     const cleanPhones = phones.map(p => p.trim()).filter(Boolean)
     const cleanAddresses = addresses.map(a => a.trim()).filter(Boolean)
+    const cleanCities    = cities.map(c => c.trim()) 
 
     const nextErrors = {
       firstName: !firstName.trim(),
@@ -1658,6 +1969,7 @@ const [itemEdit, setItemEdit] = useState({
     const phone = cleanPhones.join(' | ')
     const address = cleanAddresses.join(' | ')
     const notesBlock = (description?.trim() || '')
+    const city    = cleanCities.join(' | ')  
 
     try {
       const rec = await createCustomer({
@@ -1665,17 +1977,31 @@ const [itemEdit, setItemEdit] = useState({
         lastName: lastName.trim(),
         phone,
         address,
+        city,
         afm: afm.trim() || undefined,
         notes: notesBlock || undefined,
       }, userId)
 
+      if (rec?.id && pricePerSqm.trim()) {
+        setPriceByCustomer(prev => ({
+          ...prev,
+          [rec.id]: Number(pricePerSqm.replace(',', '.')).toFixed(2)
+        }))
+      }
+
       setOpenForm(false)
       Alert.alert('OK', 'Ο πελάτης προστέθηκε.')
-    } catch (e) {
-      console.error('Σφάλμα κατά την προσθήκη πελάτη:', e)
-      Alert.alert('Σφάλμα', 'Κάτι πήγε στραβά. Δοκίμασε ξανά.')
+      } catch (err: any) {
+        const msg = (err?.message ?? String(err)).toString()
+        if (msg.toLowerCase().includes('αφμ')) {
+          setAfmError(msg)   
+          return
+        }
+        Alert.alert('Σφάλμα', 'Κάτι πήγε στραβά. Δοκίμασε ξανά.')
+      }
     }
-  }
+
+
 
   // Open confirm modal for deletion
   function onDeleteCustomerPressed(id: string) {
@@ -1698,19 +2024,10 @@ const [itemEdit, setItemEdit] = useState({
     }
   }
 
-  async function handleChangeOrderStatus(orderId: string, newStatus: string) {
-  try {
 
-    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus } : o))
 
-  } catch (e) {
-    console.error('update order status failed', e)
-    Alert.alert('Σφάλμα', 'Αποτυχία ενημέρωσης κατάστασης.')
-  }
-}
-
-// για επιβεβαίωση όταν επιλέγεται "Παραδόθηκε"
 const [confirmDelivered, setConfirmDelivered] = useState<{ orderId: string } | null>(null)
+const [confirmReadyForce, setConfirmReadyForce] = useState<{ orderId: string } | null>(null)
 
 // if items not delivered
 // 2ο popup: κρατάμε και ποια παραγγελία είναι
@@ -1718,6 +2035,16 @@ const [returnsPrompt, setReturnsPrompt] = useState<{ customerId: string; orderId
 
 // Λίστα από orderIds ανά πελάτη
 const [pendingReturnsByCustomer, setPendingReturnsByCustomer] = useState<Record<string, string[]>>({})
+
+
+const [cities, setCities] = useState([''])
+
+const updateCity = (index: number, value: string) => {
+  const newCities = [...cities]
+  newCities[index] = value
+  setCities(newCities)
+}
+
 
 // load on mount
 useEffect(() => {
@@ -1732,11 +2059,72 @@ useEffect(() => {
   load()
 }, [])
 
+
+useEffect(() => {
+  const load = async () => {
+    try {
+      const raw = await AsyncStorage.getItem('pricePerSqmByCustomer')
+      if (raw) setPriceByCustomer(JSON.parse(raw))
+    } catch (e) {
+      console.error('Failed to load pricePerSqmByCustomer', e)
+    }
+  }
+  load()
+}, [])
+
+// persist mapping
+useEffect(() => {
+  AsyncStorage.setItem('pricePerSqmByCustomer', JSON.stringify(priceByCustomer))
+}, [priceByCustomer])
+
 // persist on change
 useEffect(() => {
   AsyncStorage.setItem('pendingReturnsByCustomer', JSON.stringify(pendingReturnsByCustomer))
 }, [pendingReturnsByCustomer])
 
+const addrList = React.useMemo(
+  () => (edit.address || '').split('|').map(s => s.trim()).filter(Boolean),
+  [edit.address]
+)
+const cityList = React.useMemo(
+  () => (edit.city || '').split('|').map(s => s.trim()),
+  [edit.city]
+)
+
+
+const splitPipe = (s: string) =>
+  (s || '').split('|').map(x => x.trim()).filter(Boolean)
+
+/** "addr1, city1 | addr2, city2" -> { addressPipe: "addr1 | addr2", cityPipe: "city1 | city2" } */
+function parsePairs(pairs: string) {
+  const segs = splitPipe(pairs)
+  const addrs: string[] = []
+  const cities: string[] = []
+  for (const seg of segs) {
+    const [addr, ...rest] = seg.split(',').map(x => x.trim()).filter(Boolean)
+    const city = rest.join(', ')
+    addrs.push(addr || '')
+    cities.push(city || '')
+  }
+  return {
+    addressPipe: addrs.filter(Boolean).join(' | '),
+    cityPipe: cities.filter(Boolean).join(' | ')
+  }
+}
+
+/** addressPipe + cityPipe -> "addr1, city1 | addr2, city2" */
+function composePairs(addressPipe: string, cityPipe: string) {
+  const A = splitPipe(addressPipe)
+  const C = splitPipe(cityPipe)
+  const n = Math.max(A.length, C.length)
+  const parts: string[] = []
+  for (let i = 0; i < n; i++) {
+    const a = (A[i] || '').trim()
+    const c = (C[i] || '').trim()
+    parts.push(c ? `${a}, ${c}` : a)
+  }
+  return parts.filter(Boolean).join(' | ')
+}
 
 
 function DeliveryConfirmModal({
@@ -1771,17 +2159,7 @@ function DeliveryConfirmModal({
             Πλήρωσε;
           </Text>
           <View style={{ flexDirection: 'row', justifyContent: 'space-evenly' }}>
-            <TouchableOpacity
-              onPress={onCancel}
-              style={{
-                backgroundColor: '#F3F4F6',
-                paddingVertical: 10,
-                paddingHorizontal: 20,
-                borderRadius: 8,
-              }}
-            >
-              <Text style={{ color: '#374151', fontWeight: '600' }}>Όχι</Text>
-            </TouchableOpacity>
+
             <TouchableOpacity
               onPress={onConfirm}
               style={{
@@ -1792,6 +2170,18 @@ function DeliveryConfirmModal({
               }}
             >
               <Text style={{ color: 'white', fontWeight: '600' }}>Ναι</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={onCancel}
+              style={{
+                backgroundColor: '#F3F4F6',
+                paddingVertical: 10,
+                paddingHorizontal: 20,
+                borderRadius: 8,
+              }}
+            >
+              <Text style={{ color: '#374151', fontWeight: '600' }}>Όχι</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1851,17 +2241,6 @@ function ReturnsConfirmModal({
           </Text>
 
           <View style={{ flexDirection: 'row', justifyContent: 'space-evenly' }}>
-            <TouchableOpacity
-              onPress={onNo}
-              style={{
-                backgroundColor: '#F3F4F6',
-                paddingVertical: 10,
-                paddingHorizontal: 20,
-                borderRadius: 8,
-              }}
-            >
-              <Text style={{ color: '#374151', fontWeight: '600' }}>Όχι</Text>
-            </TouchableOpacity>
 
             <TouchableOpacity
               onPress={onYes}
@@ -1874,6 +2253,142 @@ function ReturnsConfirmModal({
             >
               <Text style={{ color: 'white', fontWeight: '600' }}>Ναι</Text>
             </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={onNo}
+              style={{
+                backgroundColor: '#F3F4F6',
+                paddingVertical: 10,
+                paddingHorizontal: 20,
+                borderRadius: 8,
+              }}
+            >
+              <Text style={{ color: '#374151', fontWeight: '600' }}>Όχι</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  )
+}
+
+function OrderDeleteModal({
+  visible,
+  orderCode,
+  onYes,
+  onNo,
+}: {
+  visible: boolean
+  orderCode: string
+  onYes: () => void | Promise<void>
+  onNo: () => void | Promise<void>
+}) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onNo}
+    >
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: 'rgba(0,0,0,0.4)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          padding: 24,
+        }}
+      >
+        <View
+          style={{
+            backgroundColor: '#fff',
+            borderRadius: 12,
+            padding: 22,
+            width: '90%',
+            maxWidth: 420,
+          }}
+        >
+          <Text
+            style={{
+              fontSize: 18,
+              fontWeight: '400',
+              textAlign: 'center',
+              marginBottom: 10,
+            }}
+          >
+            Διαγραφή παραγγελίας
+          </Text>
+
+          <Text
+            style={{
+              fontSize: 15,
+              textAlign: 'center',
+              color: '#374151',
+              marginBottom: 22,
+            }}
+          >
+            Είστε σίγουρος ότι θέλετε να διαγράψετε την παραγγελία “{orderCode}”;
+          </Text>
+
+          <View style={{ flexDirection: 'row', justifyContent: 'space-evenly' }}>
+            <TouchableOpacity
+              onPress={onNo}
+              style={{
+                backgroundColor: '#F3F4F6',
+                paddingVertical: 10,
+                paddingHorizontal: 20,
+                borderRadius: 8,
+              }}
+            >
+              <Text style={{ color: '#374151', fontWeight: '400' }}>Όχι</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={onYes}
+              style={{
+                backgroundColor: '#EF4444',
+                paddingVertical: 10,
+                paddingHorizontal: 20,
+                borderRadius: 8,
+              }}
+            >
+              <Text style={{ color: 'white', fontWeight: '400' }}>
+                Ναι, διαγραφή
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  )
+}
+
+function ReadyForceConfirmModal({
+  visible,
+  onYes,
+  onNo,
+}: {
+  visible: boolean
+  onYes: () => void | Promise<void>
+  onNo: () => void | Promise<void>
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onNo}>
+      <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+        <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 24, width: '90%', maxWidth: 420 }}>
+          <Text style={{ fontSize: 18, fontWeight: '400', marginBottom: 10, textAlign: 'center' }}>
+            Μη πλυμένα τεμάχια
+          </Text>
+          <Text style={{ fontSize: 15, color: '#374151', textAlign: 'center', marginBottom: 22 }}>
+            Δεν είναι όλα τα τεμάχια της παραγγελίας πλυμμένα. Είστε σίγουρος ότι θέλετε να την θέσετε σε «Έτοιμη»;
+          </Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-evenly' }}>
+            <TouchableOpacity onPress={onNo} style={{ backgroundColor: '#F3F4F6', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8 }}>
+              <Text style={{ color: '#374151', fontWeight: '400' }}>Όχι</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={onYes} style={{ backgroundColor: '#3B82F6', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8 }}>
+              <Text style={{ color: 'white', fontWeight: '400' }}>Ναι</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </View>
@@ -1882,8 +2397,6 @@ function ReturnsConfirmModal({
 }
 
 
-
-  
   return (
     <Page>
       <AppHeader showBack /* onLogout={() => router.replace('/')} */ />
@@ -1956,10 +2469,14 @@ function ReturnsConfirmModal({
                 .map((s: string) => s.trim())
                 .filter(Boolean)[0] || ''
 
-                const firstAddress = (item.address || '')
-                  .split('|')
-                  .map((s: string) => s.trim())
-                  .filter(Boolean)[0] || ''
+                const addrListItem = (item.address || '').split('|').map((s: string) => s.trim()).filter(Boolean)
+                const cityListItem = (item.city || '').split('|').map((s: string) => s.trim())
+                const firstAddr = addrListItem[0] || ''
+                const firstCity = cityListItem[0] || ''
+                const firstAddrLine = firstAddr
+                  ? (firstCity ? `${firstAddr}, ${firstCity}` : firstAddr)
+                  : '—'
+
 
                 return (
                   <TouchableOpacity style={styles.row} onPress={() => openCustomerCard(item)}>
@@ -1976,7 +2493,7 @@ function ReturnsConfirmModal({
                       <View style={styles.detailsColumn}>
                         <Text style={styles.detailText}>{firstPhone ? `☎ ${firstPhone}` : '☎ —'}</Text>
                         <Text style={styles.detailText} numberOfLines={1} ellipsizeMode="tail">
-                          {firstAddress ? `📍 ${firstAddress}` : '📍 —'}
+                          {`📍 ${firstAddrLine}`}
                         </Text>
                       </View>
                     </View>
@@ -2034,6 +2551,14 @@ function ReturnsConfirmModal({
                     style={[styles.input, errors.firstName && styles.inputError]}
                     placeholder="Εισάγετε το όνομα"
                     placeholderTextColor={colors.muted}
+                    autoCapitalize="words"
+
+                    autoComplete="given-name"
+                    {...Platform.select({
+                      ios:     { textContentType: 'givenName' },
+                      android: { autoComplete: 'given-name', importantForAutofill: 'yes' as any },
+                      web:     { autoComplete: 'given-name' },
+                    })}
                   />
                   {errors.firstName && <Text style={styles.errorText}>Το όνομα είναι υποχρεωτικό.</Text>}
                 </View>
@@ -2050,6 +2575,14 @@ function ReturnsConfirmModal({
                     style={[styles.input, errors.lastName && styles.inputError]}
                     placeholder="Εισάγετε το επώνυμο"
                     placeholderTextColor={colors.muted}
+                    autoCapitalize="words"
+
+                    autoComplete="family-name"
+                    {...Platform.select({
+                      ios:     { textContentType: 'familyName' },
+                      android: { autoComplete: 'family-name', importantForAutofill: 'yes' as any },
+                      web:     { autoComplete: 'family-name' },
+                    })}
                   />
                   {errors.lastName && <Text style={styles.errorText}>Το επώνυμο είναι υποχρεωτικό.</Text>}
                 </View>
@@ -2058,28 +2591,53 @@ function ReturnsConfirmModal({
               {/* Διευθύνσεις */}
               <View style={styles.group}>
                 <View style={styles.groupHeader}>
-                  <Text style={styles.label}>Διευθύνσεις *</Text>
+                  <Text style={styles.label}>Διευθύνση, Πόλη *</Text>
                   <TouchableOpacity onPress={addAddress} style={styles.linkBtn}>
                     <Text style={styles.linkBtnText}>+ Προσθήκη</Text>
                   </TouchableOpacity>
                 </View>
 
                 {addresses.map((addr, idx) => (
-                  <View key={`addr-${idx}`} style={styles.addRow}>
+                  <View key={`addr-${idx}`} style={[styles.addRow, { gap: 8 }]}>
+                    {/* Διεύθυνση */}
                     <TextInput
                       value={addr}
                       onChangeText={(v) => {
                         updateAddress(idx, v)
-                        if (errors.addresses && v.trim()) setErrors(s => ({ ...s, addresses: false }))
+                        if (errors.addresses && v.trim()) setErrors((s) => ({ ...s, addresses: false }))
                       }}
                       style={[
                         styles.input,
-                        styles.flex1,
-                        errors.addresses && idx === 0 && styles.inputError, // κόκκινο στο πρώτο όταν άδειες όλες
+                        { flex: 1 },
+                        errors.addresses && idx === 0 && styles.inputError,
                       ]}
                       placeholder="Διεύθυνση"
                       placeholderTextColor={colors.muted}
+                      autoCapitalize="words"
+
+                      autoComplete={idx === 0 ? 'street-address' : 'off'}
+                      {...Platform.select({
+                        ios:     idx === 0 ? { textContentType: 'fullStreetAddress' } : { textContentType: 'none' as any },
+                        android: { autoComplete: idx === 0 ? 'postal-address' : 'off', importantForAutofill: (idx === 0 ? 'yes' : 'no') as any },
+                        web:     { autoComplete: idx === 0 ? 'street-address' : 'off' },
+                      })}
                     />
+
+                    {/* Πόλη */}
+                    <TextInput
+                      value={cities[idx] || ''}
+                      onChangeText={(v) => updateCity(idx, v)}
+                      style={[styles.input, { flex: 0.8 }]}
+                      placeholder="Πόλη"
+                      placeholderTextColor={colors.muted}
+                      autoCapitalize="words"
+
+                       {...Platform.select({
+                        ios: { textContentType: idx === 0 ? 'addressCity' : 'none' as const },
+                        default: {},
+                      })}
+                    />
+
                     {addresses.length > 1 && (
                       <TouchableOpacity onPress={() => removeAddress(idx)} style={styles.removeBtn}>
                         <Text style={styles.removeBtnText}>✕</Text>
@@ -2092,7 +2650,6 @@ function ReturnsConfirmModal({
                   <Text style={styles.errorText}>Πρέπει να προσθέσεις τουλάχιστον μία διεύθυνση.</Text>
                 )}
               </View>
-
 
               {/* Τηλέφωνα | ΑΦΜ */}
               <View style={styles.row2}>
@@ -2115,11 +2672,18 @@ function ReturnsConfirmModal({
                         style={[
                           styles.input,
                           styles.flex1,
-                          errors.phones && idx === 0 && styles.inputError, // κόκκινο στο πρώτο αν όλα άδεια
+                          errors.phones && idx === 0 && styles.inputError, 
                         ]}
                         keyboardType="phone-pad"
                         placeholder="Τηλέφωνο"
                         placeholderTextColor={colors.muted}
+
+                        autoComplete={idx === 0 ? 'tel' : 'off'}
+                        {...Platform.select({
+                          ios:     idx === 0 ? { textContentType: 'telephoneNumber' } : { textContentType: 'none' as any },
+                          android: { autoComplete: idx === 0 ? 'tel' : 'off', importantForAutofill: (idx === 0 ? 'yes' : 'no') as any },
+                          web:     { autoComplete: idx === 0 ? 'tel' : 'off' },
+                        })}
                       />
                       {phones.length > 1 && (
                         <TouchableOpacity onPress={() => removePhone(idx)} style={styles.removeBtn}>
@@ -2134,21 +2698,71 @@ function ReturnsConfirmModal({
                   )}
                 </View>
 
-
-
+                {/* ΑΦΜ (όπως είναι, χωρίς autofill) */}
                 <View style={[styles.inputWrap, styles.flex1]}>
                   <Text style={styles.label}>ΑΦΜ (προαιρετικό)</Text>
                   <TextInput
                     value={afm}
-                    onChangeText={setAfm}
-                    style={styles.input}
+                    onChangeText={(raw) => {
+                      const digits = (raw || '').replace(/\D/g, '')
+                      if (digits.length > 9) {
+                        setAfm(digits.slice(0, 9))
+                        setAfmError('Το ΑΦΜ είναι ακριβώς 9 ψηφία.')
+                        return
+                      }
+                      setAfm(digits)
+                      if (digits.length === 9) setAfmError('')
+                      else if (digits.length > 0) setAfmError('Το ΑΦΜ πρέπει να έχει 9 ψηφία.')
+                      else setAfmError('')
+                    }}
+                    onBlur={() => {
+                      if (afm && !/^\d{9}$/.test(afm)) setAfmError('Το ΑΦΜ πρέπει να έχει 9 ψηφία.')
+                    }}
+                    style={[styles.input, afmError ? { borderColor: 'red' } : null]}
                     keyboardType="number-pad"
+                    inputMode="numeric"
                     placeholder="9 ψηφία"
                     placeholderTextColor={colors.muted}
                     maxLength={9}
+                    // 🔒 off
+                    autoComplete="off"
+                    {...Platform.select({
+                      ios:     { textContentType: 'none' as any },
+                      android: { autoComplete: 'off', importantForAutofill: 'no' as any },
+                      web:     { autoComplete: 'off' },
+                    })}
                   />
+                  {afmError ? (
+                    <Text style={{ color: 'red', marginTop: 4, fontSize: 11 }}>Το ΑΦΜ πρέπει να έχει 9 ψηφία.</Text>
+                  ) : null}
                 </View>
               </View>
+
+
+              {/* Τιμή/τ.μ. (προαιρετικό) */}
+              <View style={[styles.inputWrap, styles.flex1, { marginTop: 10 }]}>
+                <Text style={styles.label}>Τιμή/τ.μ. (προαιρετικό)</Text>
+                <View style={{ position: 'relative' }}>
+                  <TextInput
+                    value={pricePerSqm}
+                    onChangeText={(raw) => {
+                      const v = (raw || '').replace(/[^0-9.,]/g, '').replace(',', '.')
+                      setPricePerSqm(v)
+                    }}
+                    onBlur={() => {
+                      if (pricePerSqm && !isNaN(Number(pricePerSqm))) {
+                        setPricePerSqm(Number(pricePerSqm).toFixed(2))
+                      }
+                    }}
+                    keyboardType="decimal-pad"
+                    placeholder="0.00"
+                    placeholderTextColor={colors.muted}
+                    style={[styles.input, { paddingLeft: 28 }]}
+                  />
+                  <Text style={{ position: 'absolute', left: 10, top: 10, color: '#9CA3AF' }}>€</Text>
+                </View>
+              </View>
+
 
 
               {/* Περιγραφή → notes */}
@@ -2275,28 +2889,130 @@ function ReturnsConfirmModal({
                     showsVerticalScrollIndicator
                   >
                     {/*  Βασικά */}
-                    <FieldRow label="Όνομα" value={edit.firstName} editable={editMode}
-                      onChangeText={(v) => setEdit(s => ({ ...s, firstName: v }))} />
-                    <FieldRow label="Επώνυμο" value={edit.lastName} editable={editMode}
-                      onChangeText={(v) => setEdit(s => ({ ...s, lastName: v }))} />
+                    <FieldRow
+                      label="Όνομα"
+                      value={edit.firstName}
+                      editable={editMode}
+                      onChangeText={(v) => {
+                        setEdit(s => ({ ...s, firstName: v }))
+                        // καθάρισε error όταν γράφει κάτι
+                        if (editErr.firstName && v.trim()) setEditErr(s => ({ ...s, firstName: false }))
+                      }}
+                    />
+                    {editMode && editErr.firstName && (
+                      <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>
+                        Το όνομα είναι υποχρεωτικό.
+                      </Text>
+                    )}
+
+                    <FieldRow
+                      label="Επώνυμο"
+                      value={edit.lastName}
+                      editable={editMode}
+                      onChangeText={(v) => {
+                        setEdit(s => ({ ...s, lastName: v }))
+                        if (editErr.lastName && v.trim()) setEditErr(s => ({ ...s, lastName: false }))
+                      }}
+                    />
+                    {editMode && editErr.lastName && (
+                      <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>
+                        Το επώνυμο είναι υποχρεωτικό.
+                      </Text>
+                    )}
 
                     <View style={styles.hairline} />
 
                     {/*  Επικοινωνία */}
-                    
-                    <FieldRow label="Τηλέφωνο" value={edit.phone} editable={editMode}
+                    <FieldRow
+                      label="Τηλέφωνο"
+                      value={edit.phone}
+                      editable={editMode}
                       keyboardType="phone-pad"
-                      onChangeText={(v) => setEdit(s => ({ ...s, phone: v }))} />
-                    <FieldRow label="Διεύθυνση" value={edit.address} editable={editMode}
-                      onChangeText={(v) => setEdit(s => ({ ...s, address: v }))} />
+                      onChangeText={(v) => {
+                        setEdit(s => ({ ...s, phone: v }))
+                        if (editErr.phone && v.trim()) setEditErr(s => ({ ...s, phone: false }))
+                      }}
+                    />
+                    {editMode && editErr.phone && (
+                      <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>
+                        Το τηλέφωνο είναι υποχρεωτικό.
+                      </Text>
+                    )}
+
+                    <FieldRow
+                      label="Διεύθυνση, Πόλη"
+                      value={pairsCombined}
+                      editable={editMode}
+                      onChangeText={(v) => {
+                        setPairsCombined(v)
+                        if (editErr.pairs && v.trim()) setEditErr(s => ({ ...s, pairs: false }))
+                      }}
+                      onBlur={() => {
+                        const { addressPipe, cityPipe } = parsePairs(pairsCombined)
+                        setEdit(s => ({ ...s, address: addressPipe, city: cityPipe }))
+                      }}
+                    />
+
+                    {/* when editing */}
+                    {editMode && (
+                      <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>
+                        Π.χ: Οδός1, Πόλη1 | Οδός2, Πόλη2
+                      </Text>
+                    )}
 
                     <View style={styles.hairline} />
 
-
-                    
-                    <FieldRow label="ΑΦΜ" value={edit.afm} editable={editMode}
+                    <FieldRow
+                      label="ΑΦΜ"
+                      value={edit.afm}
+                      editable={editMode}
                       keyboardType="number-pad"
-                      onChangeText={(v) => setEdit(s => ({ ...s, afm: v }))} />
+                      inputMode="numeric"
+                      maxLength={9}
+                      onChangeText={(raw) => {
+                        // only num
+                        const digits = (raw || '').replace(/\D/g, '')
+                        /// >9 --> error
+                        if (digits.length > 9) {
+                          setEdit(s => ({ ...s, afm: digits.slice(0, 9) }))
+                          setAfmEditError('Το ΑΦΜ είναι ακριβώς 9 ψηφία.')
+                          return
+                        }
+                        setEdit(s => ({ ...s, afm: digits }))
+
+                        if (digits.length === 9) {
+                          setAfmEditError('')
+                        } else if (digits.length > 0) {
+                          setAfmEditError('Το ΑΦΜ πρέπει να έχει 9 ψηφία.')
+                        } else {
+                          setAfmEditError('')
+                        }
+                      }}
+                      onBlur={() => {
+                        if (edit.afm && !/^\d{9}$/.test(edit.afm)) {
+                          setAfmEditError('Το ΑΦΜ πρέπει να έχει 9 ψηφία.')
+                        }
+                      }}
+                      error={!!afmEditError}
+                      errorMessage={afmEditError}
+                    />
+
+                    <FieldRow
+                      label="Τιμή/τ.μ. (προαιρετικό)"
+                      value={edit.pricePerSqm}
+                      editable={editMode}
+                      keyboardType="decimal-pad"
+                      onChangeText={(raw) => {
+                        const v = (raw || '').replace(/[^0-9.,]/g, '').replace(',', '.')
+                        setEdit(s => ({ ...s, pricePerSqm: v }))
+                      }}
+                      onBlur={() => {
+                        const v = (edit.pricePerSqm || '').trim()
+                        if (v && !isNaN(Number(v))) {
+                          setEdit(s => ({ ...s, pricePerSqm: Number(v).toFixed(2) }))
+                        }
+                      }}
+                    />
 
                   </ScrollView>
 
@@ -2379,9 +3095,7 @@ function ReturnsConfirmModal({
             )}
 
 
-  
-
-            {/* 🔁 ΛΙΣΤΑ ΠΑΡΑΓΓΕΛΙΩΝ */}
+            {/*  ΛΙΣΤΑ ΠΑΡΑΓΓΕΛΙΩΝ */}
             {activeTab === 'orders' && (
               <View style={styles.detailsUnifiedCard}>
                 {/* Header */}
@@ -2442,23 +3156,53 @@ function ReturnsConfirmModal({
                           onClose={() => setExpandedOrderId(null)}
                           status={item.status || 'Νέα'}
                           hasDebt={!!item.hasDebt} 
-                          onChangeStatus={(v) => {
+                          onChangeStatus={async (v) => {
+
                             if (v === 'Παραδόθηκε') {
-                              // confirm id payed or not
                               setConfirmDelivered({ orderId: item.id })
-                            } else {
-                              // else hasDept = false
-                              setOrders(prev =>
-                                prev.map(o =>
-                                  o.id === item.id ? { ...o, status: v, hasDebt: false } : o
-                                )
-                              )
-                              updateOrder(item.id, { orderStatus: v, hasDebt: false }, userId).catch((e) => {
+                              return
+                            }
+
+                            if (v === 'Έτοιμη') {
+                              try {
+                                if (!selectedCustomer) {
+
+                                  setOrders(prev =>
+                                    prev.map(o => (o.id === item.id ? { ...o, status: 'Έτοιμη', hasDebt: false } : o))
+                                  )
+                                  await updateOrder(item.id, { orderStatus: 'Έτοιμη', hasDebt: false }, userId)
+                                  return
+                                }
+
+                                const allWashed = await allItemsWashedForOrder(selectedCustomer.id, item.id)
+                                if (allWashed) {
+
+                                  setOrders(prev =>
+                                    prev.map(o => (o.id === item.id ? { ...o, status: 'Έτοιμη', hasDebt: false } : o))
+                                  )
+                                  await updateOrder(item.id, { orderStatus: 'Έτοιμη', hasDebt: false }, userId)
+                                } else {
+                                  // υπάρχουν "Άπλυτα" -> άνοιξε modal επιβεβαίωσης
+                                  setConfirmReadyForce({ orderId: item.id })
+                                }
+                              } catch (e) {
                                 console.error('updateOrder status failed', e)
                                 Alert.alert('Σφάλμα', 'Η ενημέρωση κατάστασης απέτυχε.')
-                              })
+                              }
+                              return
                             }
+
+                            setOrders(prev =>
+                              prev.map(o => (o.id === item.id ? { ...o, status: v, hasDebt: false } : o))
+                            )
+                            updateOrder(item.id, { orderStatus: v, hasDebt: false }, userId).catch((e) => {
+                              console.error('updateOrder status failed', e)
+                              Alert.alert('Σφάλμα', 'Η ενημέρωση κατάστασης απέτυχε.')
+                            })
                           }}
+
+                          onDeletePress={() => askDeleteOrder(item)}
+                          receiptNumber={item.receiptNumber}
                         />
                       )}
                     />
@@ -2470,21 +3214,12 @@ function ReturnsConfirmModal({
 
             {activeTab === 'history' && !showYearReport && (
               <View style={styles.detailsUnifiedCard}>
-                {/* Header ΜΟΝΟ με τίτλο και (προαιρετικά) Φίλτρα */}
+                {/* Header  */}
                 <View style={styles.detailsInnerHeader}>
                   <Text style={styles.detailsInnerTitle}>Ιστορικό</Text>
                   <View style={{ flexDirection: 'row' }}>
-                    <TouchableOpacity
-                      onPress={() => {
-                        setFiltersDraft(appliedFilters ?? { category: null, color: null, yearFrom: null, yearTo: null })
-                        setModalResultsFilters(null)
-                        setFiltersOpen(true)
-                      }}
-                      style={styles.editBtnInside}
-                    >
-                      <Text style={styles.editBtnInsideText}>Φίλτρα</Text>
-                    </TouchableOpacity>
-                                      </View>
+                    
+                    </View>
                 </View>
 
                 {/* Περιεχόμενο: μόνο λίστα ετών */}
@@ -2793,200 +3528,10 @@ function ReturnsConfirmModal({
             ]}
           >
             
-            {/* Header */}
-            <View style={styles.itemsHeaderRow}>
-              <Text style={styles.itemsTitle}>Φίλτρα</Text>
-              <View style={{ flex: 1 }} />
-              <Pressable onPress={() => setFiltersOpen(false)} hitSlop={8}>
-                <Ionicons name="close" size={22} color="#6B7280" />
-              </Pressable>
-            </View>
-
-            {/* Body (όΧΙ ScrollView εδώ) ⬇️ */}
-            <View style={{ flex: 1, padding: 12, paddingBottom: 18 }}>
-              {/* Χρονική Περίοδος */}
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                <Ionicons name="time-outline" size={16} color="#111827" style={{ marginRight: 6 }} />
-                <Text style={{ fontWeight: '700', color: '#111827' }}>Χρονική Περίοδος</Text>
-              </View>
-
-              <View style={styles.row2}>
-                <View style={[styles.inputWrap, styles.flex1]}>
-                  <Text style={styles.smallLabel}>Από</Text>
-                  <View style={styles.filledInput}>
-                    <TextInput
-                      value={filtersDraft.yearFrom ? String(filtersDraft.yearFrom) : ''}
-                      onChangeText={(v) => setFiltersDraft(s => ({ ...s, yearFrom: v ? Number(v) : null }))}
-                      keyboardType="number-pad"
-                      placeholder="π.χ. 2020"
-                      placeholderTextColor="#9CA3AF"
-                      style={styles.filledInputText}
-                    />
-                  </View>
-                </View>
-
-                <View style={[styles.inputWrap, styles.flex1]}>
-                  <Text style={styles.smallLabel}>Έως</Text>
-                  <View style={styles.filledInput}>
-                    <TextInput
-                      value={filtersDraft.yearTo ? String(filtersDraft.yearTo) : ''}
-                      onChangeText={(v) => setFiltersDraft(s => ({ ...s, yearTo: v ? Number(v) : null }))}
-                      keyboardType="number-pad"
-                      placeholder="π.χ. 2025"
-                      placeholderTextColor="#9CA3AF"
-                      style={styles.filledInputText}
-                    />
-                  </View>
-                </View>
-              </View>
-
-              {/* Κατηγορία & Χρώμα */}
-              <View style={styles.row2}>
-                <View style={[styles.inputWrap, styles.flex1]}>
-                  <Text style={styles.smallLabel}>Κατηγορία</Text>
-                  <SimpleDropdown
-                    value={filtersDraft.category ?? ''}
-                    placeholder="Όλες"
-                    options={['(Όλες)', ...CATEGORY_OPTIONS]}
-                    onChange={(v) => setFiltersDraft(s => ({ ...s, category: v === '(Όλες)' ? null : v }))}
-                  />
-                </View>
-
-                <View style={[styles.inputWrap, styles.flex1]}>
-                  <Text style={styles.smallLabel}>Χρώμα</Text>
-                  <SimpleDropdown
-                    value={filtersDraft.color ?? ''}
-                    placeholder="Όλα"
-                    options={['(Όλα)', ...COLOR_OPTIONS]}
-                    onChange={(v) => setFiltersDraft(s => ({ ...s, color: v === '(Όλα)' ? null : v }))}
-                  />
-                </View>
-              </View>
-
-              {/* Actions */}
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10 }}>
-                <TouchableOpacity
-                  onPress={async () => {
-                    setAppliedFilters(filtersDraft)         // 1) εφαρμόζει στο History
-                    setModalResultsFilters(filtersDraft)    // 2) εμφανίζει ΤΩΡΑ αποτελέσματα στο modal
-
-                    try {
-                      await logFilterHistoryApplied(userId, {
-                        customerId: selectedCustomer?.id ?? null,
-                        ...filtersDraft,
-                        at: new Date().toISOString(),
-                      })
-                    } catch (e) {
-                      console.warn('logFilterHistoryApplied failed', e)
-                    }
-
-                    // Δεν κλείνουμε το modal — μένεις να δεις τα αποτελέσματα
-                  }}
-                  style={[styles.primaryBtn, { flexDirection: 'row', alignItems: 'center' }]}
-                  activeOpacity={0.9}
-                >
-                  <Ionicons name="search-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
-                  <Text style={styles.primaryBtnText}>Εφαρμογή Φίλτρων</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  onPress={() => {
-                    setFiltersDraft({ category: null, color: null, yearFrom: null, yearTo: null })
-                    // αν θες να καθαρίζει και τα αποτελέσματα:
-                    // setModalResultsFilters(null)
-                  }}
-                  style={[styles.secondaryBtn, { marginLeft: 10 }]}
-                >
-                  <Text style={styles.secondaryBtnText}>Καθαρισμός</Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Divider */}
-              <View style={{ height: 14 }} />
-              <View style={{ height: 1, backgroundColor: '#E5E7EB' }} />
-              <View style={{ height: 10 }} />
-
-              {/* Αποτελέσματα Φίλτρων */}
-              <Text style={{ fontWeight: '800', fontSize: 16, color: '#111827', marginBottom: 8 }}>
-                Αποτελέσματα Φίλτρων
-              </Text>
-
-              {/* ⬇️ Scroll ΜΟΝΟ στο section των αποτελεσμάτων */}
-              <View style={{ flex: 1, maxHeight: 340 }}>
-                <ScrollView
-                  style={{ flex: 1 }}
-                  contentContainerStyle={{ paddingBottom: 16 }}
-                  showsVerticalScrollIndicator={true}
-                >
-                  {/* KPIs bar */}
-                  <View style={{ flexDirection: 'row', backgroundColor: '#F3F4F6', borderRadius: 12, padding: 10, marginBottom: 10 }}>
-                    <View style={{ flex: 1, alignItems: 'center' }}>
-                      <Text style={{ fontWeight: '800', fontSize: 18 }}>{modalPreviewCount}</Text>
-                      <Text style={{ color: '#6B7280' }}>Τεμάχια</Text>
-                    </View>
-
-                    <View style={{ width: 1, backgroundColor: '#E5E7EB' }} />
-
-                    <View style={{ flex: 1, alignItems: 'center' }}>
-                      <Text style={{ fontWeight: '800', fontSize: 18 }}>{fmtMoney(modalPreviewAmount)}</Text>
-                      <Text style={{ color: '#6B7280' }}>Συνολικό ποσό</Text>
-                    </View>
-
-                    <View style={{ width: 1, backgroundColor: '#E5E7EB' }} />
-
-                    <View style={{ flex: 1, alignItems: 'center' }}>
-                      <Text style={{ fontWeight: '800', fontSize: 18 }}>{modalPreviewYears}</Text>
-                      <Text style={{ color: '#6B7280' }}>Χρονιές</Text>
-                    </View>
-                  </View>
-
-                  {/* Λίστα προεπισκόπησης */}
-                  {modalPreviewItems.length === 0 ? (
-                    <View style={styles.emptyState}>
-                      <Text style={styles.emptyTitle}>Δεν βρέθηκαν τεμάχια</Text>
-                      <Text style={styles.emptySubtitle}>Δοκίμασε να αλλάξεις τα φίλτρα.</Text>
-                    </View>
-                  ) : (
-                    <View>
-                      {modalPreviewItems.map((it) => {
-                        const y = yearOf(it.order_date || it.created_at) ?? '—'
-                        // γραμματική για 1/πολλά
-                        const pieceLabel = 1 === 1 ? 'τεμάχιο' : 'τεμάχια' // αν αργότερα ομαδοποιήσεις, άλλαξέ το ανά πλήθος
-                        return (
-                          <View
-                            key={it.id}
-                            style={{
-                              backgroundColor: '#fff',
-                              borderRadius: 14,
-                              padding: 12,
-                              marginBottom: 8,
-                              borderWidth: 1,
-                              borderColor: '#E5E7EB',
-                            }}
-                          >
-                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                              <Text style={{ fontWeight: '700', color: '#111827', flex: 1 }}>
-                                {`${normCat(it.category)} - ${(it.color || '—').toLowerCase()}`}
-                              </Text>
-                              <Text style={{ fontWeight: '700' }}>{fmtMoney(it.price)}</Text>
-                            </View>
-                            <Text style={{ color: '#6B7280', marginTop: 2 }}>
-                              {y} • 1 {pieceLabel}
-                            </Text>
-                            {/* Αν έχεις sqm: <Text style={{ color: '#6B7280' }}>{it.sqm} τ.μ.</Text> */}
-                          </View>
-                        )
-                      })}
-                    </View>
-                  )}
-                </ScrollView>
-              </View>
-            </View>
-            {/* /Body */}
+            
           </View>
         </View>
       </Modal>
-
 
 
       {/* Full-screen Year Report */}
@@ -3039,19 +3584,8 @@ function ReturnsConfirmModal({
                 const { totals, cat, color, ordersOfYear, itemsOfYear } = computeYearData(yearOpen)
                 return (
                   <View>
-                    {/* Χρησιμοποίησε το ήδη υπάρχον render, ή το YearDetailView αν το εξάγεις */}
                     {renderYearDetail(yearOpen)}
-                    {/* ή:
-                    <YearDetailView
-                      year={yearOpen}
-                      totals={totals}
-                      cat={cat}
-                      color={color}
-                      ordersOfYear={ordersOfYear}
-                      itemsOfYear={itemsOfYear}
-                      itemsByOrderAll={itemsByOrderAll}
-                    />
-                    */}
+                    
                   </View>
                 )
               })()}
@@ -3132,9 +3666,35 @@ function ReturnsConfirmModal({
         }}
       />
 
+    <OrderDeleteModal
+      visible={!!confirmDeleteOrder}
+      orderCode={confirmDeleteOrder?.code || '—'}
+      onYes={() =>
+        confirmDeleteOrder
+          ? doDeleteOrderNow(confirmDeleteOrder.orderId)
+          : undefined
+      }
+      onNo={() => setConfirmDeleteOrder(null)}
+    />
 
+    <ReadyForceConfirmModal
+      visible={!!confirmReadyForce}
+      onYes={async () => {
+        if (!confirmReadyForce) return
+        const orderId = confirmReadyForce.orderId
+        setConfirmReadyForce(null)
+        setOrders(prev => prev.map(o => (o.id === orderId ? { ...o, status: 'Έτοιμη', hasDebt: false } : o)))
+        try {
+          await updateOrder(orderId, { orderStatus: 'Έτοιμη', hasDebt: false }, userId)
+        } catch (e) {
+          console.error('updateOrder status failed', e)
+          Alert.alert('Σφάλμα', 'Η ενημέρωση κατάστασης απέτυχε.')
+        }
+      }}
+      onNo={() => setConfirmReadyForce(null)}
+    />
 
-
+      
 
     </Page>
   )

@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useEffect, useMemo, useState } from 'react'
 import {
@@ -86,7 +87,12 @@ type PieceItem = {
   orderDate?: string
   saved?: boolean          
   newlyAdded?: boolean    
-  dirty?: boolean          
+  dirty?: boolean  
+  pricingType?: 'perPiece' | 'perM2'
+  lengthM?: string
+  widthM?: string
+  areaM2?: string
+  pricePerM2?: string        
 }
 
 const ddmmyyyy = (d = new Date()) => {
@@ -183,7 +189,10 @@ export default function EditOrderScreen() {
     shelf: '',
     status: 'άπλυτο' as 'άπλυτο' | 'πλυμένο',
     workType: 'Επιστροφή' as 'Επιστροφή' | 'Φύλαξη',
-
+    pricingType: 'perPiece' as 'perPiece' | 'perM2',
+    lengthM: '',
+    widthM: '',
+    pricePerM2: '',
   })
   const [statusOpen, setStatusOpen] = useState(false)
   const activePiece = pieceModalIndex !== null ? pieces[pieceModalIndex] : null
@@ -211,6 +220,62 @@ export default function EditOrderScreen() {
 
   const [hasDebt, setHasDebt] = useState<boolean | null>(null) // hasDept
   const [confirmDeliveredOpen, setConfirmDeliveredOpen] = useState(false) //payed/not
+  const [returnsPromptOpen, setReturnsPromptOpen] = useState(false)
+
+  const toNum = (s?: string) => parseFloat((s || '').replace(',', '.')) || 0;
+  const fix2 = (n: number) => n.toFixed(2);
+  const isRugCategory = (c?: string | null) =>
+  c === 'Χαλί' || c === 'Μοκέτα' || c === 'Διαδρομάκι';
+
+  // ADD — λίστα από orderIds ανά πελάτη, με persist
+const [pendingReturnsByCustomer, setPendingReturnsByCustomer] = useState<Record<string, string[]>>({})
+
+// load on mount
+useEffect(() => {
+  let cancelled = false
+  ;(async () => {
+    try {
+      const saved = await AsyncStorage.getItem('pendingReturnsByCustomer')
+      if (!cancelled && saved) setPendingReturnsByCustomer(JSON.parse(saved))
+    } catch (e) {
+      console.error('Failed to load pendingReturnsByCustomer', e)
+    }
+  })()
+  return () => { cancelled = true }
+}, [])
+
+// persist on change
+useEffect(() => {
+  AsyncStorage.setItem('pendingReturnsByCustomer', JSON.stringify(pendingReturnsByCustomer))
+    .catch(e => console.error('Failed to save pendingReturnsByCustomer', e))
+}, [pendingReturnsByCustomer])
+
+// Helpers
+const markReturnsPending = (customerId: string, orderId: string) => {
+  setPendingReturnsByCustomer(prev => {
+    const list = prev[customerId] || []
+    if (list.includes(orderId)) return prev
+    return { ...prev, [customerId]: [...list, orderId] }
+  })
+}
+
+const clearReturnsPending = (customerId: string, orderId: string) => {
+  setPendingReturnsByCustomer(prev => {
+    const list = prev[customerId] || []
+    if (!list.includes(orderId)) return prev
+    const next = list.filter(x => x !== orderId)
+    const copy = { ...prev }
+    if (next.length) copy[customerId] = next
+    else delete copy[customerId]
+    return copy
+  })
+}
+
+const isReturnsPending = useMemo(() => {
+  if (!selectedCustomer || !orderId) return false
+  return (pendingReturnsByCustomer[selectedCustomer] || []).includes(String(orderId))
+}, [pendingReturnsByCustomer, selectedCustomer, orderId])
+
 
   const orderStatusLabels: Record<string, string> = {
     new: 'Νέα',
@@ -280,20 +345,31 @@ export default function EditOrderScreen() {
           
         }])
 
-        const mapped: PieceItem[] = items.map((it: any) => ({
-          id: it.id,
-          category: it.category ?? null,
-          color: it.color ?? '',
-          code: it.item_code ?? '',
-          shelf: it.shelf ?? '',
-          status: (it.status as ('άπλυτο' | 'πλυμένο')) ?? 'άπλυτο',
-          workType: (it.storage_status as ('Επιστροφή' | 'Φύλαξη')) ?? 'Επιστροφή',
-          cost: (typeof it.price === 'number' ? it.price.toFixed(2) : (it.price ?? '0.00')).toString(),
-          orderDate: it.order_date || order.orderDate || '',
-          saved: true,
-          newlyAdded: false,
-          dirty: false,
-        }))
+        const mapped: PieceItem[] = items.map((it: any) => {
+          const cat = it.category ?? null
+          const perM2 = cat === 'Χαλί' || cat === 'Μοκέτα' || cat === 'Διαδρομάκι'
+
+          return {
+            id: it.id,
+            category: cat,
+            color: it.color ?? '',
+            code: it.item_code ?? '',
+            shelf: it.shelf ?? '',
+            status: (it.status as ('άπλυτο' | 'πλυμένο')) ?? 'άπλυτο',
+            workType: (it.storage_status as ('Επιστροφή' | 'Φύλαξη')) ?? 'Επιστροφή',
+            cost: (typeof it.price === 'number' ? it.price.toFixed(2) : (it.price ?? '0.00')).toString(),
+            orderDate: it.order_date || order.orderDate || '',
+            saved: true,
+            newlyAdded: false,
+            dirty: false,
+            pricingType: perM2 ? 'perM2' : 'perPiece',
+            lengthM: it.length_m ? String(it.length_m) : '',
+            widthM: it.width_m ? String(it.width_m) : '',
+            areaM2: it.area_m2 ? String(it.area_m2) : '',
+            pricePerM2: it.price_per_m2 ? String(it.price_per_m2) : '',
+          }
+        })
+
         if (!cancelled) {
           setPieces(mapped)
           setPiecesVisible(true)
@@ -359,6 +435,30 @@ export default function EditOrderScreen() {
   }, [pieces])
 
 
+
+  const [pricePerSqmByCustomer, setPricePerSqmByCustomer] =
+  useState<Record<string, string>>({})
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const raw = await AsyncStorage.getItem('pricePerSqmByCustomer')
+        if (!cancelled && raw) setPricePerSqmByCustomer(JSON.parse(raw))
+      } catch (e) {
+        console.error('Failed to load pricePerSqmByCustomer', e)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  const defaultPricePerM2 = useMemo(() => {
+    if (!selectedCustomer) return ''
+    return pricePerSqmByCustomer[selectedCustomer] || ''
+  }, [pricePerSqmByCustomer, selectedCustomer])
+
+
+
   const onChangeDeposit = (t: string) => {
     const cleaned = t.replace(/[^\d.,]/g, '')
     let dep = parseFloat(cleaned.replace(',', '.')) || 0
@@ -391,7 +491,8 @@ export default function EditOrderScreen() {
     return phone ? `${full} - ${phone}` : full
   }, [customers, selectedCustomer])
 
-  
+
+    
   /** pieces helpers*/
   const stepPieceCost = (index: number, delta: number) => {
     setPieces(prev =>
@@ -531,13 +632,21 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
     setPieceModalIndex(index)
     const p = pieces[index]
     const norm = (p.code ?? '').toUpperCase()
+
+    const perM2 = isRugCategory(p.category)
+
     setPieceForm({
       color: p.color ?? '',
       code: p.code ?? '',
       shelf: p.shelf ?? '',
       status: p.status ?? 'άπλυτο',
       workType: p.workType ?? 'Επιστροφή',
-
+      pricingType: perM2 ? 'perM2' : (p.pricingType ?? 'perPiece'),
+      lengthM: p.lengthM ?? '',
+      widthM: p.widthM ?? '',
+      pricePerM2: perM2
+      ? (p.pricePerM2 && p.pricePerM2 !== '' ? p.pricePerM2 : defaultPricePerM2)
+      : '',
 
     })
     setOriginalPieceCode(norm)   
@@ -558,31 +667,65 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
 
   // not saved in db yes
   const savePieceModal = () => {
-    if (pieceModalIndex === null) return
-    const active = pieces[pieceModalIndex]
-    if (!active) return
+  if (pieceModalIndex === null) return
+  const active = pieces[pieceModalIndex]
+  if (!active) return
 
-    if (!pieceForm.color.trim()) {
-      Alert.alert('Προσοχή', 'Το πεδίο Χρώμα είναι υποχρεωτικό.')
-      return
-    }
-    const upCode = (pieceForm.code || '').toUpperCase()
-    if (upCode && !/^[A-ZΑ-Ω]{3}\d{3}$/.test(upCode)) {
-      Alert.alert('Προσοχή', 'Ο Κωδικός πρέπει να είναι της μορφής XXX999 (π.χ. CHR001).')
-      return
-    }
-
-    updatePiece(pieceModalIndex, {
-      color: pieceForm.color.trim(),
-      code: upCode,
-      shelf: (pieceForm.shelf || '').toUpperCase(),
-      status: pieceForm.status,
-      workType: pieceForm.workType,
-      dirty: true,
-    })
-
-    closePieceModal()
+  if (!pieceForm.color.trim()) {
+    Alert.alert('Προσοχή', 'Το πεδίο Χρώμα είναι υποχρεωτικό.')
+    return
   }
+
+  const upCode = (pieceForm.code || '').toUpperCase()
+  if (upCode && !/^[A-ZΑ-Ω]{3}\d{3}$/.test(upCode)) {
+    Alert.alert('Προσοχή', 'Ο Κωδικός πρέπει να είναι της μορφής XXX999 (π.χ. CHR001).')
+    return
+  }
+
+  // ➜ per m² μόνο για Χαλί/Μοκέτα/Διαδρομάκι
+  const perM2 = isRugCategory(active.category)  // helper: Χαλί/Μοκέτα/Διαδρομάκι
+
+  // Αν είναι per m², κάνε validations & υπολογισμούς
+  let nextArea = ''
+  let nextCost = active.cost || '0.00'
+
+  if (perM2) {
+    const L = toNum(pieceForm.lengthM)      
+    const W = toNum(pieceForm.widthM)      
+    const P = toNum(pieceForm.pricePerM2)  
+
+    if (L <= 0 || W <= 0 || P <= 0) {
+      Alert.alert('Προσοχή', 'Συμπλήρωσε θετικές τιμές σε Μήκος, Πλάτος και Τιμή ανά τ.μ.')
+      return
+    }
+
+    const area = L * W
+    const cost = P * area
+    nextArea = fix2(area)     // π.χ. "4.32"
+    nextCost = fix2(cost)     // π.χ. "25.92"
+  }
+
+  updatePiece(pieceModalIndex, {
+    color: pieceForm.color.trim(),
+    code: upCode,
+    shelf: (pieceForm.shelf || '').toUpperCase(),
+    status: pieceForm.status,
+    workType: pieceForm.workType,
+
+    // --- ΝΕΑ πεδία / τιμολόγηση ανά τ.μ. μόνο για χαλί/μοκέτα/διαδρομάκι ---
+    pricingType: perM2 ? 'perM2' : 'perPiece',
+    lengthM: perM2 ? (pieceForm.lengthM || '') : undefined,
+    widthM:  perM2 ? (pieceForm.widthM  || '') : undefined,
+    pricePerM2: perM2 ? (pieceForm.pricePerM2 || '') : undefined,
+    areaM2: perM2 ? nextArea : undefined,
+    cost: perM2 ? nextCost : (active.cost || '0.00'),
+
+    dirty: true,
+  })
+
+  closePieceModal()
+}
+
 
   /**  Save Order */
   const onSave = async () => {
@@ -838,9 +981,9 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
                   </View>
 
 
-
                   {/* Ημερομηνία */}
-                  <View style={[styles.fieldGroup, styles.popHost]}>
+                  <View style={[styles.fieldGroup, styles.popHost, { minWidth: 200, flexBasis: 240 }]}>
+
                     <Text style={styles.inputLabelInline}>Ημερομηνία</Text>
                     <View style={[styles.amountInputWrap, { position: 'relative' }]}>
                       <TextInput
@@ -962,7 +1105,7 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
                   <View style={[styles.fieldGroup, { minWidth: 120, flexBasis: 140, flexShrink: 1 }]}>
                     <Text style={styles.inputLabelInline}>Κωδικός Τεμαχίου</Text>
 
-                    {/* ✅ Το κόκκινο περίγραμμα μπαίνει στο wrapper */}
+                    {/*  κόκκινο περίγραμμα --> wrapper */}
                     <View
                       style={[
                         styles.amountInputWrap,
@@ -986,10 +1129,11 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
                             setCodeErrors(prev => ({ ...prev, [idx]: false }))
                           }
                         }}
-                        placeholder="CHR001"
+                        placeholder="π.χ Χ00000"
+                         placeholderTextColor="#9CA3AF"
                         autoCapitalize="characters"
                         maxLength={6}
-                        // ❌ Μην έχει δικό του border
+  
                         style={[styles.amountInput, { borderWidth: 0, backgroundColor: 'transparent' }]}
                       />
                     </View>
@@ -1002,7 +1146,7 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
                     {/* Pattern */}
                     {Boolean(ord.itemCode) && !isItemCodeValid(ord.itemCode!) && (
                       <Text style={{ fontSize: 12, color: '#B91C1C', marginTop: 4 }}>
-                        Μορφή XXX999 (π.χ. CHR001)
+                        Μορφή X00000 
                       </Text>
                     )}
 
@@ -1433,7 +1577,10 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
         onRequestClose={closePieceModal}
       >
         <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
+          <View style={[
+            styles.modalCard,
+            pieceForm.pricingType === 'perM2' && styles.modalCardLarge, 
+          ]}>
             <View style={styles.modalHeader}>
               <Image
                 source={require('../../assets/images/box.png')}
@@ -1480,7 +1627,7 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
                 </View>
               </View>
 
-              {/* 2) Κωδικός / Ράφι */}
+              {/* 2) Κωδικός */}
               <View style={[styles.inputWrap, styles.flex1]}>
                 <Text style={styles.label}>Κωδικός τεμαχίου</Text>
                 <TextInput
@@ -1526,6 +1673,95 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
                 ) : null}
               </View>
 
+              {/*  Διαστάσεις & τιμή/τ.μ. για Χαλί/Μοκέτα/Διαδρομάκι */}
+              {pieceForm.pricingType === 'perM2' && (
+                <>
+                  <View style={styles.row2}>
+                    <View style={[styles.inputWrap, styles.flex1]}>
+                      <Text style={styles.label}>Μήκος (m)</Text>
+                      <TextInput
+                        value={pieceForm.lengthM}
+                        onChangeText={(v) => {
+                          const clean = v.replace(/[^\d.,]/g, '')
+                          setPieceForm(s => ({ ...s, lengthM: clean }))
+                          if (pieceModalIndex !== null) {
+                            const L = toNum(clean)
+                            const W = toNum(pieceForm.widthM)
+                            const P = toNum(pieceForm.pricePerM2)
+                            const area = L * W
+                            const cost = P * area
+                            updatePiece(pieceModalIndex, {
+                              lengthM: clean,
+                              areaM2: fix2(area),
+                              cost: fix2(cost),
+                              pricingType: 'perM2',
+                              dirty: true,
+                            })
+                          }
+                        }}
+                        placeholder="Εισάγετε μήκος"
+                        placeholderTextColor="rgba(0,0,0,0.35)"
+                        keyboardType={Platform.select({ ios: 'decimal-pad', android: 'numeric', default: 'numeric' })}
+                        inputMode="decimal"
+                        style={styles.input}
+                      />
+                    </View>
+
+                    <View style={[styles.inputWrap, styles.flex1]}>
+                      <Text style={styles.label}>Πλάτος (m)</Text>
+                      <TextInput
+                        value={pieceForm.widthM}
+                        onChangeText={(v) => {
+                          const clean = v.replace(/[^\d.,]/g, '')
+                          setPieceForm(s => ({ ...s, widthM: clean }))
+                          if (pieceModalIndex !== null) {
+                            const L = toNum(pieceForm.lengthM)
+                            const W = toNum(clean)
+                            const P = toNum(pieceForm.pricePerM2)
+                            const area = L * W
+                            const cost = P * area
+                            updatePiece(pieceModalIndex, {
+                              widthM: clean,
+                              areaM2: fix2(area),
+                              cost: fix2(cost),
+                              pricingType: 'perM2',
+                              dirty: true,
+                            })
+                          }
+                        }}
+                        placeholder="Εισάγετε πλάτος"
+                        placeholderTextColor="rgba(0,0,0,0.35)"
+                        keyboardType={Platform.select({ ios: 'decimal-pad', android: 'numeric', default: 'numeric' })}
+                        inputMode="decimal"
+                        style={styles.input}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={[styles.inputWrap, styles.flex1]}>
+                    <Text style={styles.label}>Τιμή ανά τ.μ. (€)</Text>
+                    <TextInput
+                      value={pieceForm.pricePerM2}
+                      editable={false}                
+                      selectTextOnFocus={false}     
+                      style={[styles.input, styles.lockedInput]}  
+                      placeholder="—"
+                      placeholderTextColor="rgba(0,0,0,0.35)"
+                    />
+
+                  </View>
+
+                  {/* Live preview υπολογισμών */}
+                  <View style={{ marginTop: 8 }}>
+                    <Text style={{ color: '#374151' }}>
+                      Τετραγωνικά: {fix2(toNum(pieceForm.lengthM) * toNum(pieceForm.widthM))} m²
+                    </Text>
+                    <Text style={{ color: '#111827', fontWeight: '600', marginTop: 2 }}>
+                      Υπολογισμένο Κόστος: {fix2(toNum(pieceForm.pricePerM2) * toNum(pieceForm.lengthM) * toNum(pieceForm.widthM))} €
+                    </Text>
+                  </View>
+                </>
+              )}
 
 
               {/* 4) Κατάσταση / Τύπος */}
@@ -1585,6 +1821,8 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
         </View>
       </Modal>
 
+
+
       <Modal
         visible={confirmDeliveredOpen}
         transparent
@@ -1613,17 +1851,6 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
             </Text>
 
             <View style={{ flexDirection: 'row', justifyContent: 'space-evenly' }}>
-              {/* Όχι = δεν πλήρωσε → hasDebt: true */}
-              <Pressable
-                onPress={() => {
-                  setOrderStatus('delivered')
-                  setHasDebt(true)
-                  setConfirmDeliveredOpen(false)
-                }}
-                style={{ backgroundColor: '#F3F4F6', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8 }}
-              >
-                <Text style={{ color: '#374151', fontWeight: '600' }}>Όχι</Text>
-              </Pressable>
 
               {/* Ναι = πλήρωσε → hasDebt: false */}
               <Pressable
@@ -1631,16 +1858,129 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
                   setOrderStatus('delivered')
                   setHasDebt(false)
                   setConfirmDeliveredOpen(false)
+                  setReturnsPromptOpen(true)
                 }}
                 style={{ backgroundColor: '#3B82F6', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8 }}
               >
                 <Text style={{ color: 'white', fontWeight: '600' }}>Ναι</Text>
               </Pressable>
+
+              {/* Όχι = δεν πλήρωσε → hasDebt: true */}
+              <Pressable
+                onPress={() => {
+                  setOrderStatus('delivered')
+                  setHasDebt(true)
+                  setConfirmDeliveredOpen(false)
+                  setReturnsPromptOpen(true)
+                }}
+                style={{ backgroundColor: '#F3F4F6', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8 }}
+              >
+                <Text style={{ color: '#374151', fontWeight: '600' }}>Όχι</Text>
+              </Pressable>
+
+              
             </View>
 
           </View>
         </View>
       </Modal>
+
+      {/* 2ο Modal: Επιστροφές */}
+      <Modal
+        visible={returnsPromptOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setReturnsPromptOpen(false)}
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.4)',
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: 24,
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: '#fff',
+              borderRadius: 12,
+              padding: 24,
+              width: '90%',
+              maxWidth: 360,
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 18,
+                fontWeight: '600',
+                marginBottom: 12,
+                textAlign: 'center',
+              }}
+            >
+              Υπολείπονται κομμάτια για επιστροφή;
+            </Text>
+            <Text
+              style={{
+                fontSize: 15,
+                textAlign: 'center',
+                marginBottom: 24,
+                color: '#374151',
+              }}
+            >
+              Θέλεις να σημειώσω ότι υπάρχουν κομμάτια προς επιστροφή;
+            </Text>
+
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+              {/* Ναι (ΑΡΙΣΤΕΡΑ) */}
+              <Pressable
+                onPress={() => {
+                  if (selectedCustomer && orderId) {
+                    markReturnsPending(selectedCustomer, String(orderId))
+                  }
+                  setReturnsPromptOpen(false)
+                  // (προαιρετικά) Alert.alert('OK', 'Σημειώθηκαν κομμάτια προς επιστροφή.')
+                }}
+                style={{
+                  marginLeft: 60,
+                  minWidth: 60,
+                  alignItems: 'center',
+                  backgroundColor: '#3B82F6',
+                  paddingVertical: 10,
+                  paddingHorizontal: 20,
+                  borderRadius: 8,
+                }}
+              >
+                <Text style={{ color: 'white', fontWeight: '600' }}>Ναι</Text>
+              </Pressable>
+
+              {/* Όχι (ΔΕΞΙΑ) */}
+              <Pressable
+                onPress={() => {
+                  if (selectedCustomer && orderId) {
+                    clearReturnsPending(selectedCustomer, String(orderId))
+                  }
+                  setReturnsPromptOpen(false)
+
+                }}
+                style={{
+                  marginRight: 60,
+                  minWidth: 60,
+                  alignItems: 'center',
+                  backgroundColor: '#F3F4F6',
+                  paddingVertical: 10,
+                  paddingHorizontal: 20,
+                  borderRadius: 8,
+                }}
+              >
+                <Text style={{ color: '#374151', fontWeight: '600' }}>Όχι</Text>
+              </Pressable>
+
+            </View>
+          </View>
+        </View>
+      </Modal>
+
 
 
 
@@ -2101,6 +2441,15 @@ dropdownMenuAbove: {
       web: { boxShadow: '0 12px 28px rgba(0,0,0,0.22)' } as any,
     }) as object),
   },
+
+  modalCardLarge: {
+    width: 720,              
+    maxWidth: '96%',
+    maxHeight: '90%',       
+    minHeight: 720,           
+    alignSelf: 'center',
+  },
+
   modalTopRightFab: {
     position: 'absolute',
     top: 10,
@@ -2123,7 +2472,13 @@ dropdownMenuAbove: {
   cancelBtn: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 10, backgroundColor: '#F1F1F1' },
   cancelBtnText: { color: '#333', fontSize: 15 },
 
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.25)', alignItems: 'center', justifyContent: 'center', padding: 18 },
+  modalBackdrop: {
+  flex: 1,
+  backgroundColor: 'rgba(0,0,0,0.4)',
+  justifyContent: 'center',
+  alignItems: 'center',
+  paddingVertical: 16,   // μικρό padding, όχι restriction
+},
   modalHeader: { alignItems: 'center', marginBottom: 12 },
   modalTitle: { fontSize: 18, fontWeight: '400', color: '#1F2A44', marginTop: 6 },
   modalSubtitle: { fontSize: 13, color: '#6B7280', marginTop: 2, textAlign: 'center' },

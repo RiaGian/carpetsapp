@@ -23,6 +23,13 @@ function splitPipeList(s: string | undefined | null): string[] {
     .filter(Boolean)
 }
 
+const pairAddressCity = (addresses: string[], cities: string[]) =>
+  addresses.map((a, i) => {
+    const addr = (a ?? '').trim()
+    const city = (cities[i] ?? '').trim()
+    return city ? `${addr}, ${city}` : addr
+  })
+
 async function getChildRows(customerId: string) {
   const phonesCollection = database.get('customer_phones')
   const addressesCollection = database.get('customer_addresses')
@@ -88,11 +95,16 @@ async function upsertPhoneRow(userId: string, customerId: string, phones: string
   }
 }
 
-async function upsertAddressRow(userId: string, customerId: string, addresses: string[]) {
+// services/customers.ts
+async function upsertAddressRow(
+  userId: string,
+  customerId: string,
+  entries: string[] // κάθε entry είναι "Διεύθυνση, Πόλη"
+) {
   const addrCol = database.get('customer_addresses')
   const parent = await database.get('customers').find(customerId)
-  const joined = addresses.map(norm).filter(Boolean).join(' | ')
 
+  const joined = entries.map(s => (s ?? '').trim()).filter(Boolean).join(' | ')
   const existing = await addrCol.query(Q.where('customer_id', customerId)).fetch()
 
   if (existing.length === 0) {
@@ -114,7 +126,7 @@ async function upsertAddressRow(userId: string, customerId: string, addresses: s
       [keep.address, ...rest.map(r => r.address), joined]
         .join(' | ')
         .split('|')
-        .map(s => norm(s))
+        .map(s => (s ?? '').trim())
         .filter(Boolean)
     )).join(' | ')
 
@@ -123,7 +135,7 @@ async function upsertAddressRow(userId: string, customerId: string, addresses: s
       await keep.update((r: any) => { r.address = merged })
       for (const r of rest) await r.destroyPermanently()
     })
-   await logUpdateCustomerAddress(userId, customerId, oldVal, merged)
+    await logUpdateCustomerAddress(userId, customerId, oldVal, merged)
     return
   }
 
@@ -135,6 +147,8 @@ async function upsertAddressRow(userId: string, customerId: string, addresses: s
     await logUpdateCustomerAddress(userId, customerId, oldVal, joined)
   }
 }
+
+
 
 
 // index-based sync -> UPDATE logs ...
@@ -227,20 +241,32 @@ export type NewCustomer = {
   lastName: string
   phone?: string
   address?: string
+  city?: string
   afm?: string
   notes?: string
 }
+
 // insert customer + phones/address + log
 export async function createCustomer(data: NewCustomer, userIdForLog: string = 'system') {
   const customers = database.get('customers')
 
   let newRecord: any = null
+
+  const afmClean = (data.afm ?? '').trim()
+  if (afmClean) {
+    const dup = await findCustomerByAfm(afmClean)
+    if (dup) {
+      throw new Error(`το ΑΦΜ ${afmClean} υπάρχει ήδη.`)
+    }
+  }
+
   await database.write(async () => {
     newRecord = await customers.create((rec: any) => {
       rec.firstName       = data.firstName.trim()
       rec.lastName        = data.lastName.trim()
       rec.phone           = data.phone ?? ''
-      rec.address         = data.address ?? ''
+      rec.address         = data.address ?? '' 
+      rec.city            = data.city ?? ''  
       rec.afm             = data.afm ?? ''
       rec.notes           = data.notes ?? ''
       const now           = Date.now()
@@ -261,9 +287,13 @@ export async function createCustomer(data: NewCustomer, userIdForLog: string = '
   try {
     const phonesList    = splitPipeList(newRecord.phone)
     const addressesList = splitPipeList(newRecord.address)
+    const citiesList    = splitPipeList(newRecord.city)     
 
     await upsertPhoneRow(userIdForLog, newRecord.id, phonesList)
-    await upsertAddressRow(userIdForLog, newRecord.id, addressesList)
+
+    const normalizedEntries = pairAddressCity(addressesList, citiesList)
+    await upsertAddressRow(userIdForLog, newRecord.id, normalizedEntries)
+
   } catch (err) {
     console.warn('createCustomer: contacts upsert failed:', err)
   }
@@ -275,6 +305,7 @@ export async function createCustomer(data: NewCustomer, userIdForLog: string = '
       lastName:  data.lastName,
       phone:     data.phone ?? '',
       address:   data.address ?? '',
+      city:      data.city ?? '',
       afm:       data.afm ?? '',
       notes:     data.notes ?? '',
     })
@@ -358,24 +389,43 @@ export type UpdateCustomer = Partial<{
   lastName: string
   phone: string
   address: string
+  city: string
   afm: string
   notes: string
 }>
 // update customer + phones/address + log
-export async function updateCustomer(id: string, data: UpdateCustomer,  userIdForLog: string = 'system') {
+// update customer + phones/address + log
+export async function updateCustomer(id: string, data: UpdateCustomer, userIdForLog: string = 'system') {
   const customers = database.get('customers')
+
+  // ⬇️ ΦΕΡΝΟΥΜΕ ΤΟΝ RECORD ΕΞΩ ΑΠΟ ΤΟ write
+  const rec: any = await customers.find(id)
+
+  // ⬇️ ΕΛΕΓΧΟΣ ΔΙΠΛΟΥ ΑΦΜ ΕΞΩ ΑΠΟ ΤΟ write (για να περάσει σωστά το throw στο UI)
+  if (typeof data.afm !== 'undefined') {
+    const nextAfm = (data.afm ?? '').trim()
+    const prevAfm = (rec.afm ?? '').trim()
+
+    if (nextAfm && nextAfm !== prevAfm) {
+      const dup = await findCustomerByAfm(nextAfm)
+      if (dup && dup.id !== id) {
+        // κράτα το μήνυμα όπως το θες να “πιάσει” το UI
+        throw new Error(`το ΑΦΜ ${nextAfm} υπάρχει ήδη.`)
+      }
+    }
+  }
+
   let oldValues: any = null
   let newValues: any = null
 
   await database.write(async () => {
-    const rec: any = await customers.find(id)
-
     // snapshot before
     oldValues = {
       firstName: rec.firstName,
       lastName:  rec.lastName,
       phone:     rec.phone,
       address:   rec.address,
+      city:      rec.city,
       afm:       rec.afm,
       notes:     rec.notes,
     }
@@ -385,6 +435,7 @@ export async function updateCustomer(id: string, data: UpdateCustomer,  userIdFo
       if (typeof data.lastName  !== 'undefined') r.lastName  = data.lastName.trim()
       if (typeof data.phone     !== 'undefined') r.phone     = data.phone ?? ''
       if (typeof data.address   !== 'undefined') r.address   = data.address ?? ''
+      if (typeof data.city      !== 'undefined') r.city      = data.city ?? ''
       if (typeof data.afm       !== 'undefined') r.afm       = data.afm ?? ''
       if (typeof data.notes     !== 'undefined') r.notes     = data.notes ?? ''
       r.lastModifiedAt = Date.now()
@@ -396,6 +447,7 @@ export async function updateCustomer(id: string, data: UpdateCustomer,  userIdFo
       lastName:  rec.lastName,
       phone:     rec.phone,
       address:   rec.address,
+      city:      rec.city,
       afm:       rec.afm,
       notes:     rec.notes,
     }
@@ -403,24 +455,32 @@ export async function updateCustomer(id: string, data: UpdateCustomer,  userIdFo
 
   console.log('Customer updated:', id, data)
 
-  // Activity log: UPDATE (best-effort)
+  // Activity log
   try {
     await logUpdateCustomer(userIdForLog, id, oldValues, newValues)
-    console.log('logUpdateCustomer OK')
   } catch (err) {
     console.warn('logUpdateCustomer failed:', err)
   }
 
-  //  Sync child single-row (pipe-joined) 
-try {
+  // Sync child single-row
+  try {
+    const newPhones     = splitPipeList(newValues.phone)
+    const addressesList = splitPipeList(newValues.address)
+    const citiesList    = splitPipeList(newValues.city)
+    const normalizedUpd = pairAddressCity(addressesList, citiesList)
 
-  const newPhones = splitPipeList(newValues.phone)
-  const newAddresses = splitPipeList(newValues.address)
-  await upsertPhoneRow(userIdForLog, id, newPhones)
-  await upsertAddressRow(userIdForLog, id, newAddresses)
-  console.log('updateCustomer: contacts single-row upserted')
-} catch (err) {
-  console.warn('updateCustomer: contacts upsert failed:', err)
-}
+    await upsertPhoneRow(userIdForLog, id, newPhones)
+    await upsertAddressRow(userIdForLog, id, normalizedUpd)
+  } catch (err) {
+    console.warn('updateCustomer: contacts upsert failed:', err)
+  }
 }
 
+
+
+// check for duplicates for afm
+export async function findCustomerByAfm(afm: string) {
+  const customers = database.get('customers')
+  const existing = await customers.query(Q.where('afm', afm.trim())).fetch()
+  return existing[0] ?? null
+}

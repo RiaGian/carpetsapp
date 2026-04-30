@@ -15,6 +15,7 @@ export default class Customer extends Model {
   @field('last_name') lastName!: string
   @field('phone') phone!: string
   @field('address') address!: string
+  @field('city') city!: string 
   @field('afm') afm!: string
   @field('notes') notes!: string
   @field('created_at') createdAt!: number

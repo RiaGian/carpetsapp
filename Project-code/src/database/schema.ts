@@ -22,6 +22,7 @@ export const schema = appSchema({
         { name: 'last_name', type: 'string' },
         { name: 'phone', type: 'string', isOptional: true },
         { name: 'address', type: 'string', isOptional: true },
+        { name: 'city', type: 'string', isOptional: true },
         { name: 'afm', type: 'string', isOptional: true },
         { name: 'notes', type: 'string', isOptional: true },
         { name: 'created_at', type: 'number' },
@@ -60,6 +61,7 @@ export const schema = appSchema({
         { name: 'order_date', type: 'string' }, 
         { name: 'order_status', type: 'string', isIndexed: true },
         { name: 'has_debt', type: 'boolean', isOptional: true },
+        { name: 'receipt_number', type: 'string', isOptional: true },
         { name: 'created_by', type: 'string', isIndexed: true }, // -> users.id
         { name: 'created_at', type: 'number' },
         { name: 'last_modified_at', type: 'number' },
