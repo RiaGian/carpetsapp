@@ -1,26 +1,26 @@
 // src/components/AppHeader.tsx
+import * as Device from 'expo-device';
 import { router, useLocalSearchParams } from 'expo-router';
-import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useAuth } from '../state/AuthProvider'; // ✅ παίρνουμε τον τρέχοντα χρήστη
+import { Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { logLogout } from '../services/activitylog';
+import { useAuth } from '../state/AuthProvider';
 import { colors } from '../theme/colors';
 
 type Props = {
-  showBack?: boolean;   // back
-  onLogout?: () => void; // custom logout handler 
+  showBack?: boolean;
+  onLogout?: () => void;
 };
 
 export default function AppHeader({ showBack = false, onLogout }: Props) {
   const params = useLocalSearchParams<Record<string, string>>();
-  const { user, signOut } = useAuth(); //  user from context (persistent)
+  const { user, signOut } = useAuth();
 
-  //  fallback)
   const paramName =
     (params?.name as string) ||
     (params?.displayName as string) ||
     (params?.username as string) ||
     (params?.user as string) ||
     '';
-
 
   const displayName = user?.name || user?.email || paramName || 'Χρήστης';
 
@@ -34,14 +34,25 @@ export default function AppHeader({ showBack = false, onLogout }: Props) {
   };
 
   const doLogout = async () => {
-    if (onLogout) return onLogout();
-    try {
-      await signOut();            // clean state + storage
-      router.replace('/');        // -> login
-    } catch {
-      router.replace('/');
+  if (onLogout) return onLogout();
+  try {
+    if (user?.id) {
+      await logLogout(
+        String(user.id),
+        Device.modelName || 'Unknown Device',
+        Platform.OS
+      );
+      console.log(' logLogout OK');
     }
-  };
+
+    await signOut();
+    router.replace('/');
+  } catch (err) {
+    console.warn('Logout error:', err);
+    router.replace('/');
+  }
+};
+
 
   return (
     <View style={styles.wrapper}>

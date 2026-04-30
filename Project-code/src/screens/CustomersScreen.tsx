@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useFocusEffect } from '@react-navigation/native'
 import * as Print from 'expo-print'
 import { router } from 'expo-router'
 import * as Sharing from 'expo-sharing'
-import React, { useCallback, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Alert,
   FlatList,
@@ -25,9 +26,11 @@ import Page from '../components/Page'
 import { logExportHistoryPDF, logFilterHistoryApplied, logViewCustomerHistory } from '../services/activitylog'
 import { createCustomer, deleteCustomer, observeCustomers, updateCustomer } from '../services/customer'
 import { listOrderItemsByCustomer, normId, updateOrderItem } from '../services/orderItems'
-import { observeOrdersByCustomer } from '../services/orders'
+import { observeOrdersByCustomer, updateOrder } from '../services/orders'
+import { useAuth } from '../state/AuthProvider'
 import { usePreview } from '../state/PreviewProvider'
 import { colors } from '../theme/colors'
+
 
 //  Helpers
 const normalize = (s: string) =>
@@ -75,8 +78,12 @@ function composeNotes(desc: string, receiptNo: string, pricePerSqm: string) {
   return parts.join(' | ')
 }
 
+function hasDebtNote(notes?: string | null) {
+  const { desc } = parseNotes(notes)
+  return /\bχρέος\b/i.test(desc || '')
+}
 
-/*  Helpers */
+
 /*  Helpers (ημερομηνίες ανθεκτικές σε dd/MM/yyyy, YYYY-MM-DD, ms) */
 function parseDateFlexible(input?: string | number | null) {
   if (input == null) return null
@@ -253,7 +260,6 @@ function FieldRow({
   )
 }
 
-
 /* helper: Badge  */
 function Badge({ label }: { label: string }) {
   return (
@@ -276,7 +282,7 @@ function KV({ label, value }: { label: string; value: string }) {
 /*  OrderCard  */
 function OrderCard({
   code, date, total, deposit, paymentMethod, notes, itemsCount,
-  expanded, onToggle, onViewItems, onEdit, onClose,
+  expanded, onToggle, onViewItems, onEdit, onClose, status, onChangeStatus, hasDebt,
 }: {
   code: string
   date: string
@@ -290,6 +296,9 @@ function OrderCard({
   onViewItems: () => void
   onEdit: () => void
   onClose: () => void
+  status: string
+  onChangeStatus: (v: string) => void
+  hasDebt?: boolean
 }) {
   return (
     <TouchableOpacity activeOpacity={0.9} onPress={onToggle} style={styles.orderCard}>
@@ -324,11 +333,18 @@ function OrderCard({
 
           {/* action bar */}
           <View style={styles.orderActionsRow}>
-            <TouchableOpacity onPress={onViewItems} style={[styles.actionBtn, styles.actionBtnGhost]}>
-              <Text style={styles.actionBtnGhostText}>Προβολή τεμαχίων</Text>
-            </TouchableOpacity>
-
             <View style={{ flex: 1 }} />
+
+             {/* dropdown */}
+            <View style={{ marginRight: 8 }}>
+              <SimpleDropdown
+                value={status}
+                placeholder="Κατάσταση"
+                options={ORDER_STATUS_OPTIONS}
+                onChange={onChangeStatus}
+                width={160}
+              />
+            </View>
 
             <TouchableOpacity onPress={onEdit} style={[styles.actionBtn, styles.actionBtnPrimary]}>
               <Text style={styles.actionBtnPrimaryText}>Επεξεργασία</Text>
@@ -358,6 +374,9 @@ const STATUS = [
 const STORAGE_STATUS = [
   'Φύλλαξη', 'Επιστροφή'
 ]
+
+const ORDER_STATUS_OPTIONS = ['Νέα', 'Σε επεξεργασία', 'Έτοιμη', 'Παραδόθηκε']
+
 
 // dropdown
 function SimpleDropdown({
@@ -575,9 +594,11 @@ function YearRow({ year, subtitle, onPress }: { year: number; subtitle: string; 
 }
 
 
-
-
 export default function CustomersScreen() {
+
+  const { user } = useAuth();                         
+  const userId = (user?.id ? String(user.id) : 'system');
+
   const { setCustomersPreview } = usePreview()
 
 
@@ -598,9 +619,7 @@ export default function CustomersScreen() {
   const [addresses, setAddresses] = useState<string[]>([''])
   const [phones, setPhones] = useState<string[]>([''])
   const [afm, setAfm] = useState('')
-  const [receiptNo, setReceiptNo] = useState('')     // -> notes
-  const [pricePerSqm, setPricePerSqm] = useState('') // -> notes
-  const [description, setDescription] = useState('') // -> notes
+  const [description, setDescription] = useState('') 
 
   // Delete confirm modal
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -630,6 +649,13 @@ export default function CustomersScreen() {
     notesBase: '',     
     receiptNo: '',
     pricePerSqm: '',
+  })
+
+  const [errors, setErrors] = useState({
+    firstName: false,
+    lastName: false,
+    addresses: false,
+    phones: false,
   })
 
   // ADD: Items modal & edit state 
@@ -814,6 +840,8 @@ React.useEffect(() => {
         orderDate: r.orderDate,
         createdAt: r.createdAt,
         lastModifiedAt: r.lastModifiedAt,
+        status: r.orderStatus ?? 'Νέα',
+        hasDebt: r.hasDebt ?? false,
       }));
 
       //  fetch ALL items for this customer (once)
@@ -944,8 +972,6 @@ const computeYearData = (y: number, f?: HistoryFilters | null) => {
   return { totals, cat, color, ordersOfYear: ordersFiltered, itemsOfYear: itemsFiltered }
 }
 
-
-
 function itemsByOrderForYear(y: number) {
   const items = itemsByYear.get(y) || []
   const map = new Map<string, any[]>()
@@ -985,18 +1011,11 @@ function renderYearDetail(year: number) {
           <Text style={styles.summaryLabel}>Συνολικό ποσό</Text>
           <Text style={styles.summaryValue}>{fmtMoney(totalAmount)}</Text>
         </View>
-        <View style={styles.summaryBox}>
-          <Text style={styles.summaryLabel}>Τετραγωνικά μέτρα</Text>
-          <Text style={styles.summaryMuted}>—</Text>
-        </View>
-        <View style={styles.summaryBox}>
-          <Text style={styles.summaryLabel}>Μέση τιμή / τ.μ.</Text>
-          <Text style={styles.summaryMuted}>—</Text>
-        </View>
+       
       </View>
 
       <View style={styles.cardSection}>
-        <Text style={styles.sectionTitle}>Κατηγορίες (πίτα)</Text>
+        <Text style={styles.sectionTitle}>Κατηγορίες</Text>
         {cat.total === 0 ? (
           <Text style={styles.muted}>Δεν υπάρχουν τεμάχια για το {year}.</Text>
         ) : (
@@ -1088,44 +1107,7 @@ function renderYearDetail(year: number) {
       </View>
 
 
-      <View style={styles.cardSection}>
-        <Text style={styles.sectionTitle}>Όλα τα τεμάχια του έτους</Text>
-        {(itemsByYear.get(year) || []).map((it) => (
-          <View key={it.id} style={styles.entryCard}>
-            <View
-              style={[
-                styles.entryAccent,
-                { backgroundColor: CATEGORY_COLORS[normCat(it.category)] || '#93C5FD' },
-              ]}
-            />
-
-            <View style={styles.entryBody}>
-              <View style={styles.entryTopRow}>
-                <Text style={styles.entryTitle}>
-                  {it.item_code || `#${it.id.slice(0,6).toUpperCase()}`}
-                </Text>
-                <Text style={styles.entryDate}>
-                  {fmtDate(it.order_date || it.created_at)}
-                </Text>
-              </View>
-
-              <View style={styles.entryMetaRow}>
-                <Text style={styles.entryMeta}>Κατηγορία: {normCat(it.category)}</Text>
-                <View style={styles.colorBadge}>
-                  <View
-                    style={[
-                      styles.colorDot,
-                      { backgroundColor: getColorHex(it.color) },
-                    ]}
-                  />
-                  <Text style={styles.colorBadgeText}>{it.color || '—'}</Text>
-                </View>
-                <Text style={styles.entryMetaStrong}>{fmtMoney(it.price)}</Text>
-              </View>
-            </View>
-          </View>
-        ))}
-      </View>
+      
 
     </View>
   )
@@ -1405,9 +1387,9 @@ const [itemEdit, setItemEdit] = useState({
           orderDate: r.orderDate,
           createdAt: r.createdAt,
           lastModifiedAt: r.lastModifiedAt,
-
-          // itemsCount: (προαιρετικά αργότερα)
           itemsCount: null,
+          status: r.orderStatus ?? 'Νέα', 
+          hasDebt: r.hasDebt ?? false,
         }))
         setOrders(mapped)
         setOrdersLoading(false)
@@ -1476,6 +1458,7 @@ const [itemEdit, setItemEdit] = useState({
         notes: r.notes ?? null,
         createdAt: r.createdAt,
         lastModifiedAt: r.lastModifiedAt,
+        hasDebt: r.hasDebt ?? false,
       }))
       setHistOrders(mapped)
 
@@ -1525,7 +1508,7 @@ const [itemEdit, setItemEdit] = useState({
         ? `${appliedFilters.yearFrom ?? yearOpen}-${appliedFilters.yearTo ?? yearOpen}`
         : `${yearOpen}`
 
-    logViewCustomerHistory('system', selectedCustomer.id, range)
+    logViewCustomerHistory(userId, selectedCustomer.id, range)
       .catch((e) => console.warn('logViewCustomerHistory failed:', e))
   }, [showYearReport, yearOpen, selectedCustomer, appliedFilters])
 
@@ -1550,9 +1533,13 @@ const [itemEdit, setItemEdit] = useState({
 
   // Open create modal
   const onCreateCustomer = () => {
-    setFirstName(''); setLastName('')
-    setAddresses(['']); setPhones([''])
-    setAfm(''); setReceiptNo(''); setPricePerSqm(''); setDescription('')
+    setFirstName(''); 
+    setLastName('')
+    setAddresses(['']); 
+    setPhones([''])
+    setAfm(''); 
+    setDescription('')
+    setErrors({ firstName: false, lastName: false, addresses: false, phones: false })
     setOpenForm(true)
   }
 
@@ -1598,6 +1585,7 @@ const [itemEdit, setItemEdit] = useState({
 
   // UPDATE customer
   async function saveEdit() {
+    const actorId = String(user?.id ?? (user as any)?.uid ?? (user as any)?._id ?? 'system')
     if (!selectedCustomer) return
     try {
       const newNotes = composeNotes(edit.notesBase, edit.receiptNo, edit.pricePerSqm)
@@ -1608,7 +1596,7 @@ const [itemEdit, setItemEdit] = useState({
         address:   edit.address.trim(),
         afm:       edit.afm.trim(),
         notes:     newNotes,
-      })
+      },actorId)
 
       // sync modal
       setSelectedCustomer(prev =>
@@ -1653,32 +1641,23 @@ const [itemEdit, setItemEdit] = useState({
 
   // INSERT new customer (as-is)
   async function handleSaveCustomer() {
-    if (!firstName.trim() || !lastName.trim()) {
-      Alert.alert('Σφάλμα', 'Το όνομα και το επώνυμο είναι υποχρεωτικά.')
-      return
-    }
     const cleanPhones = phones.map(p => p.trim()).filter(Boolean)
     const cleanAddresses = addresses.map(a => a.trim()).filter(Boolean)
-    if (cleanPhones.length === 0) {
-      Alert.alert('Σφάλμα', 'Πρέπει να προσθέσεις τουλάχιστον ένα τηλέφωνο.')
-      return
+
+    const nextErrors = {
+      firstName: !firstName.trim(),
+      lastName: !lastName.trim(),
+      addresses: cleanAddresses.length === 0,
+      phones: cleanPhones.length === 0,
     }
-    if (cleanAddresses.length === 0) {
-      Alert.alert('Σφάλμα', 'Πρέπει να προσθέσεις τουλάχιστον μία διεύθυνση.')
-      return
-    }
-    if (!receiptNo.trim()) {
-      Alert.alert('Σφάλμα', 'Το πεδίο "Αρ. Δελτίου Παραλαβής" είναι υποχρεωτικό.')
-      return
-    }
+    setErrors(nextErrors)
+
+    // Αν υπάρχει έστω ένα σφάλμα, σταμάτα εδώ (δείχνουμε κόκκινα inputs + μηνύματα)
+    if (Object.values(nextErrors).some(Boolean)) return
 
     const phone = cleanPhones.join(' | ')
     const address = cleanAddresses.join(' | ')
-    const notesBlock = [
-      description?.trim() || '',
-      receiptNo ? `Receipt: ${receiptNo.trim()}` : '',
-      pricePerSqm ? `€/m²: ${pricePerSqm.trim()}` : '',
-    ].filter(Boolean).join(' | ')
+    const notesBlock = (description?.trim() || '')
 
     try {
       const rec = await createCustomer({
@@ -1688,8 +1667,7 @@ const [itemEdit, setItemEdit] = useState({
         address,
         afm: afm.trim() || undefined,
         notes: notesBlock || undefined,
-      })
-      console.log('INSERT ok. new customer id:', rec.id)
+      }, userId)
 
       setOpenForm(false)
       Alert.alert('OK', 'Ο πελάτης προστέθηκε.')
@@ -1709,7 +1687,7 @@ const [itemEdit, setItemEdit] = useState({
   async function confirmDeleteNow() {
     if (!pendingDeleteId) return
     try {
-      await deleteCustomer(pendingDeleteId)
+      await deleteCustomer(pendingDeleteId, userId)
       console.log('🗑️ Customer deleted:', pendingDeleteId)
     } catch (e) {
       console.error('Delete failed:', e)
@@ -1719,6 +1697,191 @@ const [itemEdit, setItemEdit] = useState({
       setPendingDeleteId(null)
     }
   }
+
+  async function handleChangeOrderStatus(orderId: string, newStatus: string) {
+  try {
+
+    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: newStatus } : o))
+
+  } catch (e) {
+    console.error('update order status failed', e)
+    Alert.alert('Σφάλμα', 'Αποτυχία ενημέρωσης κατάστασης.')
+  }
+}
+
+// για επιβεβαίωση όταν επιλέγεται "Παραδόθηκε"
+const [confirmDelivered, setConfirmDelivered] = useState<{ orderId: string } | null>(null)
+
+// if items not delivered
+// 2ο popup: κρατάμε και ποια παραγγελία είναι
+const [returnsPrompt, setReturnsPrompt] = useState<{ customerId: string; orderId: string } | null>(null)
+
+// Λίστα από orderIds ανά πελάτη
+const [pendingReturnsByCustomer, setPendingReturnsByCustomer] = useState<Record<string, string[]>>({})
+
+// load on mount
+useEffect(() => {
+  const load = async () => {
+    try {
+      const saved = await AsyncStorage.getItem('pendingReturnsByCustomer')
+      if (saved) setPendingReturnsByCustomer(JSON.parse(saved))
+    } catch (e) {
+      console.error('Failed to load pendingReturnsByCustomer', e)
+    }
+  }
+  load()
+}, [])
+
+// persist on change
+useEffect(() => {
+  AsyncStorage.setItem('pendingReturnsByCustomer', JSON.stringify(pendingReturnsByCustomer))
+}, [pendingReturnsByCustomer])
+
+
+
+function DeliveryConfirmModal({
+  visible,
+  onConfirm,
+  onCancel,
+}: {
+  visible: boolean
+  onConfirm: () => void | Promise<void>
+  onCancel: () => void | Promise<void>
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <View style={{
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.4)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 24,
+      }}>
+        <View style={{
+          backgroundColor: '#fff',
+          borderRadius: 12,
+          padding: 24,
+          width: '90%',
+          maxWidth: 360,
+        }}>
+          <Text style={{ fontSize: 18, fontWeight: '600', marginBottom: 12, textAlign: 'center' }}>
+            Παραδόθηκε
+          </Text>
+          <Text style={{ fontSize: 16, textAlign: 'center', marginBottom: 24 }}>
+            Πλήρωσε;
+          </Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-evenly' }}>
+            <TouchableOpacity
+              onPress={onCancel}
+              style={{
+                backgroundColor: '#F3F4F6',
+                paddingVertical: 10,
+                paddingHorizontal: 20,
+                borderRadius: 8,
+              }}
+            >
+              <Text style={{ color: '#374151', fontWeight: '600' }}>Όχι</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={onConfirm}
+              style={{
+                backgroundColor: '#3B82F6',
+                paddingVertical: 10,
+                paddingHorizontal: 20,
+                borderRadius: 8,
+              }}
+            >
+              <Text style={{ color: 'white', fontWeight: '600' }}>Ναι</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  )
+}
+
+function ReturnsConfirmModal({
+  visible,
+  onYes,
+  onNo,
+}: {
+  visible: boolean
+  onYes: () => void | Promise<void>
+  onNo: () => void | Promise<void>
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onNo}>
+      <View
+        style={{
+          flex: 1,
+          backgroundColor: 'rgba(0,0,0,0.4)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          padding: 24,
+        }}
+      >
+        <View
+          style={{
+            backgroundColor: '#fff',
+            borderRadius: 12,
+            padding: 24,
+            width: '90%',
+            maxWidth: 360,
+          }}
+        >
+          <Text
+            style={{
+              fontSize: 18,
+              fontWeight: '600',
+              marginBottom: 12,
+              textAlign: 'center',
+            }}
+          >
+            Υπολείπονται κομμάτια για επιστροφή;
+          </Text>
+          <Text
+            style={{
+              fontSize: 15,
+              textAlign: 'center',
+              marginBottom: 24,
+              color: '#374151',
+            }}
+          >
+            Θέλεις να σημειώσω ότι υπάρχουν κομμάτια προς επιστροφή;
+          </Text>
+
+          <View style={{ flexDirection: 'row', justifyContent: 'space-evenly' }}>
+            <TouchableOpacity
+              onPress={onNo}
+              style={{
+                backgroundColor: '#F3F4F6',
+                paddingVertical: 10,
+                paddingHorizontal: 20,
+                borderRadius: 8,
+              }}
+            >
+              <Text style={{ color: '#374151', fontWeight: '600' }}>Όχι</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={onYes}
+              style={{
+                backgroundColor: '#3B82F6',
+                paddingVertical: 10,
+                paddingHorizontal: 20,
+                borderRadius: 8,
+              }}
+            >
+              <Text style={{ color: 'white', fontWeight: '600' }}>Ναι</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  )
+}
+
+
 
   
   return (
@@ -1763,8 +1926,8 @@ const [itemEdit, setItemEdit] = useState({
       </Text>
 
       {/* List panel */}
-      <View style={{ flex: 1, marginTop: 10 }}>
-        <View style={styles.panel}>
+      <View style={{ flex: 1, marginTop: 10, minHeight: 0 }}>   
+        <View style={[styles.panel, { flex: 1, minHeight: 0 }]}> 
           <View style={styles.panelHeader}>
             <Ionicons name="person-outline" size={22} color={colors.primary} style={styles.panelIcon} />
             <Text style={styles.panelTitle}>Λίστα Πελατών</Text>
@@ -1783,40 +1946,41 @@ const [itemEdit, setItemEdit] = useState({
             <FlatList
               data={results}
               keyExtractor={(item) => item.id}
+              style={{ flex: 1 }}                          
               contentContainerStyle={{ paddingBottom: 40 }}
+              showsVerticalScrollIndicator
               renderItem={({ item }) => {
                 const fullName = `${item.firstName ?? ''} ${item.lastName ?? ''}`.trim()
-
                 const firstPhone = (item.phone || '')
-                  .split('|').map(s => s.trim()).filter(Boolean)[0] || ''
+                .split('|')
+                .map((s: string) => s.trim())
+                .filter(Boolean)[0] || ''
+
                 const firstAddress = (item.address || '')
-                  .split('|').map(s => s.trim()).filter(Boolean)[0] || ''
+                  .split('|')
+                  .map((s: string) => s.trim())
+                  .filter(Boolean)[0] || ''
 
                 return (
                   <TouchableOpacity style={styles.row} onPress={() => openCustomerCard(item)}>
-                    {/* avatar */}
                     <View style={styles.avatar}>
                       <Text style={styles.avatarText}>
                         {(item.firstName?.[0] || item.lastName?.[0] || 'Π').toUpperCase()}
                       </Text>
                     </View>
 
-                    {/* center info */}
                     <View style={{ flex: 1 }}>
                       <Text style={styles.rowTitle}>
                         <Highlight text={fullName || '—'} query={debounced} />
                       </Text>
                       <View style={styles.detailsColumn}>
-                        <Text style={styles.detailText}>
-                          {firstPhone ? `☎ ${firstPhone}` : '☎ —'}
-                        </Text>
+                        <Text style={styles.detailText}>{firstPhone ? `☎ ${firstPhone}` : '☎ —'}</Text>
                         <Text style={styles.detailText} numberOfLines={1} ellipsizeMode="tail">
                           {firstAddress ? `📍 ${firstAddress}` : '📍 —'}
                         </Text>
                       </View>
                     </View>
 
-                    {/* delete (X) */}
                     <Pressable
                       onPress={(e: any) => {
                         if (Platform.OS === 'web' && e?.stopPropagation) e.stopPropagation()
@@ -1831,10 +1995,10 @@ const [itemEdit, setItemEdit] = useState({
                 )
               }}
             />
-
           )}
         </View>
       </View>
+
 
       {/* Create Modal */}
       <Modal visible={openForm} animationType="fade" onRequestClose={() => setOpenForm(false)} transparent>
@@ -1858,25 +2022,36 @@ const [itemEdit, setItemEdit] = useState({
             >
               {/* Όνομα | Επώνυμο */}
               <View style={styles.row2}>
+                {/* Όνομα */}
                 <View style={[styles.inputWrap, styles.flex1]}>
                   <Text style={styles.label}>Όνομα *</Text>
                   <TextInput
                     value={firstName}
-                    onChangeText={setFirstName}
-                    style={styles.input}
+                    onChangeText={(v) => {
+                      setFirstName(v)
+                      if (errors.firstName && v.trim()) setErrors(s => ({ ...s, firstName: false }))
+                    }}
+                    style={[styles.input, errors.firstName && styles.inputError]}
                     placeholder="Εισάγετε το όνομα"
                     placeholderTextColor={colors.muted}
                   />
+                  {errors.firstName && <Text style={styles.errorText}>Το όνομα είναι υποχρεωτικό.</Text>}
                 </View>
+
+                {/* Επώνυμο */}
                 <View style={[styles.inputWrap, styles.flex1]}>
                   <Text style={styles.label}>Επώνυμο *</Text>
                   <TextInput
                     value={lastName}
-                    onChangeText={setLastName}
-                    style={styles.input}
+                    onChangeText={(v) => {
+                      setLastName(v)
+                      if (errors.lastName && v.trim()) setErrors(s => ({ ...s, lastName: false }))
+                    }}
+                    style={[styles.input, errors.lastName && styles.inputError]}
                     placeholder="Εισάγετε το επώνυμο"
                     placeholderTextColor={colors.muted}
                   />
+                  {errors.lastName && <Text style={styles.errorText}>Το επώνυμο είναι υποχρεωτικό.</Text>}
                 </View>
               </View>
 
@@ -1888,12 +2063,20 @@ const [itemEdit, setItemEdit] = useState({
                     <Text style={styles.linkBtnText}>+ Προσθήκη</Text>
                   </TouchableOpacity>
                 </View>
+
                 {addresses.map((addr, idx) => (
                   <View key={`addr-${idx}`} style={styles.addRow}>
                     <TextInput
                       value={addr}
-                      onChangeText={(v) => updateAddress(idx, v)}
-                      style={[styles.input, styles.flex1]}
+                      onChangeText={(v) => {
+                        updateAddress(idx, v)
+                        if (errors.addresses && v.trim()) setErrors(s => ({ ...s, addresses: false }))
+                      }}
+                      style={[
+                        styles.input,
+                        styles.flex1,
+                        errors.addresses && idx === 0 && styles.inputError, // κόκκινο στο πρώτο όταν άδειες όλες
+                      ]}
                       placeholder="Διεύθυνση"
                       placeholderTextColor={colors.muted}
                     />
@@ -1904,7 +2087,12 @@ const [itemEdit, setItemEdit] = useState({
                     )}
                   </View>
                 ))}
+
+                {errors.addresses && (
+                  <Text style={styles.errorText}>Πρέπει να προσθέσεις τουλάχιστον μία διεύθυνση.</Text>
+                )}
               </View>
+
 
               {/* Τηλέφωνα | ΑΦΜ */}
               <View style={styles.row2}>
@@ -1915,12 +2103,20 @@ const [itemEdit, setItemEdit] = useState({
                       <Text style={styles.linkBtnText}>+ Προσθήκη</Text>
                     </TouchableOpacity>
                   </View>
+
                   {phones.map((ph, idx) => (
                     <View key={`ph-${idx}`} style={styles.addRow}>
                       <TextInput
                         value={ph}
-                        onChangeText={(v) => updatePhone(idx, v)}
-                        style={[styles.input, styles.flex1]}
+                        onChangeText={(v) => {
+                          updatePhone(idx, v)
+                          if (errors.phones && v.trim()) setErrors(s => ({ ...s, phones: false }))
+                        }}
+                        style={[
+                          styles.input,
+                          styles.flex1,
+                          errors.phones && idx === 0 && styles.inputError, // κόκκινο στο πρώτο αν όλα άδεια
+                        ]}
                         keyboardType="phone-pad"
                         placeholder="Τηλέφωνο"
                         placeholderTextColor={colors.muted}
@@ -1932,7 +2128,13 @@ const [itemEdit, setItemEdit] = useState({
                       )}
                     </View>
                   ))}
+
+                  {errors.phones && (
+                    <Text style={styles.errorText}>Πρέπει να προσθέσεις τουλάχιστον ένα τηλέφωνο.</Text>
+                  )}
                 </View>
+
+
 
                 <View style={[styles.inputWrap, styles.flex1]}>
                   <Text style={styles.label}>ΑΦΜ (προαιρετικό)</Text>
@@ -1948,34 +2150,10 @@ const [itemEdit, setItemEdit] = useState({
                 </View>
               </View>
 
-              {/* Αρ. Δελτίου & Τιμή/τ.μ. → notes */}
-              <View style={styles.row2}>
-                <View style={[styles.inputWrap, styles.flex1]}>
-                  <Text style={styles.label}>Αρ. Δελτίου Παραλαβής *</Text>
-                  <TextInput
-                    value={receiptNo}
-                    onChangeText={setReceiptNo}
-                    style={styles.input}
-                    placeholder="Αριθμός Δελτίου"
-                    placeholderTextColor={colors.muted}
-                  />
-                </View>
-                <View style={[styles.inputWrap, styles.flex1]}>
-                  <Text style={styles.label}>Τιμή / τ.μ (προαιρετικό)</Text>
-                  <TextInput
-                    value={pricePerSqm}
-                    onChangeText={setPricePerSqm}
-                    style={styles.input}
-                    keyboardType="decimal-pad"
-                    placeholder="0.00"
-                    placeholderTextColor={colors.muted}
-                  />
-                </View>
-              </View>
 
               {/* Περιγραφή → notes */}
               <View style={styles.inputWrap}>
-                <Text style={styles.label}>Περιγραφή *</Text>
+                <Text style={styles.label}>Περιγραφή </Text>
                 <TextInput
                   value={description}
                   onChangeText={setDescription}
@@ -2036,6 +2214,7 @@ const [itemEdit, setItemEdit] = useState({
                   Παραγγελίες
                 </Text>
               </Pressable>
+              
 
               <Pressable
                 onPress={() => setActiveTab('history')}
@@ -2088,14 +2267,14 @@ const [itemEdit, setItemEdit] = useState({
 
                
                 <View style={styles.detailsContentRow}>
-                  {/* ⬅️ Αριστερή στήλη (scroll) */}
+                  {/* scroll */}
                   <ScrollView
                     style={styles.colLeftScroll}
                     contentContainerStyle={{ padding: 14, paddingBottom: 24 }}
                     keyboardShouldPersistTaps="handled"
                     showsVerticalScrollIndicator
                   >
-                    {/* Ομάδα: Βασικά */}
+                    {/*  Βασικά */}
                     <FieldRow label="Όνομα" value={edit.firstName} editable={editMode}
                       onChangeText={(v) => setEdit(s => ({ ...s, firstName: v }))} />
                     <FieldRow label="Επώνυμο" value={edit.lastName} editable={editMode}
@@ -2103,7 +2282,7 @@ const [itemEdit, setItemEdit] = useState({
 
                     <View style={styles.hairline} />
 
-                    {/* Ομάδα: Επικοινωνία */}
+                    {/*  Επικοινωνία */}
                     
                     <FieldRow label="Τηλέφωνο" value={edit.phone} editable={editMode}
                       keyboardType="phone-pad"
@@ -2119,24 +2298,12 @@ const [itemEdit, setItemEdit] = useState({
                       keyboardType="number-pad"
                       onChangeText={(v) => setEdit(s => ({ ...s, afm: v }))} />
 
-                    <View style={{ flexDirection: 'row', gap: 10 }}>
-                      <View style={{ flex: 1 }}>
-                        <FieldRow label="Αρ. Δελτίου" value={edit.receiptNo} editable={editMode}
-                          onChangeText={(v) => setEdit(s => ({ ...s, receiptNo: v }))} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <FieldRow label="€/m²" value={edit.pricePerSqm} editable={editMode}
-                          keyboardType="decimal-pad"
-                          onChangeText={(v) => setEdit(s => ({ ...s, pricePerSqm: v }))} />
-                      </View>
-                    </View>
-
                   </ScrollView>
 
                   {/* Divider */}
                   <View style={styles.vDivider} />
 
-                  {/* ➡️ Δεξιά στήλη (σταθερή) */}
+                  {/* Δεξιά στήλη (σταθερή) */}
                   <View style={styles.detailsColRight}>
                     <Text style={styles.rightTitle}>Περιγραφή</Text>
                     {editMode ? (
@@ -2156,7 +2323,56 @@ const [itemEdit, setItemEdit] = useState({
                       </View>
                     )}
 
-                    
+                    {/* Έχει χρέος */}
+                    {orders.some(o => o.hasDebt) && (
+                      <View style={styles.debtBox}>
+                        <Text style={styles.debtTitle}>Χρέη παραγγελιών</Text>
+
+                        {orders
+                          .filter(o => o.hasDebt)
+                          .map(o => (
+                            <Pressable
+                              key={o.id}
+                              onPress={() => {
+                                setActiveTab('orders')
+                                setExpandedOrderId(o.id)
+                              }}
+                              style={styles.debtRow}
+                            >
+                              <View style={styles.debtDot} />
+                              <Text style={styles.debtText}>
+                                Η παραγγελία <Text style={styles.debtCode}>#{o.id.slice(0, 6).toUpperCase()}</Text> έχει χρέος!
+                              </Text>
+                              <Ionicons name="chevron-forward" size={16} color="#B91C1C" />
+                            </Pressable>
+                          ))}
+                      </View>
+                    )}
+
+                    {/* Υπολείπονται κομμάτια (ανά παραγγελία) */}
+                    {selectedCustomer && (pendingReturnsByCustomer[selectedCustomer.id]?.length || 0) > 0 && (
+                      <View style={styles.returnsBox}>
+                        {(pendingReturnsByCustomer[selectedCustomer.id] || []).map((oid) => (
+                          <Pressable
+                            key={oid}
+                            onPress={() => {
+                              setActiveTab('orders')
+                              setExpandedOrderId(oid) // άνοιξε τη συγκεκριμένη παραγγελία
+                            }}
+                            style={styles.debtRow} // reuse το ίδιο ωραίο row style
+                          >
+                            <View style={styles.debtDot} />
+                            <Text style={styles.returnsText}>
+                              Υπολείπονται κομμάτια για επιστροφή στην παραγγελία{' '}
+                              <Text style={styles.debtCode}>#{oid.slice(0, 6).toUpperCase()}</Text>
+                            </Text>
+                            <Ionicons name="chevron-forward" size={16} color="#92400E" />
+                          </Pressable>
+                        ))}
+                      </View>
+                    )}
+
+
                   </View>
                 </View>
               </View>
@@ -2213,7 +2429,7 @@ const [itemEdit, setItemEdit] = useState({
                       renderItem={({ item }) => (
                         <OrderCard
                           code={`#${item.id.slice(0, 6).toUpperCase()}`}
-                          date={fmtDate(item.orderDate || item.createdAt)}
+                          date={fmtDate(item.createdAt)}
                           total={fmtMoney(item.totalAmount)}
                           deposit={item.deposit != null ? fmtMoney(item.deposit) : '—'}
                           paymentMethod={item.paymentMethod || '—'}
@@ -2224,6 +2440,25 @@ const [itemEdit, setItemEdit] = useState({
                           onViewItems={() => Alert.alert('Προβολή τεμαχίων', `Παραγγελία ${item.id}`)}
                           onEdit={() => openOrderEdit(item)}
                           onClose={() => setExpandedOrderId(null)}
+                          status={item.status || 'Νέα'}
+                          hasDebt={!!item.hasDebt} 
+                          onChangeStatus={(v) => {
+                            if (v === 'Παραδόθηκε') {
+                              // confirm id payed or not
+                              setConfirmDelivered({ orderId: item.id })
+                            } else {
+                              // else hasDept = false
+                              setOrders(prev =>
+                                prev.map(o =>
+                                  o.id === item.id ? { ...o, status: v, hasDebt: false } : o
+                                )
+                              )
+                              updateOrder(item.id, { orderStatus: v, hasDebt: false }, userId).catch((e) => {
+                                console.error('updateOrder status failed', e)
+                                Alert.alert('Σφάλμα', 'Η ενημέρωση κατάστασης απέτυχε.')
+                              })
+                            }
+                          }}
                         />
                       )}
                     />
@@ -2277,17 +2512,9 @@ const [itemEdit, setItemEdit] = useState({
                           onPress={() => {
                             setYearOpen(y)
                             setShowYearReport(true)
-                            const range =
-                              appliedFilters
-                                ? `${appliedFilters.yearFrom ?? y}-${appliedFilters.yearTo ?? y}`
-                                : `${y}`
-
-                            // activity log
-                            logViewCustomerHistory('system', selectedCustomer?.id ?? '', range)
-                              .catch((e) => console.warn('logViewCustomerHistory failed:', e))
-                             
                           }}
                         />
+
                       )
                     }}
                   />
@@ -2644,7 +2871,7 @@ const [itemEdit, setItemEdit] = useState({
                     setModalResultsFilters(filtersDraft)    // 2) εμφανίζει ΤΩΡΑ αποτελέσματα στο modal
 
                     try {
-                      await logFilterHistoryApplied('system', {
+                      await logFilterHistoryApplied(userId, {
                         customerId: selectedCustomer?.id ?? null,
                         ...filtersDraft,
                         at: new Date().toISOString(),
@@ -2760,7 +2987,7 @@ const [itemEdit, setItemEdit] = useState({
         </View>
       </Modal>
 
-σ
+
 
       {/* Full-screen Year Report */}
       <Modal
@@ -2794,7 +3021,7 @@ const [itemEdit, setItemEdit] = useState({
                     filters: appliedFilters,
                   }
 
-                  logExportHistoryPDF('system', exportData)
+                  logExportHistoryPDF(userId, exportData)
                     .catch((e) => console.warn('logExportHistoryPDF failed:', e))
                 }
               }}
@@ -2833,6 +3060,82 @@ const [itemEdit, setItemEdit] = useState({
         </View>
       </Modal>
 
+      {/* hasdept */}
+      <DeliveryConfirmModal
+        visible={!!confirmDelivered}
+        onCancel={async () => {
+          // ΌΧΙ = δεν πλήρωσε → Παραδόθηκε + hasDebt: true
+          const id = confirmDelivered?.orderId
+          if (id) {
+            setOrders(prev =>
+              prev.map(o =>
+                o.id === id ? { ...o, status: 'Παραδόθηκε', hasDebt: true } : o
+              )
+            )
+            try {
+              await updateOrder(id, { orderStatus: 'Παραδόθηκε', hasDebt: true }, userId)
+            } catch (e) {
+              console.error('updateOrder (delivered, debt) failed', e)
+              Alert.alert('Σφάλμα', 'Η ενημέρωση κατάστασης απέτυχε.')
+            }
+          }
+          setConfirmDelivered(null)
+
+          // 2nd pop up
+          if (selectedCustomer?.id && id) {
+            setReturnsPrompt({ customerId: selectedCustomer.id, orderId: id })
+          }
+        }}
+        onConfirm={async () => {
+          // ΝΑΙ = πλήρωσε --> Παραδόθηκε + hasDebt: false
+          const id = confirmDelivered?.orderId
+          if (id) {
+            setOrders(prev =>
+              prev.map(o =>
+                o.id === id ? { ...o, status: 'Παραδόθηκε', hasDebt: false } : o
+              )
+            )
+            try {
+              await updateOrder(id, { orderStatus: 'Παραδόθηκε', hasDebt: false }, userId)
+            } catch (e) {
+              console.error('updateOrder (delivered, paid) failed', e)
+              Alert.alert('Σφάλμα', 'Η ενημέρωση κατάστασης απέτυχε.')
+            }
+          }
+          setConfirmDelivered(null)
+
+          //  2nd pop up
+          if (selectedCustomer?.id && id) {
+            setReturnsPrompt({ customerId: selectedCustomer.id, orderId: id })
+          }
+        }}
+      />
+
+      {/* if not returned items */}
+      <ReturnsConfirmModal
+        visible={!!returnsPrompt}
+        onYes={() => {
+          const { customerId, orderId } = returnsPrompt!
+          setPendingReturnsByCustomer(prev => {
+            const list = prev[customerId] || []
+            return { ...prev, [customerId]: list.includes(orderId) ? list : [...list, orderId] }
+          })
+          setReturnsPrompt(null)
+        }}
+        onNo={() => {
+          const { customerId, orderId } = returnsPrompt!
+          setPendingReturnsByCustomer(prev => {
+            const list = prev[customerId] || []
+            return { ...prev, [customerId]: list.filter(id => id !== orderId) }
+          })
+          setReturnsPrompt(null)
+        }}
+      />
+
+
+
+
+
     </Page>
   )
 }
@@ -2856,7 +3159,7 @@ const styles = StyleSheet.create({
 
   primaryBtnText: { 
     color: '#fff', 
-    fontWeight: '800' 
+    fontWeight: '400' 
   },
 
   cardPolish: {
@@ -3402,7 +3705,7 @@ itemEditCard: {
   },
   linkBtnText: { 
     color: '#374151', 
-    fontWeight: '800' 
+    fontWeight: '400' 
   },
   addRow: { 
     flexDirection: 'row', 
@@ -3435,7 +3738,7 @@ itemEditCard: {
   },
   secondaryBtnText: { 
     color: '#374151', 
-    fontWeight: '800' 
+    fontWeight: '400' 
   },
   requiredNote: { 
     textAlign: 'center', 
@@ -3604,17 +3907,17 @@ itemEditCard: {
     borderWidth: 1.5,
     borderColor: '#E5E7EB',
   },
-  actionBtnGhostText: { color: '#374151', fontWeight: '600' },
+  actionBtnGhostText: { color: '#374151', fontWeight: '400' },
 
   actionBtnPrimary: {
     backgroundColor: '#3B82F6',
   },
-  actionBtnPrimaryText: { color: '#fff', fontWeight: '700' },
+  actionBtnPrimaryText: { color: '#fff', fontWeight: '400' },
 
   actionBtnDanger: {
     backgroundColor: '#FEE2E2',
   },
-  actionBtnDangerText: { color: '#B91C1C', fontWeight: '700' },
+  actionBtnDangerText: { color: '#B91C1C', fontWeight: '400' },
 
   rightTitle: { 
     fontSize: 12, 
@@ -4026,6 +4329,76 @@ colorDot: {
   marginRight: 6,
 },
 colorBadgeText: { fontSize: 12, color: '#111827' },
+
+  errorText: {
+    color: '#EF4444',
+    fontSize: 12,
+    marginTop: 4,
+  },
+  inputError: {
+    borderColor: '#EF4444',
+    borderWidth: 2,
+  },
+
+
+  debtBox: {
+  marginTop: 12,
+  borderWidth: 1,
+  borderColor: '#FECACA',
+  backgroundColor: '#FEF2F2',
+  borderRadius: 12,
+  padding: 10,
+},
+
+debtTitle: {
+  fontWeight: '600',
+  fontSize: 14,
+  color: '#991B1B',
+  marginBottom: 6,
+},
+
+debtRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  paddingVertical: 6,
+},
+
+debtDot: {
+  width: 8,
+  height: 8,
+  borderRadius: 4,
+  backgroundColor: '#DC2626',
+  marginRight: 8,
+},
+
+debtText: {
+  flex: 1,
+  color: '#B91C1C',
+  fontWeight: '600',
+},
+
+debtCode: {
+  color: '#991B1B',
+  fontWeight: '800',
+},
+
+
+returnsBox: {
+  marginTop: 12,
+  borderWidth: 1.5,
+  borderColor: '#EAB308',       
+  backgroundColor: '#FEF9C3',   
+  borderRadius: 10,
+  padding: 10,
+},
+returnsTitle: {
+  fontWeight: '800',
+  color: '#92400E',
+  marginBottom: 4,
+},
+returnsText: {
+  color: '#7C2D12',
+},
 
 
 

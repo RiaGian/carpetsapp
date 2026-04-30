@@ -8,16 +8,16 @@ export async function seedUsers() {
     // 1) ensure "system" (fixed id)
     try {
       await users.find('system')
-      console.log('ℹ️ User "system" υπάρχει ήδη')
+      console.log(' User "system" υπάρχει ήδη')
     } catch {
       await users.create((u: any) => {
         u._raw.id = 'system'
         u.email = 'system@example.com'
-        u.password_hash = 'placeholder' // προσωρινό
+        u.password_hash = '1234'
         u.name = 'System User'
         u.created_at = Date.now()
       })
-      console.log('✅ Δημιουργήθηκε ο user "system"')
+      console.log(' Δημιουργήθηκε ο user "system"')
     }
 
     // 2) ensure admin by email
@@ -25,13 +25,13 @@ export async function seedUsers() {
     if (existing.length === 0) {
       await users.create((u: any) => {
         u.email = 'admin@example.com'
-        u.password_hash = '1234' // προσωρινό (χωρίς hash)
-        u.name = 'Georgia'
+        u.password_hash = '1234' 
+        u.name = 'Admin'
         u.created_at = Date.now()
       })
-      console.log('✅ Δημιουργήθηκε ο admin user')
+      console.log('Δημιουργήθηκε ο admin user')
     } else {
-      console.log('ℹ️ Admin user υπάρχει ήδη')
+      console.log(' Admin user υπάρχει ήδη')
     }
   })
 }

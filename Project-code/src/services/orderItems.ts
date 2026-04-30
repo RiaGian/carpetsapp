@@ -3,6 +3,26 @@ import { Q } from '@nozbe/watermelondb';
 import { database } from '../database/initializeDatabase';
 import { logAddOrderItem, logDeleteOrderItem, logUpdateOrderItem } from './activitylog'; //  logging
 
+// check for duplicates
+export async function existsItemCode(code: string) {
+  const items = database.get('order_items');
+  const c = String(code ?? '').trim().toUpperCase();
+  if (!c) return false;
+  const rows = await items.query(Q.where('item_code', c), Q.take(1)).fetch();
+  return rows.length > 0;
+}
+
+// check for duplicates (already existed item)
+export async function existsItemCodeExcept(id: string, code: string) {
+  const items = database.get('order_items')
+  const c = String(code ?? '').trim().toUpperCase()
+  if (!c) return false
+  const rows = await items
+    .query(Q.where('item_code', c), Q.where('id', Q.notEq(id)), Q.take(1))
+    .fetch()
+  return rows.length > 0
+}
+
 export const normId = (v: any) => {
   const s = String(v ?? '').trim()
   if (!s) return ''
@@ -238,4 +258,94 @@ export async function listOrderItemsByCustomer(
     .fetch()
 
   return itemRows
+}
+
+// load items =/ warehouse items
+type ListFreeOpts = { limit?: number }
+
+export async function listFreeOrderItems({ limit = 1000 }: ListFreeOpts = {}) {
+  const witemsColl   = database.get('warehouse_items')
+  const itemsColl    = database.get('order_items')
+  const ordersColl   = database.get('orders')
+  const customersColl= database.get('customers')
+
+  // not "taken"
+  const active = await witemsColl
+    .query(Q.where('is_active', true))
+    .fetch()
+
+  const usedItemIds = new Set(active.map((w: any) => w._raw.item_id))
+
+  let rows: any[] = await itemsColl
+    .query(Q.sortBy('created_at', Q.desc))
+    .fetch()
+
+  rows = rows.filter(r => !usedItemIds.has(r.id))
+  if (rows.length > limit) rows = rows.slice(0, limit)
+
+  // helper (order_id)
+  const getOrderId = (r: any): string | null =>
+    r.order_id ?? r.order?.id ?? r._raw?.order_id ?? null
+
+  const out: Array<{
+    id: string
+    order_id: string | null
+    customer_id: string | null
+    customer_name: string | null
+    item_code: string
+    category: string
+    color: string
+    price: number
+    status: string
+    storage_status: string
+    order_date: string
+    created_at: number
+  }> = []
+
+  for (const r of rows) {
+    const orderId = getOrderId(r)
+
+    // (best-effort)
+    let customerId: string | null = null
+    let customerName: string | null = null
+
+    try {
+      if (orderId) {
+        const order: any = await ordersColl.find(orderId)
+        // customer id --> aliases/raw
+        customerId =
+          order.customer?.id ??
+          order.customer_id ??
+          order._raw?.customer_id ??
+          null
+
+        if (customerId) {
+          try {
+            const c: any = await customersColl.find(customerId)
+            const fn = (c.firstName ?? c.firstname ?? c._raw?.first_name ?? '').trim()
+            const ln = (c.lastName ?? c.lastname ?? c._raw?.last_name ?? '').trim()
+            const name = `${fn} ${ln}`.trim()
+            customerName = name || null
+          } catch {}
+        }
+      }
+    } catch {}
+
+    out.push({
+      id: r.id,
+      order_id: orderId,
+      customer_id: customerId,
+      customer_name: customerName,
+      item_code: r.item_code ?? '',
+      category: r.category ?? '',
+      color: r.color ?? '',
+      price: Number(r.price ?? 0),
+      status: r.status ?? '',
+      storage_status: r.storage_status ?? '',
+      order_date: r.order_date ?? '',
+      created_at: Number(r.created_at ?? r._raw?.created_at ?? Date.now()),
+    })
+  }
+
+  return out
 }

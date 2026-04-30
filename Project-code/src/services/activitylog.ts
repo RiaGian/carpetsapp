@@ -511,32 +511,50 @@ async function getSystemUserId(): Promise<string> {
 export async function logActivity(
   userId: string, 
   action: string, 
-  details?: object,
+  details: object = {},       
   category?: string,
   status?: string
 ) {
   const timestamp = new Date().toISOString()
 
   try {
-  // insert to DB (topika/offline)
-  const logs = database.get('activity_logs')
-  await database.write(async () => {
-    await logs.create((entry: any) => {
-      entry.user_id = userId
-      entry.action = action
-      entry.details = details ? JSON.stringify(details) : null
-        entry.category = category || getCategoryFromAction(action)
-        entry.status = status || getStatusFromAction(action)
+    const logs  = database.get('activity_logs')
+    const users = database.get('users')
+
+
+    let userModel: any | null = null
+    try {
+      userModel = await users.find(userId)
+    } catch {
+      userModel = null
+    }
+
+    const mergedDetails = { ...details, userId, timestamp }
+
+    await database.write(async () => {
+      await logs.create((entry: any) => {
+        if (userModel) {
+
+          entry.user.set(userModel)
+        } else {
+
+          entry.userId = String(userId)
+        }
+
+        entry.action    = action
+        entry.details   = JSON.stringify(mergedDetails)
+        entry.category  = category || getCategoryFromAction(action)
+        entry.status    = status   || getStatusFromAction(action)
         entry.timestamp = timestamp
       })
     })
-    
-    // Only log to server when data is inserted
+
     console.log(`✅ Activity logged to DB: ${action}`)
   } catch (error) {
     console.error(`❌ Error logging activity ${action}:`, error)
   }
 }
+
 
 function getCategoryFromAction(action: string): string {
   if (action.includes('LOGIN') || action.includes('LOGOUT') || action.includes('PASSWORD') || action.includes('DEVICE') || action.includes('SESSION')) {

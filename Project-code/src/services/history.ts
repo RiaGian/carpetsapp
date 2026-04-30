@@ -10,12 +10,14 @@ export type HistoryFilters = {
   storageStatus?: string|null  // items
   customerId?: string|null
   orderIds?: string[]           
-  limit?: number         
+  limit?: number       
 }
 
 /* Helpers */
 const norm = (s: string) =>
   s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim()
+
+
 
 /**  (ISO string fields: YYYY-MM-DD) */
 function dateRangeClauses(field: string, yearFrom?: number|null, yearTo?: number|null) {
@@ -37,6 +39,8 @@ export type HistoryOrder = {
   customerId: string | null
   customerName: string | null
   createdAt: number
+  order_status?: string
+  hasDebt: boolean
 }
 
 export async function listHistoryOrders(filters: HistoryFilters = {}) : Promise<HistoryOrder[]> {
@@ -87,33 +91,46 @@ export async function listHistoryOrders(filters: HistoryFilters = {}) : Promise<
     if (rows.length > limit) rows = rows.slice(0, limit)
   }
 
+
   // best-effort resolve customer name
   const customers = database.get('customers')
   const out: HistoryOrder[] = []
   for (const r of rows) {
+    // Προσπάθησε να βρεις με κάθε πιθανό τρόπο το customer_id
+    const custId: string | null =
+      r.customer?.id ??
+      r.customer_id ??
+      r.customerId ??
+      r._raw?.customer_id ??
+      null
+
     let customerName: string | null = null
     try {
-      const cm = r.customer || (r.customer_id ? await customers.find(r.customer_id) : null)
+      const cm: any = custId ? await customers.find(custId) : null
       if (cm) {
-        const fn = (cm.firstName || '').trim()
-        const ln = (cm.lastName || '').trim()
+        const fn = (cm.firstName ?? cm.firstname ?? cm._raw?.first_name ?? '').trim()
+        const ln = (cm.lastName ?? cm.lastname ?? cm._raw?.last_name ?? '').trim()
         customerName = `${fn} ${ln}`.trim() || null
       }
     } catch { /* ignore */ }
 
     out.push({
       id: r.id,
-      orderDate: r.orderDate,
-      totalAmount: r.totalAmount,
-      deposit: r.deposit,
-      notes: r.notes ?? '',
-      paymentMethod: r.paymentMethod ?? '',
-      customerId: r.customer?.id ?? r.customer_id ?? null,
-      customerName,
-      createdAt: r.createdAt,
+      orderDate: r.orderDate ?? r.order_date ?? r._raw?.order_date ?? '',
+      totalAmount: r.totalAmount ?? r.total_amount ?? r._raw?.total_amount ?? 0,
+      deposit: r.deposit ?? r._raw?.deposit ?? 0,
+      notes: r.notes ?? r._raw?.notes ?? '',
+      paymentMethod: r.paymentMethod ?? r.payment_method ?? r._raw?.payment_method ?? '',
+      customerId: custId,
+      customerName, 
+      createdAt: r.createdAt ?? r.created_at ?? r._raw?.created_at ?? Date.now(),
+      order_status: r.orderStatus ?? r.order_status ?? r._raw?.order_status ?? r.status ?? '',
+      hasDebt: (r.hasDebt ?? r.has_debt ?? r._raw?.has_debt ?? false) as boolean, 
     })
   }
   return out
+
+
 }
 
 

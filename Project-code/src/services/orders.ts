@@ -1,7 +1,7 @@
 // src/services/orders.ts
 import { Q } from '@nozbe/watermelondb'
 import { database } from '../database/initializeDatabase'
-import { logCreateOrder, logDeleteOrder, logUpdateOrder } from './activitylog'
+import { logCreateOrder, logDeleteOrder, logOrderPaymentUpdated, logOrderStatusChanged, logUpdateOrder, } from './activitylog'
 
 /**  Types  */
 export type NewOrder = {
@@ -11,7 +11,9 @@ export type NewOrder = {
   totalAmount: number
   notes?: string
   orderDate: string             // string στο schema
-  createdBy: string             // FK -> users.id
+  createdBy: string            // FK -> users.id
+  orderStatus?: string   
+  hasDebt?: boolean       
 }
 // update order
 export type UpdateOrder = Partial<{
@@ -22,6 +24,8 @@ export type UpdateOrder = Partial<{
   notes: string
   orderDate: string
   createdBy: string
+  orderStatus: string 
+  hasDebt: boolean      
 }>
 
 /** CREATE */
@@ -47,6 +51,8 @@ export async function createOrder(data: NewOrder, userIdForLog: string = data.cr
       rec.totalAmount    = Number.isFinite(data.totalAmount) ? data.totalAmount : 0
       rec.notes          = data.notes ?? ''
       rec.orderDate      = data.orderDate
+      rec.orderStatus    = (data.orderStatus ?? 'Νέα').trim()
+      rec.hasDebt        = data.hasDebt ?? false
 
       const now          = Date.now()
       rec.createdAt      = now
@@ -63,6 +69,8 @@ export async function createOrder(data: NewOrder, userIdForLog: string = data.cr
       totalAmount:   newRecord.totalAmount,
       notes:         newRecord.notes ?? '',
       orderDate:     newRecord.orderDate,
+      orderStatus:   newRecord.orderStatus,
+      hasDebt:       newRecord.hasDebt,
     })
   } catch (err) {
     console.warn('logCreateOrder failed:', err)
@@ -130,9 +138,11 @@ export async function getOrderById(id: string) {
     totalAmount: rec.totalAmount,
     notes: rec.notes,
     orderDate: rec.orderDate,
+    orderStatus: rec.orderStatus,
+    hasDebt: rec.hasDebt,
     createdAt: rec.createdAt,
     lastModifiedAt: rec.lastModifiedAt,
-    customerId: rec.customer?.id ?? rec.customer_id, // ανάλογα το model
+    customerId: rec.customer?.id ?? rec.customer_id, 
     createdBy: rec.createdBy?.id ?? rec.created_by,
   }
 }
@@ -160,6 +170,8 @@ export async function updateOrder(
       totalAmount:   rec.totalAmount,
       notes:         rec.notes,
       orderDate:     rec.orderDate,
+      orderStatus:   rec.orderStatus,
+      hasDebt: rec.hasDebt,
       customerId:    rec.customer?.id ?? rec.customer_id,
       createdBy:     rec.createdBy?.id ?? rec.created_by,
     }
@@ -197,6 +209,12 @@ export async function updateOrder(
       if (typeof data.orderDate !== 'undefined') {
         r.orderDate = data.orderDate
       }
+      if (typeof data.orderStatus !== 'undefined') {  
+        r.orderStatus = (data.orderStatus ?? '').trim()
+      }
+      if (typeof data.hasDebt !== 'undefined') {
+        r.hasDebt = !!data.hasDebt
+      }
 
       r.lastModifiedAt = Date.now()
     })
@@ -208,6 +226,8 @@ export async function updateOrder(
       totalAmount:   rec.totalAmount,
       notes:         rec.notes,
       orderDate:     rec.orderDate,
+      orderStatus:   rec.orderStatus,
+      hasDebt: rec.hasDebt,
       customerId:    rec.customer?.id ?? rec.customer_id,
       createdBy:     rec.createdBy?.id ?? rec.created_by,
     }
@@ -215,11 +235,49 @@ export async function updateOrder(
 
   // Activity log (best-effort)
   try {
-    await logUpdateOrder(userIdForLog, id, oldValues, newValues)
+    // === Ειδικά logs για πληρωμή & κατάσταση ===
+    const oldPay = {
+      paymentMethod: oldValues.paymentMethod ?? '',
+      deposit: Number(oldValues.deposit ?? 0),
+      totalAmount: Number(oldValues.totalAmount ?? 0),
+    }
+    const newPay = {
+      paymentMethod: newValues.paymentMethod ?? '',
+      deposit: Number(newValues.deposit ?? 0),
+      totalAmount: Number(newValues.totalAmount ?? 0),
+    }
+
+    const paymentChanged =
+      oldPay.paymentMethod !== newPay.paymentMethod ||
+      oldPay.deposit !== newPay.deposit ||
+      oldPay.totalAmount !== newPay.totalAmount
+
+    if (paymentChanged) {
+      await logOrderPaymentUpdated(userIdForLog, id, oldPay, newPay)
+    }
+
+    const oldStatus = (oldValues.orderStatus ?? '').trim()
+    const newStatus = (newValues.orderStatus ?? '').trim()
+    const statusChanged = !!oldStatus && !!newStatus && oldStatus !== newStatus
+
+    if (statusChanged) {
+      await logOrderStatusChanged(userIdForLog, id, oldStatus, newStatus)
+    }
+
+    // === Έλεγχος αν άλλαξε κάτι στα header fields ===
+    const headerChanged = JSON.stringify(oldValues) !== JSON.stringify(newValues)
+
+    // === Κάλεσέ το ΜΟΝΟ αν υπήρξαν αλλαγές (header, πληρωμή ή status) ===
+    if (headerChanged || paymentChanged || statusChanged) {
+      await logUpdateOrder(userIdForLog, id, oldValues, newValues)
+    }
+
   } catch (err) {
-    console.warn('logUpdateOrder failed:', err)
+    console.warn('order targeted logs failed:', err)
   }
+
 }
+
 
 /** DELETE  */
 export async function deleteOrder(id: string, userIdForLog: string = 'system') {
@@ -236,6 +294,8 @@ export async function deleteOrder(id: string, userIdForLog: string = 'system') {
       totalAmount:   rec.totalAmount,
       notes:         rec.notes,
       orderDate:     rec.orderDate,
+      orderStatus:   rec.orderStatus,
+      hasDebt: rec.hasDebt,
       createdAt:     rec.createdAt,
       customerId:    rec.customer?.id ?? rec.customer_id,
       createdBy:     rec.createdBy?.id ?? rec.created_by,

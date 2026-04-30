@@ -19,6 +19,8 @@ export default class Order extends Model {
   @field('total_amount') totalAmount!: number
   @field('notes') notes?: string
   @field('order_date') orderDate!: string
+  @field('order_status') orderStatus!: string
+  @field('has_debt') hasDebt!: boolean
   @date('created_at') createdAt!: number
   @date('last_modified_at') lastModifiedAt!: number
 }

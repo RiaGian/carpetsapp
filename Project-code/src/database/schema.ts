@@ -58,6 +58,8 @@ export const schema = appSchema({
         { name: 'total_amount', type: 'number' },
         { name: 'notes', type: 'string', isOptional: true },
         { name: 'order_date', type: 'string' }, 
+        { name: 'order_status', type: 'string', isIndexed: true },
+        { name: 'has_debt', type: 'boolean', isOptional: true },
         { name: 'created_by', type: 'string', isIndexed: true }, // -> users.id
         { name: 'created_at', type: 'number' },
         { name: 'last_modified_at', type: 'number' },

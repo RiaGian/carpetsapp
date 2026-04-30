@@ -15,7 +15,7 @@ import Divider from '../components/Divider'
 import TextField from '../components/TextField'
 import { logLoginFailure, logLoginSuccess, printActivityLogs } from '../services/activitylog'
 import { signInPlain } from '../services/auth'
-import { useAuth } from '../state/AuthProvider'; // ✅ ΠΡΟΣΘΗΚΗ
+import { useAuth } from '../state/AuthProvider'
 import { colors } from '../theme/colors'
 
 let LocalAuthentication: typeof import('expo-local-authentication') | undefined
@@ -130,19 +130,6 @@ export default function LoginScreen() {
         Constants.expoConfig?.version ?? '1.0.0'
       )
 
-      // server log
-      await fetch('http://localhost:4000/api/log', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          event: 'login',
-          payload: {
-            userId: user.id,
-            email:  user.email,
-            platform: Platform.OS,
-          },
-        }),
-      })
 
       await printActivityLogs()
       logLoginSuccessConsole(String(user.id), user.email)

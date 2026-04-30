@@ -13,10 +13,12 @@ import {
   TextInput,
   View,
 } from 'react-native'
+import { Calendar } from 'react-native-calendars'
 import AppHeader from '../components/AppHeader'
 import Page from '../components/Page'
-
 import { listCustomers } from '../services/customer'
+import { existsItemCode, existsItemCodeExcept } from '../services/orderItems'
+import { useAuth } from '../state/AuthProvider'
 
 import {
   createOrderItem,
@@ -44,17 +46,33 @@ type OrderItemUI = {
   category: string | null
   qty: string
   date: string
+  dateOpen: boolean 
   colorOpen: boolean
   color: string | null
+  statusOpen: boolean
+  status: 'άπλυτο' | 'πλυμένο'
+  workType: 'Επιστροφή' | 'Φύλαξη'
+  itemCode?: string
 }
 const makeEmptyOrder = (): OrderItemUI => ({
   categoryOpen: false,
   category: null,
-  qty: '1',
+  qty: '',
   date: '',
+  dateOpen: false,
   colorOpen: false,
   color: null,
+  statusOpen: false,
+  status: 'άπλυτο',
+  workType: 'Επιστροφή',
+  itemCode: '',
 })
+
+const isItemCodeValid = (code?: string) => {
+  if (!code) return true
+  const up = code.trim().toUpperCase()
+  return /^[A-ZΑ-Ω]{3}\d{3}$/.test(up)
+}
 
 type PieceItem = {
   id?: string
@@ -64,7 +82,7 @@ type PieceItem = {
   code?: string
   shelf?: string
   status?: 'άπλυτο' | 'πλυμένο'
-  workType?: 'Επιστροφή' | 'Φύλλαξη'
+  workType?: 'Επιστροφή' | 'Φύλαξη'
   orderDate?: string
   saved?: boolean          
   newlyAdded?: boolean    
@@ -78,7 +96,29 @@ const ddmmyyyy = (d = new Date()) => {
   return `${dd}/${mm}/${yyyy}`
 }
 
+// ISO yyyy-mm-dd -> dd/mm/yyyy
+const isoToDDMMYYYY = (iso: string) => {
+  const [yyyy, mm, dd] = (iso || '').split('-');
+  if (!yyyy || !mm || !dd) return ddmmyyyy();
+  return `${dd}/${mm}/${yyyy}`;
+};
+
+// dd/mm/yyyy -> ISO yyyy-mm-dd
+const ddmmyyyyToISO = (s: string) => {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s);
+  if (!m) {
+    const d = new Date();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${d.getFullYear()}-${mm}-${dd}`;
+  }
+  const [, dd, mm, yyyy] = m;
+  return `${yyyy}-${mm}-${dd}`;
+};
+
 export default function EditOrderScreen() {
+  const { user } = useAuth();      
+  const userId = (user?.id ? String(user.id) : 'system');
   const { orderId } = useLocalSearchParams<{ orderId: string }>()
   const [loading, setLoading] = useState(true)
 
@@ -105,14 +145,29 @@ export default function EditOrderScreen() {
     setOrders(prev => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)))
   }
   const onChangeOrderDateAt = (index: number, txt: string) => {
-    const digits = txt.replace(/\D/g, '').slice(0, 8)
-    let out = ''
+    const digits = txt.replace(/\D/g, '').slice(0, 8);
+    let out = '';
     for (let i = 0; i < digits.length; i++) {
-      out += digits[i]
-      if (i === 1 || i === 3) out += '/'
+      out += digits[i];
+      if (i === 1 || i === 3) out += '/';
     }
-    updateOrderUI(index, { date: out })
-  }
+    if (!out.trim()) out = ddmmyyyy();  // default (today)
+
+    updateOrderUI(index, { date: out });
+
+    
+    if (out.length === 10) {
+      setPieces(prev =>
+        prev.map(p => {
+          if (!p.orderDate || p.orderDate.length !== 10) {
+            return { ...p, orderDate: out, dirty: true };
+          }
+          return p;
+        })
+      );
+    }
+  };
+
 
   // pieces 
   const [piecesVisible, setPiecesVisible] = useState(true)
@@ -127,24 +182,13 @@ export default function EditOrderScreen() {
     code: '',
     shelf: '',
     status: 'άπλυτο' as 'άπλυτο' | 'πλυμένο',
-    workType: 'Επιστροφή' as 'Επιστροφή' | 'Φύλλαξη',
-    lengthM: '',
-    widthM: '',
+    workType: 'Επιστροφή' as 'Επιστροφή' | 'Φύλαξη',
+
   })
   const [statusOpen, setStatusOpen] = useState(false)
   const activePiece = pieceModalIndex !== null ? pieces[pieceModalIndex] : null
   const activeCategory = activePiece?.category ?? null
 
-  const dimensionsCategories = useMemo(
-    () => new Set(['Μοκέτα', 'Χαλί', 'Φλοκάτι', 'Διαδρομάκι']),
-    []
-  )
-  const needsDimensions = dimensionsCategories.has(activeCategory ?? '')
-
-  const lengthVal = parseFloat((pieceForm.lengthM || '').replace(',', '.'))
-  const widthVal = parseFloat((pieceForm.widthM || '').replace(',', '.'))
-  const hasBoth = Number.isFinite(lengthVal) && Number.isFinite(widthVal)
-  const areaSqm = hasBoth ? (lengthVal * widthVal) : 0
 
   const paymentLabels: Record<string, string> = {
     card: 'Κάρτα',
@@ -154,8 +198,48 @@ export default function EditOrderScreen() {
   }
 
   const paymentOptions = ['cash', 'card', 'bank', 'mixed'] as const
-    const [paymentOpen, setPaymentOpen] = useState(false)
+  const [paymentOpen, setPaymentOpen] = useState(false)
 
+  // error flag forduplicates
+  const [codeErrors, setCodeErrors] = useState<Record<number, boolean>>({})
+  const [pieceCodeError, setPieceCodeError] = useState(false)
+  const [originalPieceCode, setOriginalPieceCode] = useState('') 
+
+    // οrder status
+  const [orderStatusOpen, setOrderStatusOpen] = useState(false);
+  const [orderStatus, setOrderStatus] = useState<string | null>(null);
+
+  const [hasDebt, setHasDebt] = useState<boolean | null>(null) // hasDept
+  const [confirmDeliveredOpen, setConfirmDeliveredOpen] = useState(false) //payed/not
+
+  const orderStatusLabels: Record<string, string> = {
+    new: 'Νέα',
+    processing: 'Σε επεξεργασία',
+    ready: 'Έτοιμη',
+    delivered: 'Παραδόθηκε',
+  };
+
+  const ORDER_STATUS_LABEL_TO_KEY: Record<string, 'new'|'processing'|'ready'|'delivered'> = {
+    'Νέα': 'new',
+    'Σε επεξεργασία': 'processing',
+    'Έτοιμη': 'ready',
+    'Παραδόθηκε': 'delivered',
+  };
+
+  const [originalOrder, setOriginalOrder] = useState<null | {
+    customerId?: string | null
+    orderDate?: string | null
+    notes?: string | null
+    paymentMethod?: string | null
+    deposit?: number | null
+    totalAmount?: number | null
+    orderStatus?: string | null
+    hasDebt?: boolean | null
+  }>(null)
+
+  const orderStatusDisplay = orderStatus
+    ? orderStatusLabels[orderStatus]
+    : 'Επιλέξτε κατάσταση..';
 
   /**  LOAD (order + items)*/
   useEffect(() => {
@@ -171,10 +255,29 @@ export default function EditOrderScreen() {
         setDepositAmount(order.deposit?.toString() ?? '')
         setDepositEnabled(!!order.deposit && order.deposit > 0)
         setNotes(order.notes || '')
+        setHasDebt(typeof order.hasDebt === 'boolean' ? order.hasDebt : false)
 
+        setOriginalOrder({
+        customerId: order.customerId ?? null,
+        orderDate: order.orderDate ?? null,
+        notes: order.notes ?? null,
+        paymentMethod: order.paymentMethod ?? null,
+        deposit: typeof order.deposit === 'number' ? order.deposit : null,
+        totalAmount: typeof order.totalAmount === 'number' ? order.totalAmount : null,
+        orderStatus: order.orderStatus ?? null,
+        hasDebt: typeof order.hasDebt === 'boolean' ? order.hasDebt : null,
+      })
+
+        if (order.orderStatus) {
+          setOrderStatus(ORDER_STATUS_LABEL_TO_KEY[order.orderStatus] ?? 'new')
+        } else {
+          setOrderStatus('new') 
+        } 
         setOrders([{
           ...makeEmptyOrder(),
+          qty: '',   
           date: order.orderDate || '',
+          
         }])
 
         const mapped: PieceItem[] = items.map((it: any) => ({
@@ -184,7 +287,7 @@ export default function EditOrderScreen() {
           code: it.item_code ?? '',
           shelf: it.shelf ?? '',
           status: (it.status as ('άπλυτο' | 'πλυμένο')) ?? 'άπλυτο',
-          workType: (it.storage_status as ('Επιστροφή' | 'Φύλλαξη')) ?? 'Επιστροφή',
+          workType: (it.storage_status as ('Επιστροφή' | 'Φύλαξη')) ?? 'Επιστροφή',
           cost: (typeof it.price === 'number' ? it.price.toFixed(2) : (it.price ?? '0.00')).toString(),
           orderDate: it.order_date || order.orderDate || '',
           saved: true,
@@ -246,6 +349,7 @@ export default function EditOrderScreen() {
 
   /** derived values  */
   const qtySum = useMemo(() => pieces.length, [pieces])
+  
   const totalCost = useMemo(() => {
     const sum = pieces.reduce((acc, p) => {
       const v = parseFloat((p.cost || '').toString().replace(',', '.'))
@@ -254,20 +358,30 @@ export default function EditOrderScreen() {
     return sum.toFixed(2)
   }, [pieces])
 
+
   const onChangeDeposit = (t: string) => {
     const cleaned = t.replace(/[^\d.,]/g, '')
-    setDepositAmount(cleaned)
-    if (!depositEnabled) setDepositEnabled(true)
-    }
-
-    const balance = useMemo(() => {
-    const dep = depositEnabled
-        ? parseFloat((depositAmount || '0').replace(',', '.')) || 0
-        : 0
+    let dep = parseFloat(cleaned.replace(',', '.')) || 0
     const tot = parseFloat(totalCost) || 0
-    return Math.max(0, tot - dep).toFixed(2)
-    }, [totalCost, depositAmount, depositEnabled])
 
+    // if total cost = 0 
+    // keep deposit, not abstruction
+    if (tot > 0 && dep > tot) dep = tot 
+
+    setDepositAmount(dep.toFixed(2))
+    if (!depositEnabled) setDepositEnabled(true)
+  }
+
+
+  const balance = useMemo(() => {
+    const tot = parseFloat(totalCost) || 0
+    if (tot === 0) return '0.00'        
+    const dep = depositEnabled
+      ? parseFloat((depositAmount || '0').replace(',', '.')) || 0
+      : 0
+    return Math.max(0, tot - dep).toFixed(2)
+  }, [totalCost, depositAmount, depositEnabled])
+  
   const selectedCustomerDisplay = useMemo(() => {
     if (!selectedCustomer) return 'Επιλέξτε Πελάτη'
     const c = customers.find(x => x.id === selectedCustomer)
@@ -277,6 +391,7 @@ export default function EditOrderScreen() {
     return phone ? `${full} - ${phone}` : full
   }, [customers, selectedCustomer])
 
+  
   /** pieces helpers*/
   const stepPieceCost = (index: number, delta: number) => {
     setPieces(prev =>
@@ -314,42 +429,119 @@ export default function EditOrderScreen() {
     }
     }
 
-  /** add pieces (no saved yet) */
-  const addPiecesForOrder = (ord: OrderItemUI) => {
+
+// +1 item code if many items
+async function generateSequentialCodes(prefix: string, startNum: number, count: number) {
+  const codes: string[] = []
+  let current = startNum
+
+  while (codes.length < count) {
+    const candidate = `${prefix}${String(current).padStart(3, '0')}`
+    const taken = await existsItemCode(candidate)
+    if (!taken) {
+      codes.push(candidate)
+    }
+    current++
+  }
+
+  return codes
+}
+  // errod flags per index
+  const [orderFieldErrors, setOrderFieldErrors] = useState<Record<number, {
+    category?: boolean
+    qty?: boolean
+    color?: boolean
+    itemCode?: boolean
+  }>>({})
+
+  const flagOrderErr = (i: number, key: 'category'|'qty'|'color'|'itemCode') => {
+    setOrderFieldErrors(prev => ({ ...prev, [i]: { ...(prev[i] || {}), [key]: true }}))
+  }
+
+  const clearOrderErr = (i: number, key: 'category'|'qty'|'color'|'itemCode') => {
+    setOrderFieldErrors(prev => {
+      const row = { ...(prev[i] || {}) }
+      delete row[key]
+      return { ...prev, [i]: row }
+    })
+  }
+
+  const addPiecesForOrder = async (ord: OrderItemUI, index?: number) => {
+    const errs: Record<string, boolean> = {
+      category: !ord.category,
+      qty: !ord.qty || parseInt(ord.qty) < 1,
+      color: !ord.color,
+      itemCode: !ord.itemCode || !/^[A-ZΑ-Ω]{3}\d{3}$/.test(ord.itemCode.toUpperCase()),
+    }
+
+    // ενημέρωσε inline errors
+    setOrderFieldErrors(prev => ({ ...prev, [index ?? 0]: errs }))
+
+    // required/format αποτυχία -> στοπ
+    if (Object.values(errs).some(v => v)) return
+
+    // 🔒 ΜΠΛΟΚΑΡΕ αν ο live uniqueness έλεγχος έχει βρει διπλότυπο
+    const idxKey = index ?? 0
+    if (codeErrors[idxKey]) {
+      // (προαιρετικά: “ξανακοκκίνισε” το πεδίο itemCode για έμφαση)
+      setOrderFieldErrors(prev => ({ 
+        ...prev, 
+        [idxKey]: { ...(prev[idxKey] || {}), itemCode: true } 
+      }))
+      return
+    }
+
+    // --- proceed ---
     const n = parseInt((ord.qty || '1').toString(), 10)
     const count = isNaN(n) || n < 1 ? 1 : n
 
-    const newOnes: PieceItem[] = Array.from({ length: count }).map(() => ({
+    const od = (ord.date && ord.date.length === 10) ? ord.date : ddmmyyyy()
+    const prefix = (ord.itemCode || '').slice(0, 3).toUpperCase()
+    const numPart = parseInt((ord.itemCode || '').slice(3), 10) || 1
+
+    let codes: string[] = []
+    if (prefix && /^[A-ZΑ-Ω]{3}$/.test(prefix)) {
+      codes = await generateSequentialCodes(prefix, numPart, count)
+    }
+
+    const newOnes: PieceItem[] = Array.from({ length: count }).map((_, i) => ({
       category: ord.category ?? null,
       color: ord.color ?? '',
-      code: '',
+      code: codes[i] || (ord.itemCode || '').toUpperCase(),
       cost: '0.00',
-      status: 'άπλυτο',
-      workType: 'Επιστροφή',
-      orderDate: (ord.date && ord.date.length === 10) ? ord.date : '',
+      status: ord.status,
+      workType: ord.workType,
+      orderDate: od,
       saved: false,
       newlyAdded: true,
-      dirty: true, 
+      dirty: true,
     }))
 
     setPieces(prev => [...prev, ...newOnes])
     setPiecesVisible(true)
-    Alert.alert('OK', count === 1 ? 'Προστέθηκε 1 τεμάχιο (μη αποθηκευμένο).' : `Προστέθηκαν ${count} τεμάχια (μη αποθηκευμένα).`)
+
+    if (typeof index === 'number') {
+      setOrders(prev => prev.map((o, i) => (i === index ? makeEmptyOrder() : o)))
+      setOrderFieldErrors(prev => ({ ...prev, [index]: {} }))
+    }
   }
 
   /** piece modal open/close/save */
   const openPieceModalFor = (index: number) => {
     setPieceModalIndex(index)
     const p = pieces[index]
+    const norm = (p.code ?? '').toUpperCase()
     setPieceForm({
       color: p.color ?? '',
       code: p.code ?? '',
       shelf: p.shelf ?? '',
       status: p.status ?? 'άπλυτο',
       workType: p.workType ?? 'Επιστροφή',
-      lengthM: '',
-      widthM: '',
+
+
     })
+    setOriginalPieceCode(norm)   
+    setPieceCodeError(false)   
     setPieceModalOpen(true)
   }
 
@@ -398,40 +590,40 @@ export default function EditOrderScreen() {
         //  DELETE 
         if (removedItemIds.length) {
         for (const id of removedItemIds as string[]) {
-            await deleteOrderItem(id, orderId, 'system')
+            await deleteOrderItem(id, orderId, userId)
         }
         }
 
         // INSERT  (new)
         const toInsert = pieces.filter(p => !p.id)
-        if (toInsert.length) {
-        const created: any[] = []
-        for (const p of toInsert) {
-            const rec = await createOrderItem({
-            orderId,
-            item_code: (p.code || '').toUpperCase(),
-            category: p.category ?? '',
-            color: p.color ?? '',
-            price: parseFloat((p.cost || '0').toString().replace(',', '.')) || 0,
-            status: p.status ?? 'άπλυτο',
-            storage_status: p.workType ?? 'Επιστροφή',
-            order_date: (p.orderDate && p.orderDate.length === 10) ? p.orderDate : undefined,
-            })
-            created.push(rec)
-        }
-        //  ids & clear flags 
-        if (created.length) {
-            let k = 0
-            setPieces(prev =>
-            prev.map(px => {
-                if (!px.id) {
-                const rec = created[k++]
-                return { ...px, id: rec.id, saved: true, newlyAdded: false, dirty: false }
-                }
-                return px
-            })
-            )
-        }
+          if (toInsert.length) {
+          const created: any[] = []
+          for (const p of toInsert) {
+              const rec = await createOrderItem({
+              orderId,
+              item_code: (p.code || '').toUpperCase(),
+              category: p.category ?? '',
+              color: p.color ?? '',
+              price: parseFloat((p.cost || '0').toString().replace(',', '.')) || 0,
+              status: p.status ?? 'άπλυτο',
+              storage_status: p.workType ?? 'Επιστροφή',
+              order_date: (p.orderDate && p.orderDate.length === 10) ? p.orderDate : undefined,
+              }, userId)
+              created.push(rec)
+          }
+          //  ids & clear flags 
+          if (created.length) {
+              let k = 0
+              setPieces(prev =>
+              prev.map(px => {
+                  if (!px.id) {
+                  const rec = created[k++]
+                  return { ...px, id: rec.id, saved: true, newlyAdded: false, dirty: false }
+                  }
+                  return px
+              })
+              )
+          }
         }
 
         //  UPDATE  id & dirty 
@@ -446,21 +638,41 @@ export default function EditOrderScreen() {
             status: p.status ?? 'άπλυτο',
             storage_status: p.workType ?? 'Επιστροφή',
             order_date: (p.orderDate && p.orderDate.length === 10) ? p.orderDate : undefined,
-            })
+            }, userId)
         }
         // clean flags
         setPieces(prev => prev.map(p => p.id ? { ...p, dirty: false, saved: true, newlyAdded: false } : p))
         }
 
-        // UPDATE ORDER header 
-        await updateOrder(orderId, {
+       // UPDATE ORDER header 
+      const totNum = parseFloat(totalCost) || 0
+      const dep = depositEnabled ? parseFloat((depositAmount || '0').replace(',', '.')) || 0 : 0
+
+      // if final cost =0 --> not ab
+      const finalTotal = totNum === 0 ? 0 : Math.max(0, totNum - dep)
+
+      const patch: any = {
         customerId: selectedCustomer || undefined,
-        orderDate: orders[0]?.date && orders[0].date.length === 10 ? orders[0].date : undefined,
+        orderDate:
+          orders[0]?.date && orders[0].date.length === 10
+            ? orders[0].date
+            : undefined,
         notes,
-        paymentMethod: paymentMethod ?? 'cash',
-        deposit: depositEnabled ? parseFloat((depositAmount || '0').replace(',', '.')) || 0 : 0,
-        totalAmount: parseFloat(totalCost),
-        })
+        totalAmount: finalTotal, // ✅ αποθηκεύει καθαρό ποσό ή 0
+        orderStatus: orderStatus ? orderStatusLabels[orderStatus] : undefined,
+        hasDebt: orderStatus === 'delivered' ? Boolean(hasDebt) : false,
+      }
+
+      // ✅ Αν υπάρχει προκαταβολή, την αποθηκεύουμε πάντα
+      patch.deposit = dep
+
+      if (paymentMethod !== null) {
+        patch.paymentMethod = paymentMethod
+      }
+
+      await updateOrder(orderId, patch, userId)
+
+
 
         // clear queue deletion
         setRemovedItemIds([])
@@ -469,18 +681,18 @@ export default function EditOrderScreen() {
         //  web 
         Alert.alert('✅', `Η παραγγελία #${orderId} ενημερώθηκε.`)
 
-        router.push('/customers' as any)
+        router.replace('/customers' as any)
         } else {
         //  mobile (iOS/Android)
         Alert.alert('✅', `Η παραγγελία #${orderId} ενημερώθηκε.`, [
-            { text: 'OK', onPress: () => router.push('/customers' as any) },
+           { text: 'OK', onPress: () => router.replace('/customers' as any) },
         ])
         }  
         } catch (err) {
         console.error(' onSave error:', err)
         Alert.alert('Σφάλμα', 'Η αποθήκευση απέτυχε.')
         }
-    }
+  }
 
   if (loading) {
     return (
@@ -540,16 +752,7 @@ export default function EditOrderScreen() {
                 <Ionicons name="calendar-outline" size={22} color="#fff" />
               </View>
 
-              {isLast && (
-                <Pressable onPress={addOrderUI} style={styles.addOrderFab}>
-                  <Ionicons name="add" size={22} color="#fff" />
-                </Pressable>
-              )}
-              {canRemove && (
-                <Pressable onPress={() => removeOrderUI(idx)} style={styles.removeOrderFab}>
-                  <Text style={styles.removeOrderFabText}>×</Text>
-                </Pressable>
-              )}
+              
 
               <Text style={styles.orderHeaderTitle}>
                 Στοιχεία παραγγελίας {orders.length > 1 ? `#${idx + 1}` : ''}
@@ -557,25 +760,40 @@ export default function EditOrderScreen() {
 
               <View style={styles.orderInnerPanel}>
                 <View style={styles.orderRow}>
+
                   {/* Κατηγορία */}
                   <View style={styles.fieldGroup}>
                     <Text style={styles.inputLabelInline}>Κατηγορία</Text>
                     <Pressable
-                      onPress={() => updateOrderUI(idx, { categoryOpen: !ord.categoryOpen })}
-                      style={styles.fakeInputInline}
+                      onPress={() => {
+                        updateOrderUI(idx, { categoryOpen: !ord.categoryOpen })
+                        clearOrderErr(idx, 'category') // μόλις πάει να διορθώσει, καθάρισε το error
+                      }}
+                      style={[
+                        styles.fakeInputInline,
+                        orderFieldErrors[idx]?.category && { borderColor: '#DC2626', borderWidth: 1.5 },
+                      ]}
                     >
                       <Text style={[styles.fakeInputText, !ord.category && { color: '#999' }]}>
                         {ord.category ?? 'Επιλέξτε κατηγορία..'}
                       </Text>
                       <Ionicons name={ord.categoryOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#666" />
                     </Pressable>
+
+                    {orderFieldErrors[idx]?.category && (
+                      <Text style={{ fontSize: 12, color: '#B91C1C', marginTop: 4 }}>Απαιτείται</Text>
+                    )}
+
                     {ord.categoryOpen && (
                       <View style={[styles.dropdownMenu, { marginLeft: 0, zIndex: 10 + (orders.length - idx) }]}>
                         {categoryLabels.map((label, i) => (
                           <View key={label}>
                             {i > 0 && <View style={styles.dropdownDivider} />}
                             <Pressable
-                              onPress={() => updateOrderUI(idx, { category: label, categoryOpen: false })}
+                              onPress={() => {
+                                updateOrderUI(idx, { category: label, categoryOpen: false })
+                                clearOrderErr(idx, 'category') // καθάρισμα με την επιλογή
+                              }}
                               style={styles.dropdownItem}
                             >
                               <Text style={styles.dropdownItemText}>{label}</Text>
@@ -586,54 +804,149 @@ export default function EditOrderScreen() {
                     )}
                   </View>
 
+
                   {/* Ποσότητα */}
                   <View style={styles.fieldGroup}>
                     <Text style={styles.inputLabelInline}>Ποσότητα</Text>
-                    <View style={styles.amountInputWrap}>
+
+                    <View
+                      style={[
+                        styles.amountInputWrap,
+                        orderFieldErrors[idx]?.qty && { borderColor: '#DC2626', borderWidth: 1.5 },
+                      ]}
+                    >
                       <TextInput
                         value={ord.qty}
-                        onChangeText={(t) => updateOrderUI(idx, { qty: t })}
-                        placeholder="π.χ. 1"
-                        keyboardType="numeric"
-                        style={styles.amountInput}
+                        onChangeText={(t) => {
+                          const clean = t.replace(/\D/g, '')
+                          updateOrderUI(idx, { qty: clean })
+
+                          const n = parseInt(clean || '0', 10)
+                          if (!isNaN(n) && n >= 1) clearOrderErr(idx, 'qty')
+                        }}
+                        placeholder="Εισάγετε ποσότητα"
+                        placeholderTextColor="#9CA3AF"
+                        keyboardType="number-pad"
+                        maxLength={3}
+                        style={[styles.amountInput, { borderWidth: 0, backgroundColor: 'transparent' }]}
                       />
                     </View>
+
+                    {orderFieldErrors[idx]?.qty && (
+                      <Text style={{ fontSize: 12, color: '#B91C1C', marginTop: 4 }}>Απαιτείται</Text>
+                    )}
                   </View>
 
+
+
                   {/* Ημερομηνία */}
-                  <View style={styles.fieldGroup}>
+                  <View style={[styles.fieldGroup, styles.popHost]}>
                     <Text style={styles.inputLabelInline}>Ημερομηνία</Text>
-                    <View style={styles.amountInputWrap}>
+                    <View style={[styles.amountInputWrap, { position: 'relative' }]}>
                       <TextInput
                         value={ord.date}
                         onChangeText={(t) => onChangeOrderDateAt(idx, t)}
                         placeholder={ddmmyyyy()}
                         keyboardType="numeric"
                         maxLength={10}
-                        style={styles.amountInput}
+                        style={[styles.amountInput, { paddingRight: 34 }]}
                       />
+
+                      {/* Εικονίδιο calendar για toggle */}
+                      <Pressable
+                        onPress={() => updateOrderUI(idx, { dateOpen: !ord.dateOpen })}
+                        style={{
+                          position: 'absolute',
+                          right: 8,
+                          top: '50%',
+                          transform: [{ translateY: -10 }],
+                          padding: 4,
+                        }}
+                        hitSlop={8}
+                        accessibilityLabel="Άνοιγμα ημερολογίου"
+                      >
+                        <Ionicons name="calendar-outline" size={18} color="#6B7280" />
+                      </Pressable>
                     </View>
+
+                    {/* Popover Calendar */}
+                    {ord.dateOpen && (
+                      <View
+                        style={{
+                          position: 'absolute',
+                          top: '100%',
+                          left: 0,
+                          marginTop: 4,
+                          zIndex: 99999,
+                          backgroundColor: '#fff',
+                          borderRadius: 12,
+                          overflow: 'hidden',
+                          shadowColor: '#000',
+                          shadowOpacity: 0.15,
+                          shadowRadius: 8,
+                          shadowOffset: { width: 0, height: 3 },
+                          ...(Platform.select({ android: { elevation: 6 } }) as object),
+                        }}
+                      >
+                        <Calendar
+                          initialDate={ddmmyyyyToISO(ord.date || ddmmyyyy())}
+                          current={ddmmyyyyToISO(ord.date || ddmmyyyy())}
+                          onDayPress={({ dateString }) => {
+                            const picked = isoToDDMMYYYY(dateString);
+                            updateOrderUI(idx, { date: picked, dateOpen: false });
+
+                            // ίδιο προαιρετικό sync όπως και στο input
+                            setPieces(prev =>
+                              prev.map(p => {
+                                if (!p.orderDate || p.orderDate.length !== 10) {
+                                  return { ...p, orderDate: picked, dirty: true };
+                                }
+                                return p;
+                              })
+                            );
+                          }}
+                          firstDay={1}
+                          hideExtraDays
+                          enableSwipeMonths
+                        />
+                      </View>
+                    )}
                   </View>
 
+
                   {/* Χρώμα */}
-                  <View style={styles.fieldGroup}>
+                  <View style={[styles.fieldGroup, { minWidth: 120, flexBasis: 140, flexShrink: 1 }]}>
                     <Text style={styles.inputLabelInline}>Χρώμα</Text>
                     <Pressable
-                      onPress={() => updateOrderUI(idx, { colorOpen: !ord.colorOpen })}
-                      style={styles.fakeInputInline}
+                      onPress={() => {
+                        updateOrderUI(idx, { colorOpen: !ord.colorOpen })
+                        clearOrderErr(idx, 'color')
+                      }}
+                      style={[
+                        styles.fakeInputInline,
+                        orderFieldErrors[idx]?.color && { borderColor: '#DC2626', borderWidth: 1.5 },
+                      ]}
                     >
                       <Text style={[styles.fakeInputText, !ord.color && { color: '#999' }]}>
-                        {ord.color ?? 'Επιλέξτε χρώμα..'}
+                        {ord.color ?? 'Επιλέξτε'}
                       </Text>
                       <Ionicons name={ord.colorOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#666" />
                     </Pressable>
+
+                    {orderFieldErrors[idx]?.color && (
+                      <Text style={{ fontSize: 12, color: '#B91C1C', marginTop: 4 }}>Απαιτείται</Text>
+                    )}
+
                     {ord.colorOpen && (
                       <View style={[styles.dropdownMenu, { marginLeft: 0, zIndex: 10 + (orders.length - idx) }]}>
                         {colorLabels.map((label, i) => (
                           <View key={label}>
                             {i > 0 && <View style={styles.dropdownDivider} />}
                             <Pressable
-                              onPress={() => updateOrderUI(idx, { color: label, colorOpen: false })}
+                              onPress={() => {
+                                updateOrderUI(idx, { color: label, colorOpen: false })
+                                clearOrderErr(idx, 'color')
+                              }}
                               style={styles.dropdownItem}
                             >
                               <Text style={styles.dropdownItemText}>{label}</Text>
@@ -643,21 +956,142 @@ export default function EditOrderScreen() {
                       </View>
                     )}
                   </View>
+
+
+                  {/* Κωδικός Τεμαχίου */}
+                  <View style={[styles.fieldGroup, { minWidth: 120, flexBasis: 140, flexShrink: 1 }]}>
+                    <Text style={styles.inputLabelInline}>Κωδικός Τεμαχίου</Text>
+
+                    {/* ✅ Το κόκκινο περίγραμμα μπαίνει στο wrapper */}
+                    <View
+                      style={[
+                        styles.amountInputWrap,
+                        (orderFieldErrors[idx]?.itemCode || codeErrors[idx]) && { borderColor: '#DC2626', borderWidth: 1.5 },
+                      ]}
+                    >
+                      <TextInput
+                        value={ord.itemCode ?? ''}
+                        onChangeText={async (v) => {
+                          const clean = v.toUpperCase().replace(/[^A-ZΑ-Ω0-9]/g, '').slice(0, 6)
+                          updateOrderUI(idx, { itemCode: clean })
+
+                          // μόλις γράψει κάτι → καθάρισε το "Απαιτείται"
+                          if (clean.length > 0) clearOrderErr(idx, 'itemCode')
+
+                          // αν είναι σωστό pattern, κάνε uniqueness check
+                          if (/^[A-ZΑ-Ω]{3}\d{3}$/.test(clean)) {
+                            const taken = await existsItemCode(clean)
+                            setCodeErrors(prev => ({ ...prev, [idx]: taken }))
+                          } else {
+                            setCodeErrors(prev => ({ ...prev, [idx]: false }))
+                          }
+                        }}
+                        placeholder="CHR001"
+                        autoCapitalize="characters"
+                        maxLength={6}
+                        // ❌ Μην έχει δικό του border
+                        style={[styles.amountInput, { borderWidth: 0, backgroundColor: 'transparent' }]}
+                      />
+                    </View>
+
+                    {/* Required */}
+                    {orderFieldErrors[idx]?.itemCode && (
+                      <Text style={{ fontSize: 12, color: '#B91C1C', marginTop: 4 }}>Απαιτείται</Text>
+                    )}
+
+                    {/* Pattern */}
+                    {Boolean(ord.itemCode) && !isItemCodeValid(ord.itemCode!) && (
+                      <Text style={{ fontSize: 12, color: '#B91C1C', marginTop: 4 }}>
+                        Μορφή XXX999 (π.χ. CHR001)
+                      </Text>
+                    )}
+
+                    {/* Uniqueness */}
+                    {Boolean(ord.itemCode) && codeErrors[idx] && (
+                      <Text style={{ fontSize: 12, color: '#B91C1C', marginTop: 4 }}>
+                        Ο κωδικός υπάρχει ήδη!
+                      </Text>
+                    )}
+                  </View>
+
+
+                  {/* Κατάσταση */}
+                  <View style={[styles.fieldGroup, styles.dropdownHost, { minWidth: 120, flexBasis: 140, flexShrink: 1 }]}>
+                    <Text style={styles.inputLabelInline}>Κατάσταση</Text>
+                    <Pressable
+                      onPress={() => updateOrderUI(idx, { statusOpen: !ord.statusOpen })}
+                      style={styles.fakeInputInline}
+                    >
+                      <Text style={styles.fakeInputText}>{ord.status}</Text>
+                      <Ionicons name={ord.statusOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#666" />
+                    </Pressable>
+                    {ord.statusOpen && (
+                      <View style={[styles.dropdownMenu, { marginLeft: 0, zIndex: 20 + (orders.length - idx) }]}>
+                        {(['άπλυτο', 'πλυμένο'] as const).map((opt, i) => (
+                          <View key={opt}>
+                            {i > 0 && <View style={styles.dropdownDivider} />}
+                            <Pressable
+                              style={styles.dropdownItem}
+                              onPress={() => updateOrderUI(idx, { status: opt, statusOpen: false })}
+                            >
+                              <Text style={styles.dropdownItemText}>{opt}</Text>
+                            </Pressable>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Τύπος Εργασίας */}
+                  <View style={[styles.fieldGroup, { minWidth: 170, flexBasis: 200, flexShrink: 1 }]}>
+                    <Text style={styles.inputLabelInline}>Τύπος Εργασίας</Text>
+                    <View style={[styles.chipRow, { marginLeft: 0, marginTop: 0 }]}>
+                      {(['Επιστροφή','Φύλαξη'] as const).map(opt => {
+                        const active = ord.workType === opt
+                        return (
+                          <Pressable
+                            key={opt}
+                            onPress={() => updateOrderUI(idx, { workType: opt })}
+                            style={[styles.chip, active && styles.chipActive]}
+                          >
+                            <Text style={[styles.chipText, active && styles.chipTextActive]}>{opt}</Text>
+                          </Pressable>
+                        )
+                      })}
+                    </View>
+                  </View>
+
                 </View>
               </View>
 
-              <View style={styles.orderActions}>
-                <Pressable style={styles.primaryBtn} onPress={() => addPiecesForOrder(ord)}>
+              <View
+                style={[styles.orderActions, ord.dateOpen && styles.demoteBelowPop]}
+                pointerEvents={ord.dateOpen ? 'none' : 'auto'}
+              >
+                <Pressable
+                  style={[styles.primaryBtn, ord.dateOpen && styles.demoteBelowPop]}
+                  onPress={async () => await addPiecesForOrder(ord, idx)}
+                >
                   <Text style={styles.primaryBtnText}>Επιλογή</Text>
                 </Pressable>
+
               </View>
+
             </View>
           )
         })}
 
         {/* ===== Τεμάχια Παραγγελίας ===== */}
         {piecesVisible && (
-          <View style={[styles.cardBox, styles.cardBoxLarge, { marginTop: 16 }]}>
+          <View
+            style={[
+              styles.cardBox,
+              styles.cardBoxLarge,
+              { marginTop: 16 },
+              orders.some(o => o.dateOpen) && styles.pushBehind,  
+            ]}
+            pointerEvents={orders.some(o => o.dateOpen) ? 'none' : 'auto'} 
+          >
             <View style={styles.piecesIconFab}>
               <Ionicons name="file-tray-stacked-outline" size={22} color="#fff" />
             </View>
@@ -697,12 +1131,17 @@ export default function EditOrderScreen() {
                         </Pressable>
                         <View style={styles.costInputWrap}>
                             <TextInput
-                            value={p.cost}
-                            onChangeText={(t) => updatePiece(i, { cost: t.replace(/[^\d.,]/g, '') })}
-                            placeholder="0.00"
-                            keyboardType={Platform.select({ ios: 'decimal-pad', android: 'numeric' })}
-                            inputMode="decimal"
-                            style={styles.costInput}
+                              value={p.cost}
+                              onChangeText={(t) =>
+                                updatePiece(i, {
+                                  cost: t.replace(/[^\d.,]/g, ''), 
+                                  dirty: true,                    
+                                })
+                              }
+                              placeholder="0.00"
+                              keyboardType={Platform.select({ ios: 'decimal-pad', android: 'numeric' })}
+                              inputMode="decimal"
+                              style={styles.costInput}
                             />
                             <Text style={styles.euroSuffix}>€</Text>
                         </View>
@@ -711,99 +1150,142 @@ export default function EditOrderScreen() {
                         </Pressable>
                         </View>
 
-                        <Pressable style={styles.addPieceSmallBtn} onPress={() => openPieceModalFor(i)}>
-                        <Text style={styles.addPieceSmallBtnText}>
-                            {p.newlyAdded ? '+ Νέο τεμάχιο' : 'Επεξεργασία'}
-                        </Text>
-                        </Pressable>
+                        {p.saved && (
+                          <Pressable style={styles.addPieceSmallBtn} onPress={() => openPieceModalFor(i)}>
+                            <Text style={styles.addPieceSmallBtnText}>Επεξεργασία</Text>
+                          </Pressable>
+                        )}
+
                     </View>
                     )
                 })}
             </View>
 
-
-            {/* + Νέο Τεμάχιο (προαιρετικό) */}
-            {/*<Pressable
-              style={[styles.addPieceBtn, { marginTop: 10 }]}
-              onPress={() => {
-                const idx = pieces.length
-                setPieces(prev => [...prev, { category: null, cost: '0.00', color: '', code: '', shelf: '', status: 'άπλυτο', workType: 'Επιστροφή', saved: false, newlyAdded: true, }])
-                openPieceModalFor(idx)
-              }}
-            >
-              
-            </Pressable> */}
           </View>
         )}
 
         {/* ===== Πληρωμή ===== */}
         <View style={[styles.cardBox, { marginTop: 26 }]}>
-        <Text style={[styles.inputLabel, { fontSize: 16 }]}>Πληρωμή</Text>
+          <Text style={[styles.inputLabel, { fontSize: 16 }]}>Πληρωμή</Text>
 
-        {/* Προκαταβολή */}
-            <View style={styles.inputWrap}>
-                <View style={styles.depositRow}>
-                    <Text style={[styles.inputLabel, { marginLeft: 1 }]}>Προκαταβολή</Text>
-                    <Pressable
-                    onPress={() => setDepositEnabled(prev => !prev)} // ή toggleDeposit() αν το έχεις
-                    style={[styles.toggleWrapSmall, depositEnabled && styles.toggleWrapOnSmall]}
-                    >
-                    <View style={[styles.toggleKnobSmall, depositEnabled && styles.toggleKnobOnSmall]} />
-                    </Pressable>
-                </View>
+          {/* Προκαταβολή */}
+              <View style={styles.inputWrap}>
+                  <View style={styles.depositRow}>
+                      <Text style={[styles.inputLabel, { marginLeft: 1 }]}>Προκαταβολή</Text>
+                      <Pressable
+                      onPress={() => setDepositEnabled(prev => !prev)} // ή toggleDeposit() αν το έχεις
+                      style={[styles.toggleWrapSmall, depositEnabled && styles.toggleWrapOnSmall]}
+                      >
+                      <View style={[styles.toggleKnobSmall, depositEnabled && styles.toggleKnobOnSmall]} />
+                      </Pressable>
+                  </View>
 
-                {depositEnabled && (
-                    <View style={styles.amountRow}>
-                    <View style={styles.amountInputWrap}>
-                        <TextInput
-                        value={depositAmount}
-                        onChangeText={onChangeDeposit}   // κρατάω τη δική σου λογική
-                        placeholder="Ποσό προκαταβολής"
-                        keyboardType={Platform.select({ ios: 'decimal-pad', android: 'numeric', default: 'numeric' })}
-                        inputMode="decimal"
-                        style={styles.amountInput}
-                        />
-                        <Text style={styles.euroSuffix}>€</Text>
-                    </View>
-                    </View>
-                )}
+                  {depositEnabled && (
+                      <View style={styles.amountRow}>
+                      <View style={styles.amountInputWrap}>
+                          <TextInput
+                          value={depositAmount}
+                          onChangeText={onChangeDeposit}   // κρατάω τη δική σου λογική
+                          placeholder="Ποσό προκαταβολής"
+                          keyboardType={Platform.select({ ios: 'decimal-pad', android: 'numeric', default: 'numeric' })}
+                          inputMode="decimal"
+                          style={styles.amountInput}
+                          />
+                          <Text style={styles.euroSuffix}>€</Text>
+                      </View>
+                      </View>
+                  )}
 
-                {/* Υπόλοιπο */}
-                <View style={{ marginTop: 12 }}>
-                    <Text style={[styles.inputLabelInline, { marginBottom: 4 }]}>Υπόλοιπο</Text>
-                    <View style={[styles.totalAmountWrap, { paddingVertical: 8 }]}>
-                    <Text style={[styles.totalAmountText, { fontSize: 18 }]}>{balance} €</Text>
-                    </View>
-                </View>
-            </View>
+                  {/* Υπόλοιπο */}
+                  <View style={{ marginTop: 12 }}>
+                      <Text style={[styles.inputLabelInline, { marginBottom: 4 }]}>Υπόλοιπο</Text>
+                      <View style={[styles.totalAmountWrap, { paddingVertical: 8 }]}>
+                      <Text style={[styles.totalAmountText, { fontSize: 18 }]}>{balance} €</Text>
+                      </View>
+                  </View>
+              </View>
 
 
-        {/* Τρόπος πληρωμής */}
-        <View>
-            <Text style={styles.inputLabelInline}>Τρόπος πληρωμής</Text>
-            <Pressable onPress={() => setPaymentOpen(v => !v)} style={styles.fakeInput}>
-            <Text style={[styles.fakeInputText, !paymentMethod && { color: '#999' }]}>
-                {paymentMethod ? (paymentLabels[paymentMethod] || paymentMethod) : 'Επιλέξτε τρόπο...'}
+          {/* Τρόπος πληρωμής */}
+          <View>
+              <Text style={styles.inputLabelInline}>Τρόπος πληρωμής</Text>
+              <Pressable onPress={() => setPaymentOpen(v => !v)} style={styles.fakeInput}>
+              <Text style={[styles.fakeInputText, !paymentMethod && { color: '#999' }]}>
+                  {paymentMethod ? (paymentLabels[paymentMethod] || paymentMethod) : 'Επιλέξτε τρόπο...'}
+              </Text>
+              <Ionicons name={paymentOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#666" />
+              </Pressable>
+
+              {paymentOpen && (
+              <View style={[styles.dropdownMenu, { marginTop: 8 }]}>
+                  {paymentOptions.map((opt, i) => (
+                  <View key={opt}>
+                      {i > 0 && <View style={styles.dropdownDivider} />}
+                      <Pressable
+                      onPress={() => { setPaymentMethod(opt); setPaymentOpen(false) }}
+                      style={styles.dropdownItem}
+                      >
+                      <Text style={styles.dropdownItemText}>{paymentLabels[opt]}</Text>
+                      </Pressable>
+                  </View>
+                  ))}
+              </View>
+              )}
+          </View>
+        </View>
+        
+        {/* Κατάσταση Παραγγελίας */}
+        <View style={[styles.cardBox, { marginTop: 16 }]}>
+          <View style={styles.inputWrap}>
+            <Text style={[styles.inputLabel, { marginLeft: -1 }]}>
+              Κατάσταση Παραγγελίας
             </Text>
-            <Ionicons name={paymentOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#666" />
+
+            <Pressable
+              onPress={() => setOrderStatusOpen(v => !v)}
+              style={styles.fakeInput}
+            >
+              <Text
+                numberOfLines={1}
+                style={[styles.fakeInputText, !orderStatus && { color: '#999' }]}
+              >
+                {orderStatusDisplay}
+              </Text>
+              <Ionicons
+                name={orderStatusOpen ? 'chevron-up' : 'chevron-down'}
+                size={18}
+                color="#666"
+              />
             </Pressable>
 
-            {paymentOpen && (
-            <View style={[styles.dropdownMenu, { marginTop: 8 }]}>
-                {paymentOptions.map((opt, i) => (
-                <View key={opt}>
+            {orderStatusOpen && (
+              <View style={styles.dropdownMenu}>
+                {Object.entries(orderStatusLabels).map(([key, label], i) => (
+                  <View key={key}>
                     {i > 0 && <View style={styles.dropdownDivider} />}
                     <Pressable
-                    onPress={() => { setPaymentMethod(opt); setPaymentOpen(false) }}
-                    style={styles.dropdownItem}
+                      style={styles.dropdownItem}
+                      onPress={() => {
+                        if (key === 'delivered') {
+                          // ordered --> payed or not
+                          setOrderStatusOpen(false)
+                          setConfirmDeliveredOpen(true)
+                        } else {
+                          // else hasDept false
+                          setOrderStatus(key as typeof key)
+                          setHasDebt(false)
+                          setOrderStatusOpen(false)
+                        }
+                      }}
                     >
-                    <Text style={styles.dropdownItemText}>{paymentLabels[opt]}</Text>
+                      <Text style={styles.dropdownItemText}>{label}</Text>
                     </Pressable>
-                </View>
+                  </View>
                 ))}
-            </View>
+              </View>
             )}
-        </View>
+
+          </View>
         </View>
 
 
@@ -814,7 +1296,7 @@ export default function EditOrderScreen() {
           </View>
           <Text style={styles.totalHeaderTitle}>Συνολικό Κόστος</Text>
           <View style={styles.totalAmountWrap}>
-            <Text style={styles.totalAmountText}>{totalCost} €</Text>
+            <Text style={styles.totalAmountText}>{balance} €</Text>
           </View>
         </View>
 
@@ -854,20 +1336,20 @@ export default function EditOrderScreen() {
         <View style={styles.modalOverlay}>
           <Pressable style={StyleSheet.absoluteFill as any} onPress={() => setCustomerModalOpen(false)} />
           <View style={styles.modalCard}>
-            {/* Νέος πελάτης — πάνω δεξιά */}
             <Pressable
-              style={styles.modalTopRightFab}
+              style={styles.newCustomerBtn}
               onPress={() => {
                 setCustomerModalOpen(false)
                 router.push('/customers')
               }}
             >
-              <Ionicons name="person-add-outline" size={20} color="#3B82F6" />
+              <Text style={styles.newCustomerBtnText}>Νέος Πελάτης</Text>
             </Pressable>
 
             <Text style={{ fontSize: 16, fontWeight: '600', marginBottom: 12 }}>
               Επιλέξτε Πελάτη
             </Text>
+            
 
             <View style={styles.tableCard}>
               <View style={styles.tableHeader}>
@@ -876,6 +1358,8 @@ export default function EditOrderScreen() {
                 <Text style={[styles.th, styles.colAfm]}>ΑΦΜ</Text>
                 <View style={styles.vDivider} />
                 <Text style={[styles.th, styles.colAddr]}>Διεύθυνση</Text>
+                <View style={styles.vDivider} />
+                <Text style={[styles.th, styles.colPhone]}>Κινητό</Text> 
               </View>
 
               <ScrollView
@@ -911,6 +1395,10 @@ export default function EditOrderScreen() {
                       <Text style={[styles.rowText, styles.colAddr]} numberOfLines={1}>
                         {c.address || '—'}
                       </Text>
+                      <View style={styles.vDivider} />
+                      <Text style={[styles.rowText, styles.colPhone]} numberOfLines={1}>
+                        {c.phone || '—'} 
+                      </Text>
                     </Pressable>
                   )
                 })}
@@ -936,200 +1424,224 @@ export default function EditOrderScreen() {
         </View>
       </Modal>
 
-      {/* ===== Modal: Νέο/Επεξεργασία Τεμαχίου ===== */}
-      {/* ===== Modal: Νέο/Επεξεργασία Τεμαχίου ===== */}
-<Modal
-  visible={pieceModalOpen}
-  animationType="fade"
-  transparent
-  statusBarTranslucent
-  onRequestClose={closePieceModal}
->
-  <View style={styles.modalBackdrop}>
-    {/* ΜΟΝΟ ΕΝΑΣ WRAPPER ΓΙΑ ΟΛΟ ΤΟ ΠΕΡΙΕΧΟΜΕΝΟ */}
-    <View style={[styles.modalCard, needsDimensions && styles.modalCardTall]}>
-      <View style={styles.modalHeader}>
-        <Image
-          source={require('../../assets/images/box.png')}
-          style={{ width: 70, height: 70, marginBottom: 8 }}
-          resizeMode="contain"
-        />
-        <Text style={styles.modalTitle}>
-          {activePiece?.id ? 'Επεξεργασία τεμαχίου' : 'Νέο τεμάχιο'}
-        </Text>
-        <Text style={styles.modalSubtitle}>
-          #{orderId?.slice(0, 6)?.toUpperCase?.()}
-        </Text>
-      </View>
-
-      <ScrollView
-        contentContainerStyle={{
-          paddingBottom: 4,  
-          paddingTop: 15,      
-        }}
-        keyboardShouldPersistTaps="handled"
+      {/* Νέο/Επεξεργασία Τεμαχίου ===== */}
+      <Modal
+        visible={pieceModalOpen}
+        animationType="fade"
+        transparent
+        statusBarTranslucent
+        onRequestClose={closePieceModal}
       >
-        {/* 1) Κατηγορία / Χρώμα */}
-        <View style={styles.row2}>
-          <View style={[styles.inputWrap, styles.flex1]}>
-            <Text style={styles.label}>Κατηγορία</Text>
-            <TextInput
-              value={activeCategory ?? '—'}
-              editable={false}
-              selectTextOnFocus={false}
-              style={[styles.input, styles.lockedInput]}
-              placeholder="—"
-            />
-          </View>
-
-          <View style={[styles.inputWrap, styles.flex1]}>
-            <Text style={styles.label}>Χρώμα *</Text>
-            <TextInput
-              value={pieceForm.color}
-              onChangeText={(v) => setPieceForm(s => ({ ...s, color: v }))}
-              style={styles.input}
-              placeholder="π.χ. κόκκινο, μπλε..."
-              placeholderTextColor="#6B7280"
-            />
-          </View>
-        </View>
-
-        {/* 2) Κωδικός / Ράφι */}
-        <View style={styles.row2}>
-          <View style={[styles.inputWrap, styles.flex1]}>
-            <Text style={styles.label}>Κωδικός τεμαχίου</Text>
-            <TextInput
-              value={pieceForm.code}
-              onChangeText={(v) => setPieceForm(s => ({ ...s, code: v.toUpperCase() }))}
-              style={[styles.input, !isCodeValid() && pieceForm.code ? styles.inputError : null]}
-              placeholder="CHR001"
-              placeholderTextColor="#6B7280"
-              autoCapitalize="characters"
-              maxLength={6}
-            />
-            {!isCodeValid() && pieceForm.code ? (
-              <Text style={styles.inputHintError}>Μορφή XXX999 (π.χ. CHR001)</Text>
-            ) : null}
-          </View>
-
-          <View style={[styles.inputWrap, styles.flex1]}>
-            <Text style={styles.label}>Ράφι</Text>
-            <TextInput
-              value={pieceForm.shelf}
-              onChangeText={(v) => setPieceForm(s => ({ ...s, shelf: v.toUpperCase() }))}
-              style={styles.input}
-              placeholder="π.χ. Α1"
-              placeholderTextColor="#6B7280"
-              autoCapitalize="characters"
-              maxLength={4}
-            />
-          </View>
-        </View>
-
-        {/* 3) Διαστάσεις (για Μοκέτα/Χαλί/Φλοκάτι/Διαδρομάκι) */}
-        {needsDimensions && (
-          <>
-            <Text style={[styles.label, { marginTop: 8 }]}>Διαστάσεις (μέτρα)</Text>
-            <View style={styles.row2}>
-              <View style={[styles.inputWrap, styles.flex1]}>
-                <Text style={styles.label}>Μήκος (προαιρετικό)</Text>
-                <TextInput
-                  value={pieceForm.lengthM}
-                  onChangeText={(v) => {
-                    const clean = v.replace(/[^\d.,]/g, '')
-                    setPieceForm(s => ({ ...s, lengthM: clean }))
-                  }}
-                  style={styles.input}
-                  placeholder="Μήκος (προαιρετικό)"
-                  placeholderTextColor="#6B7280"
-                  keyboardType={Platform.select({ ios: 'decimal-pad', android: 'numeric', default: 'numeric' })}
-                  inputMode="decimal"
-                />
-              </View>
-
-              <View style={[styles.inputWrap, styles.flex1]}>
-                <Text style={styles.label}>Πλάτος (προαιρετικό)</Text>
-                <TextInput
-                  value={pieceForm.widthM}
-                  onChangeText={(v) => {
-                    const clean = v.replace(/[^\d.,]/g, '')
-                    setPieceForm(s => ({ ...s, widthM: clean }))
-                  }}
-                  style={styles.input}
-                  placeholder="Πλάτος (προαιρετικό)"
-                  placeholderTextColor="#6B7280"
-                  keyboardType={Platform.select({ ios: 'decimal-pad', android: 'numeric', default: 'numeric' })}
-                  inputMode="decimal"
-                />
-              </View>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Image
+                source={require('../../assets/images/box.png')}
+                style={{ width: 70, height: 70, marginBottom: 8 }}
+                resizeMode="contain"
+              />
+              <Text style={styles.modalTitle}>
+                {activePiece?.id ? 'Επεξεργασία τεμαχίου' : 'Νέο τεμάχιο'}
+              </Text>
+              <Text style={styles.modalSubtitle}>
+                #{orderId?.slice(0, 6)?.toUpperCase?.()}
+              </Text>
             </View>
 
-            {hasBoth && (
-              <View style={{ marginTop: 4 }}>
-                <Text style={[styles.label, { fontWeight: '600' }]}>
-                  Επιφάνεια: {areaSqm.toFixed(2)} τ.μ.
-                </Text>
-              </View>
-            )}
-          </>
-        )}
+            <ScrollView
+              contentContainerStyle={{
+                paddingBottom: 4,  
+                paddingTop: 15,      
+              }}
+              keyboardShouldPersistTaps="handled"
+            >
+              {/* 1) Κατηγορία / Χρώμα */}
+              <View style={styles.row2}>
+                <View style={[styles.inputWrap, styles.flex1]}>
+                  <Text style={styles.label}>Κατηγορία</Text>
+                  <TextInput
+                    value={activeCategory ?? '—'}
+                    editable={false}
+                    selectTextOnFocus={false}
+                    style={[styles.input, styles.lockedInput]}
+                    placeholder="—"
+                  />
+                </View>
 
-        {/* 4) Κατάσταση / Τύπος */}
-        <View style={styles.row2}>
-          <View style={[styles.inputWrap, styles.flex1, styles.dropdownHost]}>
-            <Text style={styles.label}>Κατάσταση</Text>
-            <Pressable onPress={() => setStatusOpen(v => !v)} style={styles.fakeInput}>
-              <Text style={styles.fakeInputText}>{pieceForm.status}</Text>
-              <Ionicons name={statusOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#666" />
-            </Pressable>
-            {statusOpen && (
-              <View style={[styles.dropdownMenu, styles.dropdownMenuAbove]}>
-                {(['άπλυτο', 'πλυμένο'] as const).map((opt, i) => (
-                  <View key={opt}>
-                    {i > 0 && <View style={styles.dropdownDivider} />}
-                    <Pressable
-                      style={styles.dropdownItem}
-                      onPress={() => { setPieceForm(s => ({ ...s, status: opt })); setStatusOpen(false) }}
-                    >
-                      <Text style={styles.dropdownItemText}>{opt}</Text>
-                    </Pressable>
-                  </View>
-                ))}
+                <View style={[styles.inputWrap, styles.flex1]}>
+                  <Text style={styles.label}>Χρώμα *</Text>
+                  <TextInput
+                    value={pieceForm.color}
+                    onChangeText={(v) => setPieceForm(s => ({ ...s, color: v }))}
+                    style={styles.input}
+                    placeholder="π.χ. κόκκινο, μπλε..."
+                    placeholderTextColor="#6B7280"
+                  />
+                </View>
               </View>
-            )}
-          </View>
 
-          <View style={[styles.inputWrap, styles.flex1]}>
-            <Text style={styles.label}>Τύπος Εργασίας *</Text>
-            <View style={styles.chipRow}>
-              {(['Επιστροφή', 'Φύλλαξη'] as const).map(opt => {
-                const active = pieceForm.workType === opt
-                return (
-                  <Pressable
-                    key={opt}
-                    onPress={() => setPieceForm(s => ({ ...s, workType: opt }))}
-                    style={[styles.chip, active && styles.chipActive]}
-                  >
-                    <Text style={[styles.chipText, active && styles.chipTextActive]}>{opt}</Text>
+              {/* 2) Κωδικός / Ράφι */}
+              <View style={[styles.inputWrap, styles.flex1]}>
+                <Text style={styles.label}>Κωδικός τεμαχίου</Text>
+                <TextInput
+                  value={pieceForm.code}
+                  onChangeText={async (v) => {
+                    const clean = v.toUpperCase().replace(/[^A-ZΑ-Ω0-9]/g, '').slice(0, 6);
+                    setPieceForm(s => ({ ...s, code: clean }));
+
+                    // 1️⃣ έλεγχος pattern
+                    const patternOk = clean === '' || /^[A-ZΑ-Ω]{3}\d{3}$/.test(clean);
+                    if (!patternOk) { setPieceCodeError(false); return; }
+
+                    // 2️⃣ αν δεν άλλαξε από τον αρχικό, αγνόησέ το
+                    if (clean === originalPieceCode) { setPieceCodeError(false); return; }
+
+                    // 3️⃣ διαφορετικός => έλεγχος μοναδικότητας
+                    const active = pieceModalIndex !== null ? pieces[pieceModalIndex] : null;
+                    if (clean.length === 6) {
+                      const taken = active?.id
+                        ? await existsItemCodeExcept(active.id, clean)  // ✅ αγνοεί το ίδιο τεμάχιο
+                        : await existsItemCode(clean);
+                      setPieceCodeError(taken);
+                    } else {
+                      setPieceCodeError(false);
+                    }
+                  }}
+                  style={[
+                    styles.input,
+                    (!isCodeValid() && pieceForm.code) || pieceCodeError ? styles.inputError : null,
+                  ]}
+                  placeholder="CHR001"
+                  placeholderTextColor="#6B7280"
+                  autoCapitalize="characters"
+                  maxLength={6}
+                />
+
+                {!isCodeValid() && pieceForm.code ? (
+                  <Text style={styles.inputHintError}>Μορφή XXX999 (π.χ. CHR001)</Text>
+                ) : null}
+
+                {pieceCodeError && pieceForm.code && isCodeValid() ? (
+                  <Text style={styles.inputHintError}>Ο κωδικός υπάρχει ήδη στη βάση!</Text>
+                ) : null}
+              </View>
+
+
+
+              {/* 4) Κατάσταση / Τύπος */}
+              <View style={styles.row2}>
+                <View style={[styles.inputWrap, styles.flex1, styles.dropdownHost]}>
+                  <Text style={styles.label}>Κατάσταση</Text>
+                  <Pressable onPress={() => setStatusOpen(v => !v)} style={styles.fakeInput}>
+                    <Text style={styles.fakeInputText}>{pieceForm.status}</Text>
+                    <Ionicons name={statusOpen ? 'chevron-up' : 'chevron-down'} size={18} color="#666" />
                   </Pressable>
-                )
-              })}
+                  {statusOpen && (
+                    <View style={[styles.dropdownMenu, styles.dropdownMenuAbove]}>
+                      {(['άπλυτο', 'πλυμένο'] as const).map((opt, i) => (
+                        <View key={opt}>
+                          {i > 0 && <View style={styles.dropdownDivider} />}
+                          <Pressable
+                            style={styles.dropdownItem}
+                            onPress={() => { setPieceForm(s => ({ ...s, status: opt })); setStatusOpen(false) }}
+                          >
+                            <Text style={styles.dropdownItemText}>{opt}</Text>
+                          </Pressable>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+
+                <View style={[styles.inputWrap, styles.flex1]}>
+                  <Text style={styles.label}>Τύπος Εργασίας *</Text>
+                  <View style={styles.chipRow}>
+                    {(['Επιστροφή', 'Φύλαξη'] as const).map(opt => {
+                      const active = pieceForm.workType === opt
+                      return (
+                        <Pressable
+                          key={opt}
+                          onPress={() => setPieceForm(s => ({ ...s, workType: opt }))}
+                          style={[styles.chip, active && styles.chipActive]}
+                        >
+                          <Text style={[styles.chipText, active && styles.chipTextActive]}>{opt}</Text>
+                        </Pressable>
+                      )
+                    })}
+                  </View>
+                </View>
+              </View>
+            </ScrollView>
+
+            <View style={styles.modalActions}>
+              <Pressable style={styles.secondaryBtn} onPress={closePieceModal}>
+                <Text style={styles.secondaryBtnText}>Ακύρωση</Text>
+              </Pressable>
+              <Pressable style={[styles.primaryBtn, { marginLeft: 12 }]} onPress={savePieceModal}>
+                <Text style={styles.primaryBtnText}>Αποθήκευση</Text>
+              </Pressable>
             </View>
           </View>
         </View>
-      </ScrollView>
+      </Modal>
 
-      <View style={styles.modalActions}>
-        <Pressable style={styles.secondaryBtn} onPress={closePieceModal}>
-          <Text style={styles.secondaryBtnText}>Ακύρωση</Text>
-        </Pressable>
-        <Pressable style={[styles.primaryBtn, { marginLeft: 12 }]} onPress={savePieceModal}>
-          <Text style={styles.primaryBtnText}>Αποθήκευση</Text>
-        </Pressable>
-      </View>
-    </View>
-  </View>
-</Modal>
+      <Modal
+        visible={confirmDeliveredOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setConfirmDeliveredOpen(false)}
+      >
+        <View style={{
+          flex: 1,
+          backgroundColor: 'rgba(0,0,0,0.4)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          padding: 24,
+        }}>
+          <View style={{
+            backgroundColor: '#fff',
+            borderRadius: 12,
+            padding: 24,
+            width: '90%',
+            maxWidth: 360,
+          }}>
+            <Text style={{ fontSize: 18, fontWeight: '600', marginBottom: 12, textAlign: 'center' }}>
+              Παραδόθηκε
+            </Text>
+            <Text style={{ fontSize: 16, textAlign: 'center', marginBottom: 24 }}>
+              Πλήρωσε;
+            </Text>
+
+            <View style={{ flexDirection: 'row', justifyContent: 'space-evenly' }}>
+              {/* Όχι = δεν πλήρωσε → hasDebt: true */}
+              <Pressable
+                onPress={() => {
+                  setOrderStatus('delivered')
+                  setHasDebt(true)
+                  setConfirmDeliveredOpen(false)
+                }}
+                style={{ backgroundColor: '#F3F4F6', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8 }}
+              >
+                <Text style={{ color: '#374151', fontWeight: '600' }}>Όχι</Text>
+              </Pressable>
+
+              {/* Ναι = πλήρωσε → hasDebt: false */}
+              <Pressable
+                onPress={() => {
+                  setOrderStatus('delivered')
+                  setHasDebt(false)
+                  setConfirmDeliveredOpen(false)
+                }}
+                style={{ backgroundColor: '#3B82F6', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8 }}
+              >
+                <Text style={{ color: 'white', fontWeight: '600' }}>Ναι</Text>
+              </Pressable>
+            </View>
+
+          </View>
+        </View>
+      </Modal>
+
 
 
       
@@ -1385,7 +1897,13 @@ dropdownMenuAbove: {
       web: { boxShadow: '0 6px 12px rgba(0,0,0,0.18)' } as any,
     }) as object),
   },
-  piecesHeaderTitle: { fontSize: 15, color: '#1F2A44', marginBottom: 12, paddingLeft: 60, fontWeight: '400' },
+  piecesHeaderTitle: { fontSize: 15, color: '#1F2A44', marginBottom: 12, paddingLeft: 60, fontWeight: '400'},
+
+  pushBehind: {
+    zIndex: -1,
+    ...(Platform.select({ android: { elevation: 0 } }) as object),
+  },
+
   piecesList: { marginLeft: 48, gap: 10 },
   pieceRow: {
     flexDirection: 'row',
@@ -1559,6 +2077,7 @@ dropdownMenuAbove: {
   colName: { flex: 2 },
   colAfm: { flex: 1 },
   colAddr: { flex: 2 },
+  colPhone: { flex: 1 },
   rowItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 12, borderRadius: 8 },
   rowItemSelected: { backgroundColor: '#F0F6FF', borderWidth: 1, borderColor: '#C7DAFF' },
   rowText: { fontSize: 15, color: '#333' },
@@ -1566,8 +2085,8 @@ dropdownMenuAbove: {
   /* ===== Modals ===== */
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center', padding: 16 },
   modalCard: {
-    width: '90%',
-    maxWidth: 540,
+    width: '96%',
+    maxWidth: 700,
     backgroundColor: '#fff',
     borderRadius: 16,
     borderWidth: 1,
@@ -1646,6 +2165,42 @@ dropdownMenuAbove: {
   addPieceSmallBtnText: { color: '#fff', fontWeight: '400', marginRight: 2 },
 
   modalCardTall: {
-    minHeight: 620,     // ή 580/600 αν θες περισσότερο χώρο
+    minHeight: 620,   
   },
+
+  popHost: {
+    position: 'relative',
+    zIndex: 10000,
+  },
+  raiseAbove: {
+    zIndex: 9999,
+    ...(Platform.select({ android: { elevation: 24 } }) as object),
+  },
+  demoteBelowPop: {
+    zIndex: -1,
+    ...(Platform.select({ android: { elevation: 0 } }) as object),
+  },
+
+  newCustomerBtn: {
+    position: 'absolute',
+    top: 16,
+    right: 20,
+    backgroundColor: '#3B82F6', 
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 14,           
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,               
+    zIndex: 20,
+  },
+  newCustomerBtnText: {
+    color: 'white',
+    fontWeight: '400',
+    fontSize: 13.5,
+  },
+
+
 });

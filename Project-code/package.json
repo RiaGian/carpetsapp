@@ -2,13 +2,19 @@
   "name": "carpets-app",
   "main": "expo-router/entry",
   "version": "1.0.0",
+  "private": true,
+  "description": "Carpets desktop app",
+  "author": "Georgia Barakou",
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
     "web": "expo start --web",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "web:build": "npx expo export --platform web --output-dir dist",
+    "electron": "npx electron ./electron/main.js",
+    "dist": "npm run web:build && electron-builder"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",
@@ -43,6 +49,7 @@
     "react-dom": "19.1.0",
     "react-hook-form": "^7.65.0",
     "react-native": "0.81.5",
+    "react-native-calendars": "^1.1313.0",
     "react-native-dropdown-picker": "^5.4.6",
     "react-native-gesture-handler": "~2.28.0",
     "react-native-logs": "^5.5.0",
@@ -52,6 +59,7 @@
     "react-native-svg": "15.12.1",
     "react-native-web": "^0.21.0",
     "react-native-worklets": "0.5.1",
+    "serve-handler": "^6.1.6",
     "zod": "^3.25.76"
   },
   "devDependencies": {
@@ -59,9 +67,58 @@
     "@babel/plugin-proposal-decorators": "^7.28.0",
     "@types/react": "~19.1.10",
     "@types/react-native": "^0.72.8",
+    "electron": "^39.0.0",
+    "electron-builder": "^26.0.12",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~10.0.0",
     "typescript": "~5.9.2"
   },
-  "private": true
+  "build": {
+    "appId": "com.yourorg.carpets",
+    "productName": "Carpets",
+    "directories": {
+      "output": "release"
+    },
+    "icon": "build/icon.png",
+    "files": [
+      "!**/*",
+      "dist/**",
+      "electron/**",
+      "package.json",
+      "!**/node_modules/lightningcss*/**"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "extraMetadata": {
+      "main": "electron/main.js"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "icon": "build/icon.icns"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "artifactName": "${productName} Setup ${version}-${arch}.${ext}",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "optionalDependencies": {
+    "fsevents": "^2.3.3"
+  }
 }

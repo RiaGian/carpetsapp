@@ -231,7 +231,7 @@ export type NewCustomer = {
   notes?: string
 }
 // insert customer + phones/address + log
-export async function createCustomer(data: NewCustomer) {
+export async function createCustomer(data: NewCustomer, userIdForLog: string = 'system') {
   const customers = database.get('customers')
 
   let newRecord: any = null
@@ -257,23 +257,20 @@ export async function createCustomer(data: NewCustomer) {
     createdAt: newRecord.createdAt,
   })
 
-
   // add phones/addresses as single-row per customer
   try {
-    const userId = 'system'
-    const phonesList = splitPipeList(newRecord.phone)
+    const phonesList    = splitPipeList(newRecord.phone)
     const addressesList = splitPipeList(newRecord.address)
 
-    await upsertPhoneRow(userId, newRecord.id, phonesList)
-    await upsertAddressRow(userId, newRecord.id, addressesList)
+    await upsertPhoneRow(userIdForLog, newRecord.id, phonesList)
+    await upsertAddressRow(userIdForLog, newRecord.id, addressesList)
   } catch (err) {
     console.warn('createCustomer: contacts upsert failed:', err)
   }
 
   // Activity log: CREATE (best-effort)
   try {
-    const userId = 'system'
-    await logCreateCustomer(userId, newRecord.id, {
+    await logCreateCustomer(userIdForLog, newRecord.id, {
       firstName: data.firstName,
       lastName:  data.lastName,
       phone:     data.phone ?? '',
@@ -282,13 +279,13 @@ export async function createCustomer(data: NewCustomer) {
       notes:     data.notes ?? '',
     })
     console.log('logCreateCustomer OK')
-
   } catch (err) {
     console.warn('logCreateCustomer failed:', err)
   }
 
   return newRecord
 }
+
 
 // live observe
 export function observeCustomers(limit = 200) {
@@ -306,17 +303,15 @@ export async function listCustomers(limit = 200) {
 }
 
 // delete customer + phones/address + log
-export async function deleteCustomer(id: string) {
+export async function deleteCustomer(id: string, userIdForLog: string = 'system') {
   const customers = database.get('customers')
   let deletedData: any = null
-  // κρατάμε τα children για logs μετά
   let phoneRows: any[] = []
   let addressRows: any[] = []
 
   await database.write(async () => {
     const rec: any = await customers.find(id)
 
-    // snapshot πριν τη διαγραφή (για το main log)
     deletedData = {
       firstName: rec.firstName,
       lastName:  rec.lastName,
@@ -327,45 +322,35 @@ export async function deleteCustomer(id: string) {
       createdAt: rec.createdAt,
     }
 
-    // === φέρε & σβήσε πρώτα τα children ===
     const phonesCollection = database.get('customer_phones')
     const addressesCollection = database.get('customer_addresses')
 
     phoneRows = await phonesCollection.query(Q.where('customer_id', id)).fetch()
     addressRows = await addressesCollection.query(Q.where('customer_id', id)).fetch()
 
-    for (const r of phoneRows) {
-      await r.destroyPermanently()
-    }
-    for (const r of addressRows) {
-      await r.destroyPermanently()
-    }
+    for (const r of phoneRows) await r.destroyPermanently()
+    for (const r of addressRows) await r.destroyPermanently()
 
-    // τέλος, σβήσε τον ίδιο τον πελάτη
     await rec.destroyPermanently()
   })
 
   console.log('Customer deleted:', id)
 
-  // === Logs για διαγραφή ===
+  // Logs
   try {
-    const userId = 'system'
-
-    // πρώτα logs για τα child records
     for (const r of phoneRows) {
-      await logDeleteCustomerPhone(userId, id, r.phone_number)
+      await logDeleteCustomerPhone(userIdForLog, id, r.phone_number)
     }
     for (const r of addressRows) {
-      await logDeleteCustomerAddress(userId, id, r.address)
+      await logDeleteCustomerAddress(userIdForLog, id, r.address)
     }
-
-    // μετά το master log για τον πελάτη
-    await logDeleteCustomer(userId, id, deletedData)
+    await logDeleteCustomer(userIdForLog, id, deletedData)
     console.log('logDeleteCustomer OK')
   } catch (err) {
     console.warn('logDeleteCustomer failed:', err)
   }
 }
+
 
 // update customer
 export type UpdateCustomer = Partial<{
@@ -377,7 +362,7 @@ export type UpdateCustomer = Partial<{
   notes: string
 }>
 // update customer + phones/address + log
-export async function updateCustomer(id: string, data: UpdateCustomer) {
+export async function updateCustomer(id: string, data: UpdateCustomer,  userIdForLog: string = 'system') {
   const customers = database.get('customers')
   let oldValues: any = null
   let newValues: any = null
@@ -420,8 +405,7 @@ export async function updateCustomer(id: string, data: UpdateCustomer) {
 
   // Activity log: UPDATE (best-effort)
   try {
-    const userId = 'system'
-    await logUpdateCustomer(userId, id, oldValues, newValues)
+    await logUpdateCustomer(userIdForLog, id, oldValues, newValues)
     console.log('logUpdateCustomer OK')
   } catch (err) {
     console.warn('logUpdateCustomer failed:', err)
@@ -429,11 +413,11 @@ export async function updateCustomer(id: string, data: UpdateCustomer) {
 
   //  Sync child single-row (pipe-joined) 
 try {
-  const userId = 'system'
+
   const newPhones = splitPipeList(newValues.phone)
   const newAddresses = splitPipeList(newValues.address)
-  await upsertPhoneRow(userId, id, newPhones)
-  await upsertAddressRow(userId, id, newAddresses)
+  await upsertPhoneRow(userIdForLog, id, newPhones)
+  await upsertAddressRow(userIdForLog, id, newAddresses)
   console.log('updateCustomer: contacts single-row upserted')
 } catch (err) {
   console.warn('updateCustomer: contacts upsert failed:', err)

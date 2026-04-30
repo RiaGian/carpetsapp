@@ -16,6 +16,7 @@ import AppHeader from '../components/AppHeader';
 import Page from '../components/Page';
 import { database } from '../database/initializeDatabase';
 import ActivityLog from '../database/models/ActivityLog';
+import { useAuth } from '../state/AuthProvider';
 
 
 // Helper για κοινό padding ανάλογα με το πλάτος
@@ -32,6 +33,7 @@ interface ActivityLogEntry {
   category: 'authentication' | 'customers' | 'orders' | 'items' | 'shelves' | 'history' | 'system';
   status: 'success' | 'update' | 'error';
   user: string;
+  userId?: string;
   timestamp: string;
 }
 
@@ -80,6 +82,10 @@ const getStatusGradient = (status: string) => {
 
 
 export default function ActivityLogScreen() {
+  const { user, loading: authLoading } = useAuth()
+  const currentUserId = String(user?.id ?? 'system')
+   
+
   const { width } = useWindowDimensions();
   const EDGE = edgePaddingForWidth(width);
 
@@ -123,21 +129,33 @@ export default function ActivityLogScreen() {
   });
 
   const loadActivityLogs = useCallback(async () => {
-    try {
-      const logsCollection = database.get<ActivityLog>('activity_logs');
-      const logs = await logsCollection.query(Q.sortBy('timestamp', Q.desc)).fetch();
-      
-      // Transform logs to match our interface
-      const transformedLogs: ActivityLogEntry[] = logs.map((log: any) => {
-        // Parse details to get username if available
-        let detailsObj = {};
-        let usernameFromDetails = '';
-        try {
-          detailsObj = log.details ? JSON.parse(log.details) : {};
-          usernameFromDetails = (detailsObj as any).username || '';
-        } catch {
-          // If parsing fails, use details as string
-          usernameFromDetails = '';
+  try {
+    const logsCollection = database.get<ActivityLog>('activity_logs');
+    const logs = await logsCollection.query(Q.sortBy('timestamp', Q.desc)).fetch();
+
+    const transformedLogs: ActivityLogEntry[] = await Promise.all(
+      logs.map(async (log: any) => {
+        // parse details
+        let parsed: any = {}
+        try { parsed = log.details ? JSON.parse(log.details) : {} } catch {}
+
+        // 1) Προσπάθησε από details.username
+        let username = parsed?.username || ''
+
+        // 2) Αλλιώς, αν έχουμε details.userId -> φέρε name από users
+        if (!username && parsed?.userId) {
+          try {
+            const u = await database.get('users').find(String(parsed.userId))
+            username = (u as any)?.name || ''
+          } catch {}
+        }
+
+        // 3) Αλλιώς, αν υπάρχει relation user -> fetch
+        if (!username && (log as any).user) {
+          try {
+            const u = await (log as any).user.fetch()
+            username = (u as any)?.name || ''
+          } catch {}
         }
 
         return {
@@ -146,18 +164,19 @@ export default function ActivityLogScreen() {
           details: log.details || '',
           category: (log.category as any) || getCategoryFromAction(log.action),
           status: (log.status as any) || getStatusFromAction(log.action),
-          user: usernameFromDetails || 'Unknown User',
+          user: username || 'Unknown User',            // 👈 τώρα θα βρίσκει όνομα
           timestamp: log.timestamp || new Date().toISOString()
-        };
-      });
+        }
+      })
+    )
 
-      
-      setActivityLogs(transformedLogs);
-      calculateSummaryStats(transformedLogs);
-    } catch (error) {
-      console.error('❌ Error loading activity logs:', error);
-    }
-  }, []);
+    setActivityLogs(transformedLogs);
+    calculateSummaryStats(transformedLogs);
+  } catch (error) {
+    console.error('❌ Error loading activity logs:', error);
+  }
+}, [])
+
 
   // Load activity logs from database
   useEffect(() => {

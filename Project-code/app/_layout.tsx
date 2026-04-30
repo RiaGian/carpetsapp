@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react'
 import { ActivityIndicator, View } from 'react-native'
 import { database, initializeDatabase } from '../src/database/initializeDatabase'
 import { seedUsers } from '../src/services/users'
-import { AuthProvider } from '../src/state/AuthProvider'; // ✅ added import
+import { AuthProvider } from '../src/state/AuthProvider'
 import { PreviewProvider } from '../src/state/PreviewProvider'
 
 export default function RootLayout() {

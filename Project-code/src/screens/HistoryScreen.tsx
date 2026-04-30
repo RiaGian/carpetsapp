@@ -73,6 +73,34 @@ function StorageChip({ storage }: { storage?: string }) {
   return null
 }
 
+function OrderStatusChip({ status }: { status?: string }) {
+  if (!status) return null
+
+  const s = status
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '') // αφαιρεί τόνους
+    .trim()
+
+  // Χάρτης status → χρώματα + ετικέτα
+  const map: Record<string, { bg: string; fg: string; label: string }> = {
+    'νεα':              { bg: '#DBEAFE', fg: '#1E40AF', label: 'Νέα' },
+    'σε επεξεργασια':   { bg: '#FEF3C7', fg: '#92400E', label: 'Σε επεξεργασία' },
+    'ετοιμη':           { bg: '#E0F2FE', fg: '#075985', label: 'Έτοιμη' },
+    'παραδοθηκε':       { bg: '#DCFCE7', fg: '#166534', label: 'Παραδόθηκε' },
+  }
+
+  const palette = map[s]
+  if (!palette) return null
+
+  return (
+    <View style={[styles.chip, { backgroundColor: palette.bg, marginLeft: 8 }]}>
+      <Text style={[styles.chipText, { color: palette.fg }]}>{palette.label}</Text>
+    </View>
+  )
+}
+
+
 /*  Dropdown (Modal)  */
 function SimpleDropdown({
   value,
@@ -283,6 +311,31 @@ export default function HistoryScreen() {
   const [rowsCustomers, setRowsCustomers] = React.useState<HistoryCustomer[]>([])
   const [rowsItems, setRowsItems] = React.useState<HistoryItem[]>([])
   const [rowsOrders, setRowsOrders] = React.useState<HistoryOrder[]>([])
+
+  // delivered + no dept
+  const deliveredRevenue = React.useMemo(() => {
+  const norm = (s?: string) =>
+    (s || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '')
+      .trim()
+
+  const sum = rowsOrders.reduce((acc, o) => {
+    if (norm(o.order_status) === 'παραδοθηκε' && o.hasDebt === false) {
+      acc += Number(o.totalAmount || 0)
+    }
+    return acc
+  }, 0)
+
+  return new Intl.NumberFormat('el-GR', {
+    style: 'currency',
+    currency: 'EUR',
+    maximumFractionDigits: 2,
+  }).format(sum)
+}, [rowsOrders])
+
+
 
   // 🔹 Expanded ανά πελάτη (inline)
   const [expandedCustomerId, setExpandedCustomerId] = React.useState<string | null>(null)
@@ -635,7 +688,7 @@ React.useEffect(() => {
             bgGradient={['#F59E0B', '#D97706']}
             icon={<Ionicons name="cash-outline" size={22} color="#fff" />}
             title="Συνολικός Τζίρος"
-            value="—"
+            value={deliveredRevenue}
           />
         </View>
 
@@ -777,6 +830,8 @@ React.useEffect(() => {
                                           <View style={styles.pill}>
                                             <Text style={styles.pillText}>#{order.id.slice(0, 6).toUpperCase()}</Text>
                                           </View>
+                                           <OrderStatusChip status={order.order_status} />
+
                                           <View style={{ flex: 1 }} />
                                           <Text style={styles.moneyText}>
                                             {new Intl.NumberFormat('el-GR', {
@@ -789,10 +844,11 @@ React.useEffect(() => {
 
                                         <View style={{ marginTop: 6 }}>
                                           <Text style={styles.rowSub}>
-                                            {order.customerName || '—'} • {order.paymentMethod || '—'}
+                                            {`${(item.firstName || '').trim()} ${(item.lastName || '').trim()}`.trim() || '—'} • {order.paymentMethod || '—'}
                                           </Text>
                                           <Text style={styles.rowSub}>{order.orderDate || '—'}</Text>
                                         </View>
+
                                       </View>
                                     ))}
                                   </View>
@@ -918,6 +974,9 @@ React.useEffect(() => {
                     <View style={styles.pill}>
                       <Text style={styles.pillText}>#{item.id.slice(0, 6).toUpperCase()}</Text>
                     </View>
+                        
+                    <OrderStatusChip status={item.order_status} />
+
                     <View style={{ flex: 1 }} />
                     <Text style={styles.moneyText}>
                       {new Intl.NumberFormat('el-GR', {

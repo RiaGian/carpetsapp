@@ -12,7 +12,6 @@ import ActivityLog from '../database/models/ActivityLog';
 import { listHistoryItems, listHistoryOrders, type HistoryItem, type HistoryOrder } from '../services/history';
 import { colors } from '../theme/colors';
 
-
 import * as Device from 'expo-device';
 import { database } from '../database/initializeDatabase';
 import User from '../database/models/Users';
@@ -107,13 +106,38 @@ export default function DashboardScreen() {
     }, [])
   );
 
+  const [warehouseActiveCount, setWarehouseActiveCount] = useState(0);
+
+  useFocusEffect(
+    useCallback(() => {
+      const witemsCol: any = database.get('warehouse_items');
+
+      // observe 
+      const sub = witemsCol
+        .query()              
+        .observe()
+        .subscribe((rows: any[]) => {
+          const activeCount = rows.filter((r: any) => {
+            
+            const raw = r._raw || {};
+            return r.is_active === true || raw.is_active === 1 || r.active === true;
+          }).length;
+
+          setWarehouseActiveCount(activeCount);
+        });
+
+      return () => sub.unsubscribe();
+    }, [])
+  );
+
+
   React.useEffect(() => {
   let cancelled = false;
   (async () => {
     try {
       const [items, orders] = await Promise.all([
-        listHistoryItems({ limit: 8 }),
-        listHistoryOrders({ limit: 4 }),
+        listHistoryItems(),
+        listHistoryOrders(),
       ]);
       if (!cancelled) {
         setHistoryItemsPreview(items || []);
@@ -152,19 +176,47 @@ export default function DashboardScreen() {
     return () => sub.unsubscribe();
   }, []);
 
-  React.useEffect(() => {
+  // helper 
+  const safeGet = (table: string) => (database as any)?.get?.(table) ?? null;
 
-  const mock: WarehousePreview = {
-    totalShelves: 4,
-    shelves: [
-      { code: 'A1', count: 3 },
-      { code: 'A2', count: 2 },
-      { code: 'B1', count: 1 },
-      { code: 'B2', count: 0 }, // Άδειο
-    ],
-  };
-  setWarehousePreview(mock);
-}, []);
+  // Live observe shelves
+  useFocusEffect(
+    useCallback(() => {
+      const shelvesColl = safeGet('shelves');
+      if (!shelvesColl) return;
+
+      const sub = shelvesColl
+        .query(Q.sortBy('created_at', Q.desc))
+        .observe()
+        .subscribe((rows: any[]) => {
+          // Χρησιμοποιούμε το item_count του κάθε ραφιού για την προεπισκόπηση
+          const shelvesPreview = rows.map((r: any) => ({
+            code: r.code ?? '',
+            count: Number(r.item_count ?? 0),
+          }));
+          setWarehousePreview({
+            totalShelves: shelvesPreview.length,
+            // μπορείς να περιορίσεις πόσα δείχνεις στο dashboard (π.χ. 8)
+            shelves: shelvesPreview.slice(0, 8),
+          });
+        });
+
+      return () => sub.unsubscribe();
+    }, [])
+  );
+
+
+  // clients + orders+ items 
+  const totalData = useMemo(() => {
+    const customersCount = customersPreview?.count ?? 0;
+    const ordersCount    = historyOrdersPreview?.length ?? 0;
+    const itemsCount     = historyItemsPreview?.length ?? 0;
+    return customersCount + ordersCount + itemsCount;
+  }, [
+    customersPreview?.count,
+    historyOrdersPreview?.length,
+    historyItemsPreview?.length,
+  ]);
 
   // Actions
   const logout = async () => {
@@ -219,16 +271,18 @@ export default function DashboardScreen() {
         </View>
 
 
-        {/* Κάτω mini cards — χωρίς icons, με χρώμα ανά κάρτα */}
+        {/* Κάτω mini cards  */}
         <View style={styles.statsRow}>
           <StatCard title="Συνολικοί Πελάτες" value={String(customersPreview?.count ?? 0)} color="#B8C8FF" />
-          <StatCard title="Τεμάχια στην Αποθήκη" value="14" color="#F5A5C0" />
+          <StatCard title="Τεμάχια στην Αποθήκη" value={String(warehouseActiveCount)} color="#F5A5C0" />
+
           <StatCard title="Καταγραφές Log" value={String(activityTotal)} color="#A3E3BB" />
-          <StatCard title="Σύνολο Δεδομένων" value="-" color="#C3B2F7" />
+          <StatCard title="Σύνολο Δεδομένων" value={String(totalData)} color="#C3B2F7" />
+
         </View>
       </View>
 
-      {/* Floating κουμπί κάτω-αριστερά, πάνω από όλα */}
+      {/* Floating κουμπί  */}
       <Pressable
         onPress={() => router.push('/orders')}
         accessibilityRole="button"
@@ -536,7 +590,6 @@ function WarehouseMiniCard({
     </View>
   );
 }
-
 
 
 function StatCard({

@@ -9,7 +9,7 @@ export default function Page({ children }: { children: React.ReactNode }) {
   const { width } = useWindowDimensions();
   const EDGE = edgePaddingForWidth(width);
 
-  // Λίγο extra πάνω ώστε το header να μην «κοβεται»
+
   const TOP_PAD = (insets.top || 0) + (Platform.OS === 'ios' ? 6 : Platform.OS === 'android' ? 8 : 12);
 
   return (
