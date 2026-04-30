@@ -9,10 +9,9 @@ import { colors } from '../theme/colors';
 type Props = {
   showBack?: boolean;
   onLogout?: () => void;
-  onBack?: () => void; // Custom back handler
 };
 
-export default function AppHeader({ showBack = false, onLogout, onBack }: Props) {
+export default function AppHeader({ showBack = false, onLogout }: Props) {
   const params = useLocalSearchParams<Record<string, string>>();
   const { user, signOut } = useAuth();
 
@@ -26,12 +25,6 @@ export default function AppHeader({ showBack = false, onLogout, onBack }: Props)
   const displayName = user?.name || user?.email || paramName || 'Χρήστης';
 
   const goBack = () => {
-    // If custom back handler is provided, use it
-    if (onBack) {
-      onBack();
-      return;
-    }
-    // Otherwise, use default behavior
     try {
       if ((router as any).canGoBack?.()) router.back();
       else router.push('/dashboard');

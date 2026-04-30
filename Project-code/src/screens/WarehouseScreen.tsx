@@ -66,8 +66,6 @@ export default function WarehouseScreen() {
   const [showDeleteSuccess, setShowDeleteSuccess] = useState(false);
   const [showError, setShowError] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-  const [showSuccess, setShowSuccess] = useState(false);
-  const [successMessage, setSuccessMessage] = useState('');
   const [showShelfDetail, setShowShelfDetail] = useState(false);
   const [selectedShelfDetail, setSelectedShelfDetail] = useState<ShelfData | null>(null);
   const [showOverview, setShowOverview] = useState(false)
@@ -100,6 +98,7 @@ export default function WarehouseScreen() {
       return 'system'
     }
   }
+
 
   // Load shelves from database
   const loadShelves = useCallback(async () => {
@@ -196,7 +195,7 @@ export default function WarehouseScreen() {
   });
 
 
-  const goBack = () => router.push('/dashboard' as any);
+  const goBack = () => router.push('/dashboard');
 
   const handleAddShelf = () => {
     setSelectedShelf(null);
@@ -321,7 +320,7 @@ export default function WarehouseScreen() {
           {/* κουμπί Προεπισκόπησης */}
           <Pressable
             style={styles.previewBtn}
-            onPress={() => router.push('/warehouse-overview' as any)}
+            onPress={() => router.push('/warehouse-overview')}
           >
             <Ionicons name="cube-outline" size={18} color={colors.primary} />
             <Text style={styles.previewBtnText}>Προεπισκόπηση Αποθήκης</Text>
@@ -482,92 +481,12 @@ export default function WarehouseScreen() {
         setShowShelfDetail(false);
         setSelectedShelfDetail(null);
       }}
-      onAddItem={(shelf) => {
-        setShowShelfDetail(false)
-        setSelectedShelfDetail(null)
-        setTimeout(() => {
-          router.push(
-            `/additem?shelfId=${shelf.id}&shelfCode=${shelf.code}&itemCount=${shelf.item_count}` as any
-          )
-        }, 200)
-      }}
-      onItemDeleted={() => {
-        // Reload shelves to update counts
-        loadShelves()
-        // Also refresh the shelf detail if it's still open
-        if (selectedShelfDetail) {
-          const refreshShelf = async () => {
-            try {
-              const shelvesCollection = database.get<Shelf>('shelves');
-              const updatedShelf = await shelvesCollection.find(selectedShelfDetail.id);
-              if (updatedShelf) {
-                setSelectedShelfDetail({
-                  id: updatedShelf.id,
-                  code: updatedShelf.code || '',
-                  barcode: updatedShelf.barcode || '',
-                  floor: updatedShelf.floor || 1,
-                  capacity: updatedShelf.capacity || 0,
-                  item_count: Number(updatedShelf.item_count ?? 0),
-                  notes: updatedShelf.notes || '',
-                  created_at: updatedShelf.created_at || Date.now(),
-                })
-              }
-            } catch (err) {
-              console.error('Error refreshing shelf:', err)
-            }
-          }
-          refreshShelf()
-        }
-      }}
     />
 
     <ItemsModal
       visible={showItemsModal}
       onClose={() => setShowItemsModal(false)}
     />
-
-    {/* Success Message */}
-    {showSuccess && (
-      <View style={{
-        position: 'absolute',
-        top: 100,
-        left: EDGE,
-        right: EDGE,
-        backgroundColor: '#10B981',
-        padding: 12,
-        borderRadius: 8,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        zIndex: 1000,
-      }}>
-        <Ionicons name="checkmark-circle" size={20} color="#FFFFFF" />
-        <Text style={{ color: '#FFFFFF', fontSize: 14, flex: 1 }}>{successMessage}</Text>
-      </View>
-    )}
-
-    {/* Error Message */}
-    {showError && (
-      <View style={{
-        position: 'absolute',
-        top: 100,
-        left: EDGE,
-        right: EDGE,
-        backgroundColor: '#EF4444',
-        padding: 12,
-        borderRadius: 8,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        zIndex: 1000,
-      }}>
-        <Ionicons name="alert-circle" size={20} color="#FFFFFF" />
-        <Text style={{ color: '#FFFFFF', fontSize: 14, flex: 1 }}>{errorMessage}</Text>
-        <Pressable onPress={() => { setShowError(false); setErrorMessage(''); }}>
-          <Ionicons name="close" size={18} color="#FFFFFF" />
-        </Pressable>
-      </View>
-    )}
   </Page>
 )
 
@@ -602,14 +521,14 @@ function ShelfCard({
           }} style={styles.shelfActionButton}>
             <Ionicons name="create" size={16} color="#6B7280" />
           </Pressable>
-          {isEmpty ? (
+          {isEmpty && (
             <Pressable onPress={(e) => {
               e.stopPropagation();
               onDelete();
             }} style={styles.shelfActionButton}>
               <Ionicons name="trash" size={16} color="#EF4444" />
             </Pressable>
-          ) : null}
+          )}
         </View>
       </View>
       
@@ -622,9 +541,9 @@ function ShelfCard({
         </View>
       </View>
       
-      {shelf.notes ? (
+      {shelf.notes && (
         <Text style={styles.shelfNotes}>{shelf.notes}</Text>
-      ) : null}
+      )}
     </Pressable>
   );
 }
@@ -931,14 +850,10 @@ function ShelfDetailModal({
   visible,
   shelf,
   onClose,
-  onAddItem,
-  onItemDeleted,
 }: {
   visible: boolean;
   shelf: ShelfData | null;
   onClose: () => void;
-  onAddItem: (shelf: ShelfData) => void;
-  onItemDeleted?: () => void;
 }) {
   const { user } = useAuth()
   const currentUserId = String(user?.id || 'system')
@@ -967,6 +882,16 @@ function ShelfDetailModal({
   
 
 
+  const [showEdit, setShowEdit] = useState(false)
+  const [editItem, setEditItem] = useState<any | null>(null)
+
+  const onEditItem = (itemId: string) => {
+    const found = items.find((x: any) => x.id === itemId)
+    if (found) {
+      setEditItem(found)
+      setShowEdit(true)
+    }
+  }
 
   // remove item from shelf
   const [showDelete, setShowDelete] = useState(false)
@@ -1000,8 +925,8 @@ function ShelfDetailModal({
                   <Ionicons name="arrow-back" size={24} color="#374151" />
                 </Pressable>
                 <View style={styles.shelfDetailHeaderContent}>
-                  <Text style={styles.shelfDetailTitle}>Ράφι {shelf?.code || ''}</Text>
-                  <Text style={styles.shelfDetailSubtitle}>{shelf?.item_count ?? 0} τεμάχια</Text>
+                  <Text style={styles.shelfDetailTitle}>Ράφι {shelf.code}</Text>
+                  <Text style={styles.shelfDetailSubtitle}>{shelf.item_count} τεμάχια</Text>
                 </View>
               </View>
 
@@ -1011,14 +936,14 @@ function ShelfDetailModal({
                 <View style={styles.shelfDetailInfo}>
                   <View style={styles.shelfDetailInfoRow}>
                     <Text style={styles.shelfDetailInfoLabel}>Κωδικός:</Text>
-                    <Text style={styles.shelfDetailInfoValue}>{shelf?.code || ''}</Text>
+                    <Text style={styles.shelfDetailInfoValue}>{shelf.code}</Text>
                   </View>
-                  {shelf?.notes ? (
+                  {shelf.notes && (
                     <View style={styles.shelfDetailInfoRow}>
                       <Text style={styles.shelfDetailInfoLabel}>Σημειώσεις:</Text>
                       <Text style={styles.shelfDetailInfoValue}>{shelf.notes}</Text>
                     </View>
-                  ) : null}
+                  )}
                 </View>
               </View>
 
@@ -1026,7 +951,12 @@ function ShelfDetailModal({
               <Pressable
                 style={styles.addItemButton}
                 onPress={() => {
-                  if (shelf) onAddItem(shelf)
+                  onClose()
+                  setTimeout(() => {
+                    router.push(
+                      `/additem?shelfId=${shelf.id}&shelfCode=${shelf.code}&itemCount=${shelf.item_count}`
+                    )
+                  }, 200)
                 }}
               >
                 <Ionicons name="add-circle" size={24} color="#FFFFFF" />
@@ -1127,7 +1057,18 @@ function ShelfDetailModal({
 
                             {/* Δεξιά: action buttons */}
                             <View style={styles.actions}>
-                              {/* Delete (κόκκινο) - Edit button removed */}
+                              {/* Edit (γκρι/λευκό) */}
+                              <Pressable
+                                accessibilityLabel="Επεξεργασία τεμαχίου"
+                                onPress={() => onEditItem(it.id)}
+                                android_ripple={{ color: '#E5E7EB' }}
+                                style={({ pressed }) => [styles.iconBtn, styles.editBtn, pressed && { opacity: 0.8 }]}
+                                hitSlop={8}
+                              >
+                                <Ionicons name="pencil" size={16} color="#374151" />
+                              </Pressable>
+
+                              {/* Delete (κόκκινο) */}
                               <Pressable
                                 accessibilityLabel="Διαγραφή τεμαχίου"
                                 onPress={() => onDeleteItem(it.id)}
@@ -1152,6 +1093,17 @@ function ShelfDetailModal({
       </View>
     </Modal>
 
+    {/* === 2ο modal: Edit Item === */}
+    <EditItemModal
+      visible={showEdit}
+      item={editItem}
+      onClose={() => { setShowEdit(false); setEditItem(null) }}
+      onSaved={(updated) => {
+        setItems(prev => prev.map(x => x.id === updated.id ? { ...x, ...updated } : x))
+        setShowEdit(false); setEditItem(null)
+      }}
+      userId={currentUserId} 
+    />
     <DeleteItemConfirmModal
       visible={showDelete}
       item={deleteItem}
@@ -1161,10 +1113,6 @@ function ShelfDetailModal({
       onDeleted={(deletedId) => {
         setItems(prev => prev.filter(x => x.id !== deletedId))
         setShowDelete(false); setDeleteItem(null)
-        // Notify parent to refresh shelves
-        if (onItemDeleted) {
-          onItemDeleted()
-        }
       }}
     />
 
@@ -1630,28 +1578,28 @@ function ItemsModal({
                             <Text style={styles.itemOwner}>{it.customer_name || 'Χωρίς πελάτη'}</Text>
 
                             {/* Ημερομηνία */}
-                            {it.order_date ? (
+                            {!!it.order_date && (
                               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                                 <Ionicons name="calendar-outline" size={14} color="#6B7280" />
                                 <Text style={[styles.itemInfo, { marginLeft: 4 }]}>{it.order_date}</Text>
                               </View>
-                            ) : null}
+                            )}
 
                             {/* Ράφι */}
-                            {it.shelf_code ? (
+                            {!!it.shelf_code && (
                               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                                 <Ionicons name="cube-outline" size={14} color="#6B7280" />
                                 <Text style={[styles.itemInfo, { marginLeft: 4 }]}>Ράφι: {it.shelf_code}</Text>
                               </View>
-                            ) : null}
+                            )}
 
                             {/* Χρώμα */}
-                            {it.color ? (
+                            {!!it.color && (
                               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                                 <Ionicons name="color-palette-outline" size={14} color="#6B7280" />
                                 <Text style={[styles.itemInfo, { marginLeft: 4 }]}>{it.color}</Text>
                               </View>
-                            ) : null}
+                            )}
 
                             {/* Chips για κατάσταση & φύλαξη */}
                             <View style={{ flexDirection: 'row', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>

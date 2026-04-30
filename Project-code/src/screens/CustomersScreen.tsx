@@ -19,16 +19,14 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native'
-import { Calendar } from 'react-native-calendars'
 import { Circle, Svg } from 'react-native-svg'
 import AppHeader from '../components/AppHeader'
 import ConfirmModal from '../components/ConfirmModal'
 import Page from '../components/Page'
 import { logExportHistoryPDF, logViewCustomerHistory } from '../services/activitylog'
 import { createCustomer, deleteCustomer, observeCustomers, updateCustomer } from '../services/customer'
-import { listOrderItemsByCustomer, listOrderItemsByOrder, normId, updateOrderItem } from '../services/orderItems'
+import { listOrderItemsByCustomer, normId, updateOrderItem } from '../services/orderItems'
 import { deleteOrderCascade, observeOrdersByCustomer, updateOrder } from '../services/orders'
-import { removeItemFromShelf } from '../services/warehouseItems'
 import { useAuth } from '../state/AuthProvider'
 import { usePreview } from '../state/PreviewProvider'
 import { colors } from '../theme/colors'
@@ -306,7 +304,7 @@ function KV({ label, value }: { label: string; value: string }) {
 /*  OrderCard  */
 function OrderCard({
   code, date, total, deposit, paymentMethod, notes, itemsCount,
-  expanded, onToggle, onViewItems, onEdit, onClose, status, onChangeStatus, hasDebt, onDeletePress, receiptNumber, deliveryDate,
+  expanded, onToggle, onViewItems, onEdit, onClose, status, onChangeStatus, hasDebt, onDeletePress, receiptNumber,
 }: {
   code: string
   date: string
@@ -324,8 +322,8 @@ function OrderCard({
   onChangeStatus: (v: string) => void
   hasDebt?: boolean
   onDeletePress: () => void
-  receiptNumber?: string | null
-  deliveryDate?: string | null
+   receiptNumber?: string | null
+  
 }) {
   return (
     <TouchableOpacity activeOpacity={0.9} onPress={onToggle} style={styles.orderCard}>
@@ -365,36 +363,6 @@ function OrderCard({
           <KV label="Συνολικό κόστος" value={total} />
           <KV label="Προκαταβολή" value={deposit} />
           <KV label="Τρόπος πληρωμής" value={paymentMethod} />
-          {status === 'Προς παράδοση' && deliveryDate && (() => {
-            const deliveryDateTime = new Date(deliveryDate)
-            const deliveryDateStr = deliveryDateTime.toLocaleDateString('el-GR', { 
-              day: '2-digit', 
-              month: '2-digit', 
-              year: 'numeric' 
-            })
-            const hours = deliveryDateTime.getHours()
-            // Calculate timeframe based on hour
-            let startHour: number
-            if (hours < 5) startHour = 5
-            else if (hours < 7) startHour = 5
-            else if (hours < 9) startHour = 7
-            else if (hours < 11) startHour = 9
-            else if (hours < 13) startHour = 11
-            else if (hours < 15) startHour = 13
-            else if (hours < 17) startHour = 15
-            else if (hours < 19) startHour = 17
-            else if (hours < 21) startHour = 19
-            else if (hours < 23) startHour = 21
-            else startHour = 21
-            const endHour = startHour + 2
-            const timeframe = `${String(startHour).padStart(2, '0')}:00-${String(endHour).padStart(2, '0')}:00`
-            return (
-              <KV 
-                label="Ημερομηνία & Ώρα Παράδοσης" 
-                value={`${deliveryDateStr} ${timeframe}`}
-              />
-            )
-          })()}
 
           {notes ? <View style={{ height: 6 }} /> : null}
           {notes ? <Text style={styles.orderNotes}>{notes}</Text> : null}
@@ -443,7 +411,7 @@ const STORAGE_STATUS = [
   'Φύλλαξη', 'Επιστροφή'
 ]
 
-const ORDER_STATUS_OPTIONS = ['Νέα', 'Σε επεξεργασία', 'Έτοιμη', 'Προς παράδοση', 'Παραδόθηκε']
+const ORDER_STATUS_OPTIONS = ['Νέα', 'Σε επεξεργασία', 'Έτοιμη', 'Παραδόθηκε']
 
 
 // dropdown
@@ -700,10 +668,6 @@ export default function CustomersScreen() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [isSearchFocused, setIsSearchFocused] = useState(false)
 
-  // Pagination
-  const [currentPage, setCurrentPage] = useState(1)
-  const itemsPerPage = 10
-
   // Create form state
   const [openForm, setOpenForm] = useState(false)
   const [firstName, setFirstName] = useState('')
@@ -779,10 +743,6 @@ const [afmError, setAfmError] = useState('')
 const [afmEditError, setAfmEditError] = useState('')
 
 const [confirmDeleteOrder, setConfirmDeleteOrder] = useState<{ orderId: string; code: string } | null>(null)
-
-// Debt payment confirmation modal
-const [showDebtPaymentModal, setShowDebtPaymentModal] = useState(false)
-const [debtOrderToPay, setDebtOrderToPay] = useState<string | null>(null)
 
 const handleAfmChange = (text: string) => {
   setAfm(text)
@@ -1725,21 +1685,6 @@ const [itemEdit, setItemEdit] = useState({
     })
   }, [debounced, customers])
 
-  // Reset pagination when search changes
-  React.useEffect(() => {
-    setCurrentPage(1)
-  }, [debounced])
-
-  // Paginated results
-  const paginatedResults = useMemo(() => {
-    const startIndex = (currentPage - 1) * itemsPerPage
-    const endIndex = startIndex + itemsPerPage
-    return results.slice(startIndex, endIndex)
-  }, [results, currentPage, itemsPerPage])
-
-  // Calculate total pages
-  const totalPages = Math.ceil(results.length / itemsPerPage)
-
   // Open create modal
   const onCreateCustomer = () => {
     setFirstName(''); 
@@ -1906,29 +1851,6 @@ async function handleChangeStatus(item: any, nextStatus: string) {
     return
   }
 
-  // ΝΕΑ ρο για "Προς παράδοση" - ανοίγουμε modal για delivery date/timeframe
-  if (nextStatus === 'Προς παράδοση') {
-    // Load existing delivery date if available
-    if (item.deliveryDate) {
-      const deliveryDateTime = new Date(item.deliveryDate)
-      setDeliveryDate(item.deliveryDate)
-      const hours = deliveryDateTime.getHours()
-      const startHour = Math.floor(hours / 2) * 2
-      const endHour = startHour + 2
-      const timeframe = `${String(startHour).padStart(2, '0')}:00-${String(endHour).padStart(2, '0')}:00`
-      setDeliveryTimeFrame(timeframe)
-    } else {
-      // Set default to tomorrow 10:00-12:00
-      const tomorrow = new Date()
-      tomorrow.setDate(tomorrow.getDate() + 1)
-      tomorrow.setHours(10, 0, 0, 0)
-      setDeliveryDate(tomorrow.toISOString())
-      setDeliveryTimeFrame('10:00-12:00')
-    }
-    setDeliveryDateModalOrder({ orderId, item })
-    return
-  }
-
   // Ό,τι άλλο status → όπως πριν: αλλάζουμε και καθαρίζουμε hasDebt
   setOrderStatusLocal(orderId, nextStatus, false)
   persistOrderStatus(orderId, nextStatus, false)
@@ -2033,7 +1955,6 @@ async function handleChangeStatus(item: any, nextStatus: string) {
     const cleanPhones = phones.map(p => p.trim()).filter(Boolean)
     const cleanAddresses = addresses.map(a => a.trim()).filter(Boolean)
     const cleanCities    = cities.map(c => c.trim()) 
-    const cleanAfm = afm.trim()
 
     const nextErrors = {
       firstName: !firstName.trim(),
@@ -2045,13 +1966,6 @@ async function handleChangeStatus(item: any, nextStatus: string) {
 
     // Αν υπάρχει έστω ένα σφάλμα, σταμάτα εδώ (δείχνουμε κόκκινα inputs + μηνύματα)
     if (Object.values(nextErrors).some(Boolean)) return
-
-    // Validate AFM: must be empty (optional) or exactly 9 digits
-    if (cleanAfm && !/^\d{9}$/.test(cleanAfm)) {
-      setAfmError('Το ΑΦΜ πρέπει να είναι άδειο ή να έχει ακριβώς 9 ψηφία.')
-      return
-    }
-    setAfmError('') // Clear error if valid
 
     const phone = cleanPhones.join(' | ')
     const address = cleanAddresses.join(' | ')
@@ -2065,7 +1979,7 @@ async function handleChangeStatus(item: any, nextStatus: string) {
         phone,
         address,
         city,
-        afm: cleanAfm || undefined,
+        afm: afm.trim() || undefined,
         notes: notesBlock || undefined,
       }, userId)
 
@@ -2076,29 +1990,8 @@ async function handleChangeStatus(item: any, nextStatus: string) {
         }))
       }
 
-      // Reset form
-      setFirstName('')
-      setLastName('')
-      setAddresses([''])
-      setCities([''])
-      setPhones([''])
-      setAfm('')
-      setAfmError('')
-      setPricePerSqm('')
-      setDescription('')
-      setErrors({ firstName: false, lastName: false, addresses: false, phones: false })
-
-      // Reset search and pagination to show new customer
-      setQuery('')
-      setDebounced('')
-      setCurrentPage(1)
-
       setOpenForm(false)
-      
-      // Show success message after a brief delay to allow UI to update
-      setTimeout(() => {
-        Alert.alert('OK', 'Ο πελάτης προστέθηκε.')
-      }, 100)
+      Alert.alert('OK', 'Ο πελάτης προστέθηκε.')
       } catch (err: any) {
         const msg = (err?.message ?? String(err)).toString()
         if (msg.toLowerCase().includes('αφμ')) {
@@ -2136,9 +2029,6 @@ async function handleChangeStatus(item: any, nextStatus: string) {
 
 const [confirmDelivered, setConfirmDelivered] = useState<{ orderId: string } | null>(null)
 const [confirmReadyForce, setConfirmReadyForce] = useState<{ orderId: string } | null>(null)
-const [deliveryDateModalOrder, setDeliveryDateModalOrder] = useState<{ orderId: string; item: any } | null>(null)
-const [deliveryDate, setDeliveryDate] = useState<string | null>(null)
-const [deliveryTimeFrame, setDeliveryTimeFrame] = useState<string>('')
 
 // if items not delivered
 // 2ο popup: κρατάμε και ποια παραγγελία είναι
@@ -2578,14 +2468,13 @@ function ReadyForceConfirmModal({
               <Text style={styles.emptySubtitle}>Πάτα «Νέος Πελάτης» για να προσθέσεις.</Text>
             </View>
           ) : (
-            <>
-              <FlatList
-                data={paginatedResults}
-                keyExtractor={(item) => item.id}
-                style={{ flex: 1 }}                          
-                contentContainerStyle={{ paddingBottom: 40 }}
-                showsVerticalScrollIndicator
-                renderItem={({ item }) => {
+            <FlatList
+              data={results}
+              keyExtractor={(item) => item.id}
+              style={{ flex: 1 }}                          
+              contentContainerStyle={{ paddingBottom: 40 }}
+              showsVerticalScrollIndicator
+              renderItem={({ item }) => {
                 const fullName = `${item.firstName ?? ''} ${item.lastName ?? ''}`.trim()
                 const firstPhone = (item.phone || '')
                 .split('|')
@@ -2635,55 +2524,6 @@ function ReadyForceConfirmModal({
                 )
               }}
             />
-            
-            {/* Pagination Controls */}
-            {totalPages > 1 && (
-              <View style={styles.paginationContainer}>
-                <TouchableOpacity
-                  onPress={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                  disabled={currentPage === 1}
-                  style={[
-                    styles.paginationButton,
-                    currentPage === 1 && styles.paginationButtonDisabled
-                  ]}
-                >
-                  <Ionicons name="chevron-back" size={20} color={currentPage === 1 ? '#9CA3AF' : '#1F2A44'} />
-                  <Text style={[
-                    styles.paginationButtonText,
-                    currentPage === 1 && styles.paginationButtonTextDisabled
-                  ]}>
-                    Προηγούμενη
-                  </Text>
-                </TouchableOpacity>
-
-                <View style={styles.paginationInfo}>
-                  <Text style={styles.paginationText}>
-                    Σελίδα {currentPage} από {totalPages}
-                  </Text>
-                  <Text style={styles.paginationSubtext}>
-                    ({results.length} {results.length === 1 ? 'πελάτης' : 'πελάτες'})
-                  </Text>
-                </View>
-
-                <TouchableOpacity
-                  onPress={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                  disabled={currentPage === totalPages}
-                  style={[
-                    styles.paginationButton,
-                    currentPage === totalPages && styles.paginationButtonDisabled
-                  ]}
-                >
-                  <Text style={[
-                    styles.paginationButtonText,
-                    currentPage === totalPages && styles.paginationButtonTextDisabled
-                  ]}>
-                    Επόμενη
-                  </Text>
-                  <Ionicons name="chevron-forward" size={20} color={currentPage === totalPages ? '#9CA3AF' : '#1F2A44'} />
-                </TouchableOpacity>
-              </View>
-            )}
-            </>
           )}
         </View>
       </View>
@@ -2824,70 +2664,54 @@ function ReadyForceConfirmModal({
               </View>
 
               {/* Τηλέφωνα | ΑΦΜ */}
-              <View style={styles.group}>
-                <View style={styles.groupHeader}>
-                  <Text style={styles.label}>Τηλέφωνα *</Text>
-                  <TouchableOpacity onPress={addPhone} style={styles.linkBtn}>
-                    <Text style={styles.linkBtnText}>+ Προσθήκη</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* First phone */}
-                <View key={`ph-0`} style={styles.addRow}>
-                  <TextInput
-                    value={phones[0] || ''}
-                    onChangeText={(v) => {
-                      updatePhone(0, v)
-                      if (errors.phones && v.trim()) setErrors(s => ({ ...s, phones: false }))
-                    }}
-                    style={[
-                      styles.input,
-                      styles.flex1,
-                      errors.phones && styles.inputError, 
-                    ]}
-                    keyboardType="phone-pad"
-                    placeholder="Τηλέφωνο"
-                    placeholderTextColor={colors.muted}
-                    autoComplete="tel"
-                    {...Platform.select({
-                      ios:     { textContentType: 'telephoneNumber' },
-                      android: { autoComplete: 'tel', importantForAutofill: 'yes' as any },
-                      web:     { autoComplete: 'tel' },
-                    })}
-                  />
-                </View>
-
-                {/* Additional phones */}
-                {phones.slice(1).map((ph, idx) => (
-                  <View key={`ph-${idx + 1}`} style={[styles.addRow, { marginTop: 8 }]}>
-                    <TextInput
-                      value={ph}
-                      onChangeText={(v) => {
-                        updatePhone(idx + 1, v)
-                        if (errors.phones && v.trim()) setErrors(s => ({ ...s, phones: false }))
-                      }}
-                      style={[
-                        styles.input,
-                        styles.flex1,
-                      ]}
-                      keyboardType="phone-pad"
-                      placeholder="Τηλέφωνο"
-                      placeholderTextColor={colors.muted}
-                      autoComplete="off"
-                      {...Platform.select({
-                        ios:     { textContentType: 'none' as any },
-                        android: { autoComplete: 'off', importantForAutofill: 'no' as any },
-                        web:     { autoComplete: 'off' },
-                      })}
-                    />
-                    <TouchableOpacity onPress={() => removePhone(idx + 1)} style={styles.removeBtn}>
-                      <Text style={styles.removeBtnText}>✕</Text>
+              <View style={styles.row2}>
+                <View style={[styles.inputWrap, styles.flex1]}>
+                  <View style={styles.groupHeader}>
+                    <Text style={styles.label}>Τηλέφωνα *</Text>
+                    <TouchableOpacity onPress={addPhone} style={styles.linkBtn}>
+                      <Text style={styles.linkBtnText}>+ Προσθήκη</Text>
                     </TouchableOpacity>
                   </View>
-                ))}
 
-                {/* ΑΦΜ below all phones */}
-                <View style={[styles.inputWrap, { marginTop: 10 }]}>
+                  {phones.map((ph, idx) => (
+                    <View key={`ph-${idx}`} style={styles.addRow}>
+                      <TextInput
+                        value={ph}
+                        onChangeText={(v) => {
+                          updatePhone(idx, v)
+                          if (errors.phones && v.trim()) setErrors(s => ({ ...s, phones: false }))
+                        }}
+                        style={[
+                          styles.input,
+                          styles.flex1,
+                          errors.phones && idx === 0 && styles.inputError, 
+                        ]}
+                        keyboardType="phone-pad"
+                        placeholder="Τηλέφωνο"
+                        placeholderTextColor={colors.muted}
+
+                        autoComplete={idx === 0 ? 'tel' : 'off'}
+                        {...Platform.select({
+                          ios:     idx === 0 ? { textContentType: 'telephoneNumber' } : { textContentType: 'none' as any },
+                          android: { autoComplete: idx === 0 ? 'tel' : 'off', importantForAutofill: (idx === 0 ? 'yes' : 'no') as any },
+                          web:     { autoComplete: idx === 0 ? 'tel' : 'off' },
+                        })}
+                      />
+                      {phones.length > 1 && (
+                        <TouchableOpacity onPress={() => removePhone(idx)} style={styles.removeBtn}>
+                          <Text style={styles.removeBtnText}>✕</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  ))}
+
+                  {errors.phones && (
+                    <Text style={styles.errorText}>Πρέπει να προσθέσεις τουλάχιστον ένα τηλέφωνο.</Text>
+                  )}
+                </View>
+
+                {/* ΑΦΜ (όπως είναι, χωρίς autofill) */}
+                <View style={[styles.inputWrap, styles.flex1]}>
                   <Text style={styles.label}>ΑΦΜ (προαιρετικό)</Text>
                   <TextInput
                     value={afm}
@@ -2895,25 +2719,16 @@ function ReadyForceConfirmModal({
                       const digits = (raw || '').replace(/\D/g, '')
                       if (digits.length > 9) {
                         setAfm(digits.slice(0, 9))
-                        setAfmError('')
+                        setAfmError('Το ΑΦΜ είναι ακριβώς 9 ψηφία.')
                         return
                       }
                       setAfm(digits)
-                      // Clear error if empty (optional) or exactly 9 digits
-                      if (digits.length === 0 || digits.length === 9) {
-                        setAfmError('')
-                      } else if (digits.length > 0) {
-                        // Show warning but allow saving (will be validated on save)
-                        setAfmError('Το ΑΦΜ πρέπει να είναι άδειο ή να έχει ακριβώς 9 ψηφία.')
-                      }
+                      if (digits.length === 9) setAfmError('')
+                      else if (digits.length > 0) setAfmError('Το ΑΦΜ πρέπει να έχει 9 ψηφία.')
+                      else setAfmError('')
                     }}
                     onBlur={() => {
-                      // Only show error if not empty and not 9 digits
-                      if (afm.trim() && !/^\d{9}$/.test(afm.trim())) {
-                        setAfmError('Το ΑΦΜ πρέπει να είναι άδειο ή να έχει ακριβώς 9 ψηφία.')
-                      } else {
-                        setAfmError('')
-                      }
+                      if (afm && !/^\d{9}$/.test(afm)) setAfmError('Το ΑΦΜ πρέπει να έχει 9 ψηφία.')
                     }}
                     style={[styles.input, afmError ? { borderColor: 'red' } : null]}
                     keyboardType="number-pad"
@@ -2933,10 +2748,6 @@ function ReadyForceConfirmModal({
                     <Text style={{ color: 'red', marginTop: 4, fontSize: 11 }}>Το ΑΦΜ πρέπει να έχει 9 ψηφία.</Text>
                   ) : null}
                 </View>
-
-                {errors.phones && (
-                  <Text style={styles.errorText}>Πρέπει να προσθέσεις τουλάχιστον ένα τηλέφωνο.</Text>
-                )}
               </View>
 
 
@@ -3251,9 +3062,8 @@ function ReadyForceConfirmModal({
                             <Pressable
                               key={o.id}
                               onPress={() => {
-                                // Show payment confirmation modal instead of redirecting
-                                setDebtOrderToPay(o.id)
-                                setShowDebtPaymentModal(true)
+                                setActiveTab('orders')
+                                setExpandedOrderId(o.id)
                               }}
                               style={styles.debtRow}
                             >
@@ -3357,8 +3167,7 @@ function ReadyForceConfirmModal({
                           onEdit={() => openOrderEdit(item)}
                           onClose={() => setExpandedOrderId(null)}
                           status={item.status || 'Νέα'}
-                          hasDebt={!!item.hasDebt}
-                          deliveryDate={item.deliveryDate || item.delivery_date || null}
+                          hasDebt={!!item.hasDebt} 
                           onChangeStatus={async (v) => {
                               if (v === 'Παραδόθηκε') {
                                 setConfirmDelivered({ orderId: item.id })
@@ -3392,41 +3201,6 @@ function ReadyForceConfirmModal({
                                   console.error('updateOrder status failed', e)
                                   Alert.alert('Σφάλμα', 'Η ενημέρωση κατάστασης απέτυχε.')
                                 }
-                                return
-                              }
-
-                              // "Προς παράδοση" - ανοίγουμε modal για delivery date/timeframe
-                              if (v === 'Προς παράδοση') {
-                                // Load existing delivery date if available
-                                if (item.deliveryDate) {
-                                  const deliveryDateTime = new Date(item.deliveryDate)
-                                  setDeliveryDate(item.deliveryDate)
-                                  const hours = deliveryDateTime.getHours()
-                                  // Calculate timeframe based on hour (round down to nearest odd-hour slot: 5, 7, 9, 11, 13, 15, 17, 19, 21)
-                                  let startHour: number
-                                  if (hours < 5) startHour = 5
-                                  else if (hours < 7) startHour = 5
-                                  else if (hours < 9) startHour = 7
-                                  else if (hours < 11) startHour = 9
-                                  else if (hours < 13) startHour = 11
-                                  else if (hours < 15) startHour = 13
-                                  else if (hours < 17) startHour = 15
-                                  else if (hours < 19) startHour = 17
-                                  else if (hours < 21) startHour = 19
-                                  else if (hours < 23) startHour = 21
-                                  else startHour = 21
-                                  const endHour = startHour + 2
-                                  const timeframe = `${String(startHour).padStart(2, '0')}:00-${String(endHour).padStart(2, '0')}:00`
-                                  setDeliveryTimeFrame(timeframe)
-                                } else {
-                                  // Set default to tomorrow 09:00-11:00
-                                  const tomorrow = new Date()
-                                  tomorrow.setDate(tomorrow.getDate() + 1)
-                                  tomorrow.setHours(9, 0, 0, 0)
-                                  setDeliveryDate(tomorrow.toISOString())
-                                  setDeliveryTimeFrame('09:00-11:00')
-                                }
-                                setDeliveryDateModalOrder({ orderId: item.id, item })
                                 return
                               }
 
@@ -3853,21 +3627,6 @@ function ReadyForceConfirmModal({
             )
             try {
               await updateOrder(id, { orderStatus: 'Παραδόθηκε', hasDebt: true }, userId)
-              
-              // Remove all order items from shelves
-              try {
-                const orderItems = await listOrderItemsByOrder(id)
-                for (const item of orderItems) {
-                  try {
-                    await removeItemFromShelf({ orderItemId: item.id, userId })
-                  } catch (e) {
-                    // Item might not be on a shelf, ignore
-                    console.log(`Item ${item.id} not on shelf or already removed`)
-                  }
-                }
-              } catch (e) {
-                console.error('Failed to remove items from shelves', e)
-              }
             } catch (e) {
               console.error('updateOrder (delivered, debt) failed', e)
               Alert.alert('Σφάλμα', 'Η ενημέρωση κατάστασης απέτυχε.')
@@ -3891,21 +3650,6 @@ function ReadyForceConfirmModal({
             )
             try {
               await updateOrder(id, { orderStatus: 'Παραδόθηκε', hasDebt: false }, userId)
-              
-              // Remove all order items from shelves
-              try {
-                const orderItems = await listOrderItemsByOrder(id)
-                for (const item of orderItems) {
-                  try {
-                    await removeItemFromShelf({ orderItemId: item.id, userId })
-                  } catch (e) {
-                    // Item might not be on a shelf, ignore
-                    console.log(`Item ${item.id} not on shelf or already removed`)
-                  }
-                }
-              } catch (e) {
-                console.error('Failed to remove items from shelves', e)
-              }
             } catch (e) {
               console.error('updateOrder (delivered, paid) failed', e)
               Alert.alert('Σφάλμα', 'Η ενημέρωση κατάστασης απέτυχε.')
@@ -3970,203 +3714,7 @@ function ReadyForceConfirmModal({
       onNo={() => setConfirmReadyForce(null)}
     />
 
-    {/* Debt Payment Confirmation Modal */}
-    <ConfirmModal
-      visible={showDebtPaymentModal}
-      title="Επιβεβαίωση Πληρωμής"
-      message={
-        debtOrderToPay
-          ? `Η παραγγελία #${debtOrderToPay.slice(0, 6).toUpperCase()} έχει πληρωθεί τελικά;`
-          : 'Η παραγγελία έχει πληρωθεί τελικά;'
-      }
-      confirmText="Ναι, Πληρώθηκε"
-      cancelText="Ακύρωση"
-      onConfirm={async () => {
-        if (!debtOrderToPay) {
-          setShowDebtPaymentModal(false)
-          setDebtOrderToPay(null)
-          return
-        }
-
-        try {
-          // Mark as paid (hasDebt: false) and move to history (status: 'Παραδόθηκε')
-          const orderId = debtOrderToPay
-          
-          // Update local state
-          setOrders(prev => prev.map(o => 
-            o.id === orderId 
-              ? { ...o, status: 'Παραδόθηκε', hasDebt: false } 
-              : o
-          ))
-
-          // Update database
-          await updateOrder(orderId, { orderStatus: 'Παραδόθηκε', hasDebt: false }, userId)
-          
-          // Close modal and reset
-          setShowDebtPaymentModal(false)
-          setDebtOrderToPay(null)
-          
-          // Show success message
-          Alert.alert('Επιτυχία', 'Η παραγγελία σηματοδοτήθηκε ως πληρωμένη και μεταφέρθηκε στο ιστορικό.')
-        } catch (e) {
-          console.error('updateOrder failed', e)
-          Alert.alert('Σφάλμα', 'Η ενημέρωση της παραγγελίας απέτυχε.')
-        }
-      }}
-      onCancel={() => {
-        setShowDebtPaymentModal(false)
-        setDebtOrderToPay(null)
-      }}
-    />
-
-    {/* Delivery Date/Time Modal */}
-    <Modal
-      visible={!!deliveryDateModalOrder}
-      transparent
-      animationType="fade"
-      onRequestClose={() => {
-        setDeliveryDateModalOrder(null)
-        setDeliveryDate(null)
-        setDeliveryTimeFrame('')
-      }}
-    >
-      <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-        <View style={{ backgroundColor: '#FFFFFF', borderRadius: 16, width: '100%', maxWidth: 500, maxHeight: '90%' }}>
-          <View style={{ padding: 20, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' }}>
-            <Text style={{ fontSize: 18, fontWeight: '700', color: '#1F2A44' }}>Επιλογή Ημερομηνίας & Ώρας Παράδοσης</Text>
-          </View>
-
-          <ScrollView style={{ maxHeight: 500 }} contentContainerStyle={{ padding: 20 }}>
-            <Calendar
-              onDayPress={(day) => {
-                const selectedDate = new Date(day.dateString)
-                const currentDate = deliveryDate ? new Date(deliveryDate) : new Date()
-                selectedDate.setHours(currentDate.getHours() || 10, currentDate.getMinutes() || 0, 0, 0)
-                setDeliveryDate(selectedDate.toISOString())
-              }}
-              markedDates={
-                deliveryDate
-                  ? {
-                      [new Date(deliveryDate).toISOString().split('T')[0]]: {
-                        selected: true,
-                        selectedColor: '#3B82F6',
-                      },
-                    }
-                  : {}
-              }
-              minDate={new Date().toISOString().split('T')[0]}
-            />
-
-            <View style={{ marginTop: 20 }}>
-              <Text style={{ fontSize: 14, fontWeight: '600', color: '#1F2A44', marginBottom: 8 }}>Ώρα Παράδοσης (Timeframe 2 ωρών)</Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                {[
-                  { start: 5, end: 7, label: '05:00-07:00' },
-                  { start: 7, end: 9, label: '07:00-09:00' },
-                  { start: 9, end: 11, label: '09:00-11:00' },
-                  { start: 11, end: 13, label: '11:00-13:00' },
-                  { start: 13, end: 15, label: '13:00-15:00' },
-                  { start: 15, end: 17, label: '15:00-17:00' },
-                  { start: 17, end: 19, label: '17:00-19:00' },
-                  { start: 19, end: 21, label: '19:00-21:00' },
-                  { start: 21, end: 23, label: '21:00-23:00' },
-                ].map((timeSlot) => {
-                  const isSelected = deliveryTimeFrame === timeSlot.label;
-                  return (
-                    <Pressable
-                      key={timeSlot.label}
-                      onPress={() => {
-                        setDeliveryTimeFrame(timeSlot.label);
-                        if (deliveryDate) {
-                          const updated = new Date(deliveryDate);
-                          updated.setHours(timeSlot.start, 0, 0, 0);
-                          setDeliveryDate(updated.toISOString());
-                        }
-                      }}
-                      style={{
-                        paddingHorizontal: 16,
-                        paddingVertical: 10,
-                        borderRadius: 8,
-                        backgroundColor: isSelected ? '#3B82F6' : '#F3F4F6',
-                        borderWidth: 1,
-                        borderColor: isSelected ? '#3B82F6' : '#E5E7EB',
-                      }}
-                    >
-                      <Text
-                        style={{
-                          fontSize: 14,
-                          fontWeight: isSelected ? '600' : '500',
-                          color: isSelected ? '#FFFFFF' : '#1F2A44',
-                        }}
-                      >
-                        {timeSlot.label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-          </ScrollView>
-
-          <View style={{ flexDirection: 'row', padding: 20, borderTopWidth: 1, borderTopColor: '#E5E7EB', gap: 12 }}>
-            <Pressable
-              onPress={() => {
-                setDeliveryDateModalOrder(null)
-                setDeliveryDate(null)
-                setDeliveryTimeFrame('')
-              }}
-              style={{ flex: 1, paddingVertical: 12, borderRadius: 8, backgroundColor: '#F3F4F6', alignItems: 'center' }}
-            >
-              <Text style={{ fontSize: 16, fontWeight: '600', color: '#1F2A44' }}>Ακύρωση</Text>
-            </Pressable>
-            <Pressable
-              onPress={async () => {
-                if (!deliveryDate) {
-                  Alert.alert('Προσοχή', 'Παρακαλώ επιλέξτε ημερομηνία παράδοσης.')
-                  return
-                }
-                if (!deliveryTimeFrame) {
-                  Alert.alert('Προσοχή', 'Παρακαλώ επιλέξτε timeframe ώρας παράδοσης (2 ώρες).')
-                  return
-                }
-
-                if (!deliveryDateModalOrder) return
-
-                try {
-                  // Update order status and delivery date
-                  await updateOrder(deliveryDateModalOrder.orderId, {
-                    orderStatus: 'Προς παράδοση',
-                    deliveryDate: deliveryDate,
-                    hasDebt: false,
-                  }, userId)
-
-                  // Update local state
-                  setOrders(prev =>
-                    prev.map(o =>
-                      o.id === deliveryDateModalOrder.orderId
-                        ? { ...o, status: 'Προς παράδοση', deliveryDate }
-                        : o
-                    )
-                  )
-
-                  setDeliveryDateModalOrder(null)
-                  setDeliveryDate(null)
-                  setDeliveryTimeFrame('')
-                  
-                  Alert.alert('Επιτυχία', 'Η παραγγελία ορίστηκε ως "Προς παράδοση" με επιτυχία.')
-                } catch (e) {
-                  console.error('updateOrder failed', e)
-                  Alert.alert('Σφάλμα', 'Η ενημέρωση της παραγγελίας απέτυχε.')
-                }
-              }}
-              style={{ flex: 1, paddingVertical: 12, borderRadius: 8, backgroundColor: '#3B82F6', alignItems: 'center' }}
-            >
-              <Text style={{ fontSize: 16, fontWeight: '600', color: '#FFFFFF' }}>ΟΚ</Text>
-            </Pressable>
-          </View>
-        </View>
-      </View>
-    </Modal>
+      
 
     </Page>
   )
@@ -5431,64 +4979,6 @@ returnsTitle: {
 returnsText: {
   color: '#7C2D12',
 },
-
-  // Pagination styles
-  paginationContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 16,
-    paddingHorizontal: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#E5E7EB',
-    marginTop: 8,
-    backgroundColor: '#F9FAFB',
-    borderRadius: 0,
-  },
-  paginationButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    borderWidth: 1.5,
-    borderColor: '#E5E7EB',
-    ...(Platform.select({
-      ios: { shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
-      android: { elevation: 2 },
-      web: { boxShadow: '0 2px 4px rgba(0,0,0,0.06)', cursor: 'pointer' } as any,
-    }) as object),
-  },
-  paginationButtonDisabled: {
-    opacity: 0.5,
-    ...(Platform.select({
-      web: { cursor: 'not-allowed' } as any,
-    }) as object),
-  },
-  paginationButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1F2A44',
-  },
-  paginationButtonTextDisabled: {
-    color: '#9CA3AF',
-  },
-  paginationInfo: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  paginationText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1F2A44',
-    marginBottom: 2,
-  },
-  paginationSubtext: {
-    fontSize: 12,
-    color: '#6B7280',
-  },
 
 
 

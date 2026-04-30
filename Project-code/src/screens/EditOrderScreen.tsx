@@ -18,21 +18,19 @@ import { Calendar } from 'react-native-calendars'
 import AppHeader from '../components/AppHeader'
 import Page from '../components/Page'
 import { listCustomers } from '../services/customer'
+import { existsItemCode, existsItemCodeExcept } from '../services/orderItems'
+import { useAuth } from '../state/AuthProvider'
+
 import {
   createOrderItem,
   deleteOrderItem,
-  existsItemCode, existsItemCodeExcept,
   listOrderItemsByOrder,
   updateOrderItem,
 } from '../services/orderItems'
-import { useAuth } from '../state/AuthProvider'
-
-
 import {
   getOrderById,
   updateOrder,
 } from '../services/orders'
-import { removeItemFromShelf } from '../services/warehouseItems'
 
 /**  helpers/types */
 type CustomerRow = {
@@ -74,7 +72,7 @@ const makeEmptyOrder = (): OrderItemUI => ({
 const isItemCodeValid = (code?: string) => {
   if (!code) return true
   const up = code.trim().toUpperCase()
-  return /^[A-ZΑ-Ω]{1}\d{5}$/.test(up)
+  return /^[A-ZΑ-Ω]{3}\d{3}$/.test(up)
 }
 
 type PieceItem = {
@@ -185,7 +183,6 @@ export default function EditOrderScreen() {
   // modal of piece
   const [pieceModalOpen, setPieceModalOpen] = useState(false)
   const [pieceModalIndex, setPieceModalIndex] = useState<number | null>(null)
-  const [pieceModalError, setPieceModalError] = useState<string>('')
   const [pieceForm, setPieceForm] = useState({
     color: '',
     code: '',
@@ -220,15 +217,10 @@ export default function EditOrderScreen() {
     // οrder status
   const [orderStatusOpen, setOrderStatusOpen] = useState(false);
   const [orderStatus, setOrderStatus] = useState<string | null>(null);
-  const [deliveryDate, setDeliveryDate] = useState<string | null>(null); // ISO datetime string
-  const [deliveryDateOpen, setDeliveryDateOpen] = useState(false);
-  const [deliveryTime, setDeliveryTime] = useState<string>(''); // HH:mm format (start time)
-  const [deliveryTimeFrame, setDeliveryTimeFrame] = useState<string>(''); // e.g., "10:00-12:00"
 
   const [hasDebt, setHasDebt] = useState<boolean | null>(null) // hasDept
   const [confirmDeliveredOpen, setConfirmDeliveredOpen] = useState(false) //payed/not
   const [returnsPromptOpen, setReturnsPromptOpen] = useState(false)
-  const [unsavedChangesModalOpen, setUnsavedChangesModalOpen] = useState(false) // unsaved changes warning
 
   const toNum = (s?: string) => parseFloat((s || '').replace(',', '.')) || 0;
   const fix2 = (n: number) => n.toFixed(2);
@@ -294,15 +286,13 @@ const isReturnsPending = useMemo(() => {
     new: 'Νέα',
     processing: 'Σε επεξεργασία',
     ready: 'Έτοιμη',
-    readyForDelivery: 'Προς παράδοση',
     delivered: 'Παραδόθηκε',
   };
 
-  const ORDER_STATUS_LABEL_TO_KEY: Record<string, 'new'|'processing'|'ready'|'readyForDelivery'|'delivered'> = {
+  const ORDER_STATUS_LABEL_TO_KEY: Record<string, 'new'|'processing'|'ready'|'delivered'> = {
     'Νέα': 'new',
     'Σε επεξεργασία': 'processing',
     'Έτοιμη': 'ready',
-    'Προς παράδοση': 'readyForDelivery',
     'Παραδόθηκε': 'delivered',
   };
 
@@ -352,36 +342,6 @@ const isReturnsPending = useMemo(() => {
           setOrderStatus(ORDER_STATUS_LABEL_TO_KEY[order.orderStatus] ?? 'new')
         } else {
           setOrderStatus('new') 
-        }
-        
-        // Load delivery date if exists
-        if ((order as any).deliveryDate) {
-          const deliveryDateTime = new Date((order as any).deliveryDate)
-          setDeliveryDate((order as any).deliveryDate)
-          const hours = deliveryDateTime.getHours()
-          const minutes = deliveryDateTime.getMinutes()
-          setDeliveryTime(`${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`)
-          
-          // Calculate timeframe based on hour (round down to nearest odd-hour slot: 5, 7, 9, 11, 13, 15, 17, 19, 21)
-          let startHour: number
-          if (hours < 5) startHour = 5
-          else if (hours < 7) startHour = 5
-          else if (hours < 9) startHour = 7
-          else if (hours < 11) startHour = 9
-          else if (hours < 13) startHour = 11
-          else if (hours < 15) startHour = 13
-          else if (hours < 17) startHour = 15
-          else if (hours < 19) startHour = 17
-          else if (hours < 21) startHour = 19
-          else if (hours < 23) startHour = 21
-          else startHour = 21
-          const endHour = startHour + 2
-          const timeframe = `${String(startHour).padStart(2, '0')}:00-${String(endHour).padStart(2, '0')}:00`
-          setDeliveryTimeFrame(timeframe)
-        } else {
-          setDeliveryDate(null)
-          setDeliveryTime('')
-          setDeliveryTimeFrame('')
         } 
         setOrders([{
           ...makeEmptyOrder(),
@@ -572,7 +532,7 @@ const isReturnsPending = useMemo(() => {
   }
 
   const updatePiece = (index: number, patch: Partial<PieceItem>) => {
-    setPieces(prev => prev.map((p, i) => (i === index ? { ...p, ...patch, dirty: true } : p)))
+    setPieces(prev => prev.map((p, i) => (i === index ? { ...p, ...patch } : p)))
   }
 
   const removePiece = (index: number) => {
@@ -726,12 +686,11 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
     setPieceModalOpen(false)
     setPieceModalIndex(null)
     setStatusOpen(false)
-    setPieceModalError('')
   }
 
   const isCodeValid = () => {
     const up = (pieceForm.code || '').trim().toUpperCase()
-    return up === '' || /^[A-ZΑ-Ω]{1}\d{5}$/.test(up)
+    return up === '' || /^[A-ZΑ-Ω]{3}\d{3}$/.test(up)
   }
 
 
@@ -749,8 +708,8 @@ const savePieceModal = () => {
 
   // Προαιρετικός κωδικός, έλεγχος μόνο αν δόθηκε
   const upCode = (pieceForm.code || '').toUpperCase()
-  if (upCode && !/^[A-ZΑ-Ω]{1}\d{5}$/.test(upCode)) {
-    Alert.alert('Προσοχή', 'Ο Κωδικός πρέπει να είναι της μορφής X99999 (π.χ. T22222).')
+  if (upCode && !/^[A-ZΑ-Ω]{3}\d{3}$/.test(upCode)) {
+    Alert.alert('Προσοχή', 'Ο Κωδικός πρέπει να είναι της μορφής XXX999 (π.χ. CHR001).')
     return
   }
 
@@ -760,17 +719,6 @@ const savePieceModal = () => {
   const Lfilled = !!(pieceForm.lengthM && pieceForm.lengthM.trim() !== '')
   const Wfilled = !!(pieceForm.widthM  && pieceForm.widthM.trim()  !== '')
 
-  // Validation: If status is "πλυμένο" and category supports dimensions, dimensions must be set
-  if (pieceForm.status === 'πλυμένο' && perM2 && (!Lfilled || !Wfilled)) {
-    const errorMsg = 'Για να ορίσετε το τεμάχιο ως "πλυμένο", πρέπει πρώτα να συμπληρώσετε τις διαστάσεις (Μήκος και Πλάτος).'
-    setPieceModalError(errorMsg)
-    Alert.alert('Προσοχή', errorMsg)
-    return
-  }
-
-  // Clear error if validation passes
-  setPieceModalError('')
-
   // default → δεν αλλάζουμε κόστος/τετρ. αν δεν έχουμε πλήρη στοιχεία
   let nextArea = active.areaM2 || ''
   let nextCost = active.cost || '0.00'
@@ -779,9 +727,7 @@ const savePieceModal = () => {
   if (perM2 && Lfilled && Wfilled) {
     const L = toNum(pieceForm.lengthM)
     const W = toNum(pieceForm.widthM)
-    // Use pieceForm.pricePerM2 or defaultPricePerM2 or existing pricePerM2
-    const pricePerM2Value = pieceForm.pricePerM2 || defaultPricePerM2 || active.pricePerM2 || ''
-    const P = toNum(pricePerM2Value)
+    const P = toNum(pieceForm.pricePerM2)  // ΔΕΝ το πειράζουμε, απλώς το διαβάζουμε
 
     if (L > 0 && W > 0 && P > 0) {
       const area = L * W
@@ -791,13 +737,6 @@ const savePieceModal = () => {
     }
     // αν κάποιο από L/W <=0 ή P<=0, δεν μπλοκάρουμε: απλώς δεν υπολογίζουμε
   }
-
-  // Calculate updated pieces before updating state (for order status check)
-  const updatedPieces = pieces.map((p, i) => 
-    i === pieceModalIndex 
-      ? { ...p, status: pieceForm.status, lengthM: pieceForm.lengthM ?? '', widthM: pieceForm.widthM ?? '' }
-      : p
-  )
 
   // Ενημέρωση state του τεμαχίου (length/width πάντα ό,τι έγραψε ο χρήστης, ακόμη κι αν είναι κενά)
   updatePiece(pieceModalIndex, {
@@ -814,9 +753,6 @@ const savePieceModal = () => {
     // μόνο αν υπολογίστηκαν αλλάζουν area/cost, αλλιώς κρατάμε τα προηγούμενα
     areaM2: nextArea,
     cost: nextCost,
-    pricePerM2: (perM2 && Lfilled && Wfilled) 
-      ? (pieceForm.pricePerM2 || defaultPricePerM2 || active.pricePerM2 || '')
-      : (pieceForm.pricePerM2 ?? active.pricePerM2 ?? ''),
 
     dirty: true,
   })
@@ -831,27 +767,6 @@ const savePieceModal = () => {
       else copy[active.id!] = { lengthM: l, widthM: w }
       return copy
     })
-  }
-
-  // Auto-update order status based on pieces status and dimensions
-  // Check if all pieces are washed
-  const allWashed = updatedPieces.length > 0 && updatedPieces.every(p => (p.status || 'άπλυτο') === 'πλυμένο')
-  const hasUnwashed = updatedPieces.some(p => (p.status || 'άπλυτο') === 'άπλυτο')
-  
-  // Check if any piece has dimensions
-  const hasPiecesWithDimensions = updatedPieces.some(p => 
-    (p.lengthM && p.lengthM.trim()) || (p.widthM && p.widthM.trim())
-  )
-  
-  // Update order status automatically
-  if (allWashed) {
-    setOrderStatus('ready')
-  } else if (hasUnwashed && orderStatus === 'ready') {
-    // If there are unwashed pieces and order was ready, set to processing
-    setOrderStatus('processing')
-  } else if ((!orderStatus || orderStatus === 'new') && hasPiecesWithDimensions) {
-    // If order is new and we have pieces with dimensions, set to processing
-    setOrderStatus('processing')
   }
 
   closePieceModal()
@@ -883,10 +798,6 @@ const savePieceModal = () => {
               status: p.status ?? 'άπλυτο',
               storage_status: p.workType ?? 'Επιστροφή',
               order_date: (p.orderDate && p.orderDate.length === 10) ? p.orderDate : undefined,
-              length_m: p.lengthM || undefined,
-              width_m: p.widthM || undefined,
-              area_m2: p.areaM2 || undefined,
-              price_per_m2: p.pricePerM2 || undefined,
               }, userId)
               created.push(rec)
           }
@@ -917,10 +828,6 @@ const savePieceModal = () => {
             status: p.status ?? 'άπλυτο',
             storage_status: p.workType ?? 'Επιστροφή',
             order_date: (p.orderDate && p.orderDate.length === 10) ? p.orderDate : undefined,
-            length_m: p.lengthM || undefined,
-            width_m: p.widthM || undefined,
-            area_m2: p.areaM2 || undefined,
-            price_per_m2: p.pricePerM2 || undefined,
             }, userId)
         }
         // clean flags
@@ -928,12 +835,7 @@ const savePieceModal = () => {
         }
 
        // UPDATE ORDER header 
-      // Recalculate totalCost from current pieces to ensure it's up-to-date
-      const currentTotalCost = pieces.reduce((acc, p) => {
-        const v = parseFloat((p.cost || '').toString().replace(',', '.'))
-        return acc + (isNaN(v) ? 0 : v)
-      }, 0)
-      const totNum = currentTotalCost || 0
+      const totNum = parseFloat(totalCost) || 0
       const dep = depositEnabled ? parseFloat((depositAmount || '0').replace(',', '.')) || 0 : 0
 
       // if final cost =0 --> not ab
@@ -957,38 +859,13 @@ const savePieceModal = () => {
       if (paymentMethod !== null) {
         patch.paymentMethod = paymentMethod
       }
-      
-      // Save delivery date if status is "Προς παράδοση"
-      if (orderStatus === 'readyForDelivery' && deliveryDate) {
-        patch.deliveryDate = deliveryDate
-      } else if (orderStatus !== 'readyForDelivery') {
-        // Clear delivery date if status is not "Προς παράδοση"
-        patch.deliveryDate = null
-      }
 
       await updateOrder(orderId, patch, userId)
 
-      // If status is "Παραδόθηκε" (delivered), remove all items from shelves
-      if (orderStatus === 'delivered') {
-        try {
-          const orderItems = await listOrderItemsByOrder(orderId)
-          for (const item of orderItems) {
-            try {
-              await removeItemFromShelf({ orderItemId: item.id, userId })
-            } catch (e) {
-              // Item might not be on a shelf, ignore
-              console.log(`Item ${item.id} not on shelf or already removed`)
-            }
-          }
-        } catch (e) {
-          console.error('Failed to remove items from shelves', e)
-        }
-      }
 
-        // clear queue deletion and dirty flags
+
+        // clear queue deletion
         setRemovedItemIds([])
-        // Clear all dirty flags after successful save
-        setPieces(prev => prev.map(p => ({ ...p, dirty: false })))
 
        if (Platform.OS === 'web') {
         //  web 
@@ -1006,13 +883,6 @@ const savePieceModal = () => {
         Alert.alert('Σφάλμα', 'Η αποθήκευση απέτυχε.')
         }
   }
-
-  // Check if there are unsaved changes (must be before any conditional returns)
-  const hasUnsavedChanges = useMemo(() => {
-    const hasDirtyPieces = pieces.some(p => p.dirty)
-    const hasRemovedItems = removedItemIds.length > 0
-    return hasDirtyPieces || hasRemovedItems
-  }, [pieces, removedItemIds])
 
   if (loading) {
     return (
@@ -1033,35 +903,9 @@ const savePieceModal = () => {
     })
   }
 
-  // Handle back button with unsaved changes check
-  const handleBack = () => {
-    if (hasUnsavedChanges) {
-      setUnsavedChangesModalOpen(true)
-    } else {
-      // No unsaved changes, go back normally
-      try {
-        if ((router as any).canGoBack?.()) router.back()
-        else router.push('/dashboard')
-      } catch {
-        router.push('/dashboard')
-      }
-    }
-  }
-
-  // Handle navigation after saving or discarding changes
-  const proceedWithBack = () => {
-    setUnsavedChangesModalOpen(false)
-    try {
-      if ((router as any).canGoBack?.()) router.back()
-      else router.push('/dashboard')
-    } catch {
-      router.push('/dashboard')
-    }
-  }
-
   return (
     <Page>
-      <AppHeader showBack onBack={handleBack} />
+      <AppHeader showBack />
 
       <ScrollView
         style={styles.scroller}
@@ -1449,29 +1293,14 @@ const savePieceModal = () => {
             <View style={styles.piecesList}>
                 {pieces.map((p, i) => {
                     const isExisting = p.saved && !p.newlyAdded 
-                    
-                    // Check status for color coding
-                    const status = p.status || 'άπλυτο'
-                    const isUnwashed = status === 'άπλυτο'
-                    const isWashed = status === 'πλυμένο'
-                    
-                    // Set background and border colors based on status
-                    // Use more vibrant colors that match the status text color
-                    const backgroundColor = isWashed ? '#D1FAE5' : (isUnwashed ? '#FEE2E2' : '#FBFBFB')
-                    const borderColor = isWashed ? '#10B981' : (isUnwashed ? '#EF4444' : '#EEEEEE')
 
                     return (
                     <View
                         key={p.id ?? `piece-${i}`}
                         style={[
                         styles.pieceRow,
-                        { 
-                          position: 'relative',
-                          backgroundColor,
-                          borderColor,
-                        },
-                        // Don't apply pieceRowCompleted if we have status-based colors
-                        // isExisting && styles.pieceRowCompleted,
+                        { position: 'relative' },
+                        isExisting && styles.pieceRowCompleted,
                         ]}
                     >
                         <Pressable
@@ -1485,9 +1314,6 @@ const savePieceModal = () => {
                         <Text style={styles.pieceTitle}>Τεμάχιο {i + 1}</Text>
                         <Text style={styles.pieceSubtitle}>Κατηγορία: {p.category ?? '—'}</Text>
                         {!!p.code && <Text style={styles.pieceSubtitle}>Κωδικός: {p.code}</Text>}
-                        <Text style={[styles.pieceSubtitle, { color: isWashed ? '#059669' : (isUnwashed ? '#DC2626' : '#666'), fontWeight: '500' }]}>
-                          Κατάσταση: {status}
-                        </Text>
                         </View>
 
                         <View style={styles.costControl}>
@@ -1647,28 +1473,6 @@ const savePieceModal = () => {
                       >
                         <Text style={styles.dropdownItemText}>{label}</Text>
                       </Pressable>
-                    ) : key === 'readyForDelivery' ? (
-                      // "Προς παράδοση" - open datetime picker
-                      <Pressable
-                        style={styles.dropdownItem}
-                        onPress={() => {
-                          clearPendingIfLeavingDelivered()
-                          setOrderStatus('readyForDelivery')
-                          setOrderStatusOpen(false)
-                          // If no delivery date set, set default to tomorrow
-                          if (!deliveryDate) {
-                            const tomorrow = new Date()
-                            tomorrow.setDate(tomorrow.getDate() + 1)
-                            tomorrow.setHours(9, 0, 0, 0) // Default 09:00
-                            setDeliveryDate(tomorrow.toISOString())
-                            setDeliveryTime('09:00')
-                            setDeliveryTimeFrame('09:00-11:00')
-                          }
-                          setDeliveryDateOpen(true)
-                        }}
-                      >
-                        <Text style={styles.dropdownItemText}>{label}</Text>
-                      </Pressable>
                     ) : (
                       //  ΓΙΑ ΟΛΑ ΤΑ ΑΛΛΑ 
                       <Pressable
@@ -1684,12 +1488,6 @@ const savePieceModal = () => {
                             setOrderStatus(key as typeof key)
                             setHasDebt(false)
                             setOrderStatusOpen(false)
-                            // Clear delivery date if changing from readyForDelivery
-                            if (orderStatus === 'readyForDelivery') {
-                              setDeliveryDate(null)
-                              setDeliveryTime('')
-                              setDeliveryTimeFrame('')
-                            }
                           }
                         }}
                       >
@@ -1704,149 +1502,6 @@ const savePieceModal = () => {
 
           </View>
         </View>
-
-        {/* Delivery Date/Time Picker - Show when status is "Προς παράδοση" */}
-        {orderStatus === 'readyForDelivery' && (
-          <View style={[styles.cardBox, { marginTop: 16 }]}>
-            <Text style={styles.inputLabel}>Ημερομηνία & Ώρα Παράδοσης</Text>
-            
-            <Pressable
-              onPress={() => setDeliveryDateOpen(true)}
-              style={styles.fakeInput}
-            >
-              <Text style={[styles.fakeInputText, !deliveryDate && { color: '#999' }]}>
-                {deliveryDate 
-                  ? `${new Date(deliveryDate).toLocaleDateString('el-GR', { day: '2-digit', month: '2-digit', year: 'numeric' })} ${deliveryTimeFrame || deliveryTime || ''}`
-                  : 'Επιλέξτε ημερομηνία & ώρα παράδοσης...'}
-              </Text>
-              <Ionicons name="calendar-outline" size={18} color="#666" />
-            </Pressable>
-
-            {deliveryDateOpen && (
-              <Modal
-                visible={deliveryDateOpen}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setDeliveryDateOpen(false)}
-              >
-                <View style={styles.modalBackdrop}>
-                  <View style={styles.modalCard}>
-                    <View style={styles.modalHeader}>
-                      <Text style={styles.modalTitle}>Επιλογή Ημερομηνίας & Ώρας</Text>
-                    </View>
-
-                    <ScrollView style={{ maxHeight: 500 }}>
-                      <Calendar
-                        onDayPress={(day) => {
-                          const selectedDate = new Date(day.dateString)
-                          const currentDate = deliveryDate ? new Date(deliveryDate) : new Date()
-                          selectedDate.setHours(
-                            currentDate.getHours() || 10,
-                            currentDate.getMinutes() || 0,
-                            0,
-                            0
-                          )
-                          setDeliveryDate(selectedDate.toISOString())
-                        }}
-                        markedDates={
-                          deliveryDate
-                            ? {
-                                [new Date(deliveryDate).toISOString().split('T')[0]]: {
-                                  selected: true,
-                                  selectedColor: '#3B82F6',
-                                },
-                              }
-                            : {}
-                        }
-                        minDate={new Date().toISOString().split('T')[0]}
-                      />
-
-                      <View style={{ marginTop: 20, paddingHorizontal: 20 }}>
-                        <Text style={styles.inputLabel}>Ώρα Παράδοσης (Timeframe 2 ωρών)</Text>
-                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
-                          {[
-                            { start: 5, end: 7, label: '05:00-07:00' },
-                            { start: 7, end: 9, label: '07:00-09:00' },
-                            { start: 9, end: 11, label: '09:00-11:00' },
-                            { start: 11, end: 13, label: '11:00-13:00' },
-                            { start: 13, end: 15, label: '13:00-15:00' },
-                            { start: 15, end: 17, label: '15:00-17:00' },
-                            { start: 17, end: 19, label: '17:00-19:00' },
-                            { start: 19, end: 21, label: '19:00-21:00' },
-                            { start: 21, end: 23, label: '21:00-23:00' },
-                          ].map((timeSlot) => {
-                            const isSelected = deliveryTimeFrame === timeSlot.label;
-                            return (
-                              <Pressable
-                                key={timeSlot.label}
-                                onPress={() => {
-                                  setDeliveryTimeFrame(timeSlot.label);
-                                  setDeliveryTime(`${String(timeSlot.start).padStart(2, '0')}:00`);
-                                  
-                                  // Update deliveryDate with start time
-                                  if (deliveryDate) {
-                                    const updated = new Date(deliveryDate);
-                                    updated.setHours(timeSlot.start, 0, 0, 0);
-                                    setDeliveryDate(updated.toISOString());
-                                  }
-                                }}
-                                style={{
-                                  paddingHorizontal: 16,
-                                  paddingVertical: 10,
-                                  borderRadius: 8,
-                                  backgroundColor: isSelected ? '#3B82F6' : '#F3F4F6',
-                                  borderWidth: 1,
-                                  borderColor: isSelected ? '#3B82F6' : '#E5E7EB',
-                                }}
-                              >
-                                <Text
-                                  style={{
-                                    fontSize: 14,
-                                    fontWeight: isSelected ? '600' : '500',
-                                    color: isSelected ? '#FFFFFF' : '#1F2A44',
-                                  }}
-                                >
-                                  {timeSlot.label}
-                                </Text>
-                              </Pressable>
-                            );
-                          })}
-                        </View>
-                      </View>
-                    </ScrollView>
-
-                    <View style={styles.modalActions}>
-                      <Pressable
-                        style={styles.secondaryBtn}
-                        onPress={() => {
-                          setDeliveryDateOpen(false)
-                        }}
-                      >
-                        <Text style={styles.secondaryBtnText}>Ακύρωση</Text>
-                      </Pressable>
-                      <Pressable
-                        style={[styles.primaryBtn, { marginLeft: 12 }]}
-                        onPress={() => {
-                          if (!deliveryDate) {
-                            Alert.alert('Προσοχή', 'Παρακαλώ επιλέξτε ημερομηνία παράδοσης.')
-                            return
-                          }
-                          if (!deliveryTimeFrame) {
-                            Alert.alert('Προσοχή', 'Παρακαλώ επιλέξτε timeframe ώρας παράδοσης (2 ώρες).')
-                            return
-                          }
-                          setDeliveryDateOpen(false)
-                        }}
-                      >
-                        <Text style={styles.primaryBtnText}>ΟΚ</Text>
-                      </Pressable>
-                    </View>
-                  </View>
-                </View>
-              </Modal>
-            )}
-          </View>
-        )}
 
 
         {/* ===== Συνολικό Κόστος ===== */}
@@ -1995,8 +1650,7 @@ const savePieceModal = () => {
         <View style={styles.modalBackdrop}>
           <View style={[
             styles.modalCard,
-            pieceForm.pricingType === 'perM2' && styles.modalCardLarge,
-            { minHeight: 650, maxHeight: '90%' }, // Make modal bigger
+            pieceForm.pricingType === 'perM2' && styles.modalCardLarge, 
           ]}>
             <View style={styles.modalHeader}>
               <Image
@@ -2013,7 +1667,6 @@ const savePieceModal = () => {
             </View>
 
             <ScrollView
-              style={{ flex: 1 }}
               contentContainerStyle={{
                 paddingBottom: 4,  
                 paddingTop: 15,      
@@ -2055,7 +1708,7 @@ const savePieceModal = () => {
                     setPieceForm(s => ({ ...s, code: clean }));
 
                     // 1️⃣ έλεγχος pattern
-                    const patternOk = clean === '' || /^[A-ZΑ-Ω]{1}\d{5}$/.test(clean);
+                    const patternOk = clean === '' || /^[A-ZΑ-Ω]{3}\d{3}$/.test(clean);
                     if (!patternOk) { setPieceCodeError(false); return; }
 
                     // 2️⃣ αν δεν άλλαξε από τον αρχικό, αγνόησέ το
@@ -2076,14 +1729,14 @@ const savePieceModal = () => {
                     styles.input,
                     (!isCodeValid() && pieceForm.code) || pieceCodeError ? styles.inputError : null,
                   ]}
-                  placeholder="T22222"
+                  placeholder="CHR001"
                   placeholderTextColor="#6B7280"
                   autoCapitalize="characters"
                   maxLength={6}
                 />
 
                 {!isCodeValid() && pieceForm.code ? (
-                  <Text style={styles.inputHintError}>Μορφή X99999 (π.χ. T22222)</Text>
+                  <Text style={styles.inputHintError}>Μορφή XXX999 (π.χ. CHR001)</Text>
                 ) : null}
 
                 {pieceCodeError && pieceForm.code && isCodeValid() ? (
@@ -2181,6 +1834,7 @@ const savePieceModal = () => {
                 </>
               )}
 
+
               {/* 4) Κατάσταση / Τύπος */}
               <View style={styles.row2}>
                 <View style={[styles.inputWrap, styles.flex1, styles.dropdownHost]}>
@@ -2225,26 +1879,6 @@ const savePieceModal = () => {
                 </View>
               </View>
             </ScrollView>
-
-            {/* Error Message - placed after ScrollView, before buttons, to avoid covering status dropdown */}
-            {pieceModalError ? (
-              <View style={{
-                backgroundColor: '#FEE2E2',
-                borderColor: '#EF4444',
-                borderWidth: 1,
-                borderRadius: 8,
-                padding: 12,
-                marginHorizontal: 20,
-                marginBottom: 12,
-              }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <Ionicons name="alert-circle" size={20} color="#DC2626" />
-                  <Text style={{ color: '#DC2626', fontSize: 14, flex: 1 }}>
-                    {pieceModalError}
-                  </Text>
-                </View>
-              </View>
-            ) : null}
 
             <View style={styles.modalActions}>
               <Pressable style={styles.secondaryBtn} onPress={closePieceModal}>
@@ -2508,73 +2142,8 @@ const savePieceModal = () => {
         </View>
       </Modal>
 
-      {/* Unsaved Changes Warning Modal */}
-      <Modal
-        visible={unsavedChangesModalOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setUnsavedChangesModalOpen(false)}
-      >
-        <View style={{
-          flex: 1,
-          backgroundColor: 'rgba(0,0,0,0.4)',
-          justifyContent: 'center',
-          alignItems: 'center',
-          padding: 24,
-        }}>
-          <View style={{
-            backgroundColor: '#fff',
-            borderRadius: 12,
-            padding: 24,
-            width: '90%',
-            maxWidth: 400,
-          }}>
-            <View style={{ marginBottom: 16 }}>
-              <Text style={{ fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 8 }}>
-                Μη Αποθηκευμένες Αλλαγές
-              </Text>
-              <Text style={{ fontSize: 15, color: '#6B7280', lineHeight: 22 }}>
-                Έχετε κάνει αλλαγές στα τεμάχια της παραγγελίας που δεν έχουν αποθηκευτεί. Αν συνεχίσετε, οι αλλαγές θα χαθούν.
-              </Text>
-            </View>
 
-            <View style={{ gap: 12, marginTop: 20 }}>
-              <Pressable
-                onPress={() => {
-                  setUnsavedChangesModalOpen(false)
-                  // Scroll to save button or highlight it
-                }}
-                style={{
-                  backgroundColor: '#3B82F6',
-                  paddingVertical: 12,
-                  paddingHorizontal: 20,
-                  borderRadius: 8,
-                  alignItems: 'center',
-                }}
-              >
-                <Text style={{ color: '#FFFFFF', fontWeight: '600', fontSize: 16 }}>
-                  Επιστροφή για Αποθήκευση
-                </Text>
-              </Pressable>
 
-              <Pressable
-                onPress={proceedWithBack}
-                style={{
-                  backgroundColor: '#F3F4F6',
-                  paddingVertical: 12,
-                  paddingHorizontal: 20,
-                  borderRadius: 8,
-                  alignItems: 'center',
-                }}
-              >
-                <Text style={{ color: '#374151', fontWeight: '600', fontSize: 16 }}>
-                  Αγνόηση Αλλαγών και Έξοδος
-                </Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
 
       
     </Page>
@@ -3025,8 +2594,8 @@ dropdownMenuAbove: {
     borderColor: '#E0E0E0',
     paddingHorizontal: 16,
     paddingVertical: 28,
-    maxHeight: '90%',
-    minHeight: 650,
+    maxHeight: '100%',
+    height: 505,
     ...(Platform.select({
       ios: { shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 0, height: 6 } },
       android: { elevation: 8 },

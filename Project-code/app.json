@@ -8,20 +8,18 @@
     "scheme": "carpetsapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-    "jsEngine": "hermes",
-    "platforms": [
-      "ios",
-      "android",
-      "web"
-    ],
+
+    "platforms": ["ios", "android", "web"],
+
     "ios": {
       "bundleIdentifier": "com.carpetsapp.carpetsapp",
       "supportsTablet": true,
       "infoPlist": {
-        "NSFaceIDUsageDescription": "Χρησιμοποιούμε το Face ID για γρήγορη και ασφαλή σύνδεση.",
-        "ITSAppUsesNonExemptEncryption": false
+        "NSFaceIDUsageDescription": "Χρησιμοποιούμε το Face ID για γρήγορη και ασφαλή σύνδεση."
       }
     },
+
+    
     "android": {
       "package": "com.carpetsapp.carpetsapp",
       "edgeToEdgeEnabled": true,
@@ -31,11 +29,13 @@
         "backgroundColor": "#FFFFFF"
       }
     },
+
     "web": {
       "bundler": "metro",
       "output": "static",
       "favicon": "./assets/images/logo.png"
     },
+
     "plugins": [
       "expo-router",
       [
@@ -45,26 +45,16 @@
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff",
-          "dark": {
-            "backgroundColor": "#000000"
-          }
+          "dark": { "backgroundColor": "#000000" }
         }
-      ],
-      "expo-sqlite",
-      "expo-web-browser"
+      ]
     ],
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+
+    "assetBundlePatterns": ["**/*"],
+
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    },
-    "extra": {
-      "router": {},
-      "eas": {
-        "projectId": "7c5456b3-40d2-4075-8ded-5af8813b31c2"
-      }
     }
   }
 }
