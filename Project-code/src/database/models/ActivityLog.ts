@@ -1,5 +1,5 @@
 import { Model } from '@nozbe/watermelondb'
-import { date, field, relation } from '@nozbe/watermelondb/decorators'
+import { field, relation } from '@nozbe/watermelondb/decorators'
 
 export default class ActivityLog extends Model {
   static table = 'activity_logs'
@@ -8,5 +8,7 @@ export default class ActivityLog extends Model {
 
   @field('action') action!: string
   @field('details') details!: string   
-  @date('created_at') createdAt!: number
+  @field('category') category!: string
+  @field('status') status!: string
+  @field('timestamp') timestamp!: string
 }

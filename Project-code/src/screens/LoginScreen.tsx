@@ -1,4 +1,6 @@
 // src/screens/LoginScreen.tsx
+import Constants from 'expo-constants'
+import * as Device from 'expo-device'
 import { Link, router } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
 import {
@@ -13,14 +15,13 @@ import { loginApi } from '../api/auth'
 import Divider from '../components/Divider'
 import TextField from '../components/TextField'
 import { initializeDatabase } from '../database/initializeDatabase'
-import { logLogin, printActivityLogs } from '../services/activitylog'
+import { logLoginFailure, logLoginSuccess, printActivityLogs } from '../services/activitylog'
 import { colors } from '../theme/colors'
 
 let LocalAuthentication: typeof import('expo-local-authentication') | undefined
-if (Platform.OS !== 'web') {
-
-  LocalAuthentication = require('expo-local-authentication')
-}
+// if (Platform.OS !== 'web') {
+//   LocalAuthentication = require('expo-local-authentication')
+// }
 
 /** TypingText - loop */
 function TypingText({
@@ -98,6 +99,7 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
+  const [errorMessage, setErrorMessage] = useState('')
 
   // Init DB μία φορά
   useEffect(() => {
@@ -107,6 +109,7 @@ export default function LoginScreen() {
   async function onLogin(email: string, password: string) {
     try {
       setLoading(true)
+      setErrorMessage('')
 
       const res = await loginApi(email, password)
 
@@ -121,10 +124,15 @@ export default function LoginScreen() {
         }
 
         // καταγραφω login στο activity_logs
-        await logLogin(String(res.user.id), {
-          email: res.user.email,
-          platform: Platform.OS,
-        })
+        await logLoginSuccess(
+          String(res.user.id),
+          res.user.email,
+          res.user.name,
+          Device.modelName || 'Unknown Device',
+          Platform.OS,
+          'unknown',
+          Constants.expoConfig?.version ?? '1.0.0'
+        )
 
         // fetch - server
         await fetch('http://localhost:4000/api/log', {
@@ -152,11 +160,30 @@ export default function LoginScreen() {
           params: { name: res.user.name, email: res.user.email },
         })
       } else {
-        Alert.alert('Σύνδεση', 'Λάθος στοιχεία.')
+        // Log failed login attempt
+        await logLoginFailure(
+          email,
+          'Invalid credentials',
+          Device.modelName || 'Unknown Device',
+          Platform.OS,
+          'unknown'
+        )
+        
+        setErrorMessage('Λάθος email ή κωδικός πρόσβασης')
       }
     } catch (err) {
       console.error('Σφάλμα κατά το login:', err)
-      Alert.alert('Σφάλμα', 'Αποτυχία σύνδεσης με τον server.')
+      
+      // Log failed login attempt
+      await logLoginFailure(
+        email,
+        'Network error',
+        Device.modelName || 'Unknown Device',
+        Platform.OS,
+        'unknown'
+      )
+      
+      setErrorMessage('Αποτυχία σύνδεσης με τον server. Ελέγξτε τη σύνδεσή σας.')
     } finally {
       setLoading(false)
     }
@@ -209,7 +236,7 @@ export default function LoginScreen() {
 
   const handlePress = () => {
     if (!email || !password) {
-      Alert.alert('Σύνδεση', 'Συμπλήρωσε email και κωδικό.')
+      setErrorMessage('Συμπλήρωσε email και κωδικό.')
       return
     }
     void onLogin(email, password)
@@ -256,6 +283,13 @@ export default function LoginScreen() {
             placeholderText="🔒  Εισάγετε τον κωδικό σας"
           />
         </View>
+
+        {/* Error Message */}
+        {errorMessage ? (
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorText}>{errorMessage}</Text>
+          </View>
+        ) : null}
 
         {/* Main Login Button */}
         <TouchableOpacity
@@ -396,4 +430,18 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   faceIdIcon: { width: 24, height: 24, resizeMode: 'contain' },
+  errorContainer: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#FEF2F2',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  errorText: {
+    color: '#DC2626',
+    fontSize: 14,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
 })

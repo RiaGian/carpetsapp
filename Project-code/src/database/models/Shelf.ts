@@ -1,14 +1,16 @@
 import { Model } from '@nozbe/watermelondb'
-import { children, date, field } from '@nozbe/watermelondb/decorators'
+import { children, field } from '@nozbe/watermelondb/decorators'
 
 export default class Shelf extends Model {
   static table = 'shelves'
 
   @field('code') code!: string
-  @field('description') description?: string
+  @field('barcode') barcode!: string
+  @field('floor') floor!: number
+  @field('capacity') capacity!: number
   @field('notes') notes?: string
-  @date('created_at') created_at!: number
-  @date('last_modified_at') last_modified_at!: number
+  @field('item_count') item_count!: number
+  @field('created_at') created_at!: number
 
   @children('warehouse_items') warehouse_items!: any
 }

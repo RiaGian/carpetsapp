@@ -84,11 +84,13 @@ export const schema = appSchema({
     tableSchema({
       name: 'shelves',
       columns: [
-        { name: 'code', type: 'string', isIndexed: true }, 
-        { name: 'description', type: 'string', isOptional: true },
+        { name: 'code', type: 'string', isIndexed: true },
+        { name: 'barcode', type: 'string', isIndexed: true },
+        { name: 'floor', type: 'number' },
+        { name: 'capacity', type: 'number' },
         { name: 'notes', type: 'string', isOptional: true },
+        { name: 'item_count', type: 'number' },
         { name: 'created_at', type: 'number' },
-        { name: 'last_modified_at', type: 'number' },
       ],
     }),
 
@@ -111,7 +113,9 @@ export const schema = appSchema({
         { name: 'user_id', type: 'string', isIndexed: true },
         { name: 'action', type: 'string' },
         { name: 'details', type: 'string', isOptional: true }, // JSON --> string
-        { name: 'created_at', type: 'number' },
+        { name: 'category', type: 'string', isIndexed: true },
+        { name: 'status', type: 'string', isIndexed: true },
+        { name: 'timestamp', type: 'string', isIndexed: true },
       ],
     }),
   ],

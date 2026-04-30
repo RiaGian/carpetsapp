@@ -9,8 +9,10 @@ import Page from '../components/Page';
 import { colors } from '../theme/colors';
 
 // WatermelonDB
+import * as Device from 'expo-device';
 import { database } from '../database/initializeDatabase';
 import User from '../database/models/Users';
+import { logLogout } from '../services/activitylog';
 
 // Προεπισκοπήσεις (shared state)
 import { usePreview } from '../state/PreviewProvider';
@@ -29,8 +31,23 @@ export default function DashboardScreen() {
     [params.name, params.email]
   );
 
+  // Debug: Log what we received from login
+  console.log('📥 Dashboard received params:', params);
+  console.log('📥 Dashboard fromParams:', fromParams);
+
+  // Debug: Log what we received from login
+  console.log('📥 Dashboard received params:', params);
+  console.log('📥 Dashboard fromParams:', fromParams);
+
+  // Debug: Log what we received from login
+  console.log('📥 Dashboard received params:', params);
+  console.log('📥 Dashboard fromParams:', fromParams);
+
+  // Debug: Log what we received from login
+  console.log('📥 Dashboard received params:', params);
+  console.log('📥 Dashboard fromParams:', fromParams);
+
   const [fallbackName, setFallbackName] = useState<string | null>(null);
-  const [fallbackEmail, setFallbackEmail] = useState<string | null>(null);
 
   useEffect(() => {
     if (fromParams.name || fromParams.email) return;
@@ -40,14 +57,11 @@ export default function DashboardScreen() {
         const list = await usersCol.query().fetch();
         if (list.length > 0) {
           setFallbackName((list[0] as any).name ?? 'Χρήστης');
-          setFallbackEmail((list[0] as any).email ?? '');
         } else {
           setFallbackName('Χρήστης');
-          setFallbackEmail('');
         }
       } catch {
         setFallbackName('Χρήστης');
-        setFallbackEmail('');
       }
     })();
   }, [fromParams.name, fromParams.email]);
@@ -57,19 +71,39 @@ export default function DashboardScreen() {
     [fromParams.name, fallbackName]
   );
 
-  const goCustomers = () => router.push(`/customers?name=${encodeURIComponent(displayName || '')}`);
-  const goWarehouse = () => router.push(`/warehouse?name=${encodeURIComponent(displayName || '')}`);
-  const goActivityLog = () => router.push(`/activitylog?name=${encodeURIComponent(displayName || '')}`);
-  const goHistory = () => router.push(`/history?name=${encodeURIComponent(displayName || '')}`);
-  const logout = () => router.replace('/');
+  // Actions
+  const logout = async () => {
+    try {
+      // Log logout activity - we'll use a system user ID since we don't have the actual user ID here
+      await logLogout(
+        '1', // System user ID for logout logging
+        Device.modelName || 'Unknown Device',
+        Platform.OS
+      );
+    } catch (error) {
+      console.error('Error logging logout:', error);
+    }
+    router.replace('/');
+  };
+  
+  const goCustomers   = () => router.push('/customers');
+  const goWarehouse   = () => {
+    console.log('🚀 Navigating to warehouse with params:', { name: displayName, email: fromParams.email });
+    router.push({
+      pathname: '/warehouse',
+      params: { name: displayName, email: fromParams.email }
+    });
+  };
+  const goActivityLog = () => router.push('/activitylog');
+  const goHistory     = () => router.push('/history');
 
-  const CARDS: Array<{
+  const CARDS: {
     key: string;
     title: string;
     bg: string;
     icon: keyof typeof Ionicons.glyphMap;
     onPress: () => void;
-  }> = [
+  }[] = [
     { key: 'customers', title: 'Πελάτες', bg: '#E9F2FF', icon: 'people-outline', onPress: goCustomers },
     { key: 'warehouse', title: 'Αποθήκη', bg: '#FFE9F2', icon: 'cube-outline', onPress: goWarehouse },
     { key: 'activity', title: 'Log Δραστηριοτήτων', bg: '#E9F9EF', icon: 'pulse-outline', onPress: goActivityLog },
