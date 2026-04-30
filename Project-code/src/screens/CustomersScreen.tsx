@@ -1,3 +1,4 @@
+
 //npm install @react-native-async-storage/async-storage
 
 import { Ionicons } from '@expo/vector-icons';
@@ -21,9 +22,6 @@ import AppHeader from '../components/AppHeader';
 import Page from '../components/Page';
 import { colors } from '../theme/colors';
 
-// ⬇️ ΝΕΟ: hook για global preview (χωρίς fetch/DB)
-import { usePreview } from '../state/PreviewProvider';
-
 // Types
 type Customer = {
   id: string;
@@ -42,6 +40,7 @@ type Customer = {
   pendingSync: boolean; 
   serverId?: string;     
 };
+
 
 const normalize = (s: string) =>
   s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
@@ -90,9 +89,6 @@ function Highlight({ text, query }: { text: string; query: string }) {
 
 //  Screen 
 export default function CustomersScreen() {
-  // ⬇️ ΝΕΟ: setter για να γράφουμε την προεπισκόπηση που θα δει το Dashboard
-  const { setCustomersPreview } = usePreview();
-
   // List of costumers (persistent)
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -120,15 +116,8 @@ export default function CustomersScreen() {
       const data = await loadCustomersFromStorage();
       setCustomers(data);
       setLoading(false);
-
-      // ⬇️ ΝΕΟ: Γράψε προεπισκόπηση για το Dashboard (χωρίς fetch)
-      const count = data.length;
-      const names = data
-        .slice(0, 2)
-        .map((c) => (`${c.firstName ?? ''} ${c.lastName ?? ''}`).trim() || '—');
-      setCustomersPreview({ count, names });
     })();
-  }, [setCustomersPreview]);
+  }, []);
 
   // Debounce search
   useEffect(() => {
@@ -213,14 +202,6 @@ export default function CustomersScreen() {
     const next = [newCustomer, ...customers];
     setCustomers(next);
     await saveCustomersToStorage(next);
-
-    // ⬇️ ΝΕΟ: Ενημέρωσε την προεπισκόπηση για το Dashboard
-    setCustomersPreview({
-      count: next.length,
-      names: next
-        .slice(0, 2)
-        .map((c) => (`${c.firstName ?? ''} ${c.lastName ?? ''}`).trim() || '—'),
-    });
 
     setOpenForm(false);
     Alert.alert('OK', 'Ο πελάτης προστέθηκε στη λίστα.');
@@ -701,6 +682,7 @@ const styles = StyleSheet.create({
     color: colors.muted,
     textAlign: 'center',
   },
+
 
   backgroundArea: {
     flex: 1,

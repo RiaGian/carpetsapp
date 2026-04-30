@@ -10,14 +10,14 @@ import { database } from '../database/initializeDatabase';
 import User from '../database/models/Users';
 
 type Props = {
-  showBack?: boolean;           
-  onLogout?: () => void;       
+  showBack?: boolean;           // προαιρετικό "← Πίσω" αριστερά του logo
+  onLogout?: () => void;        // προαιρετικό override του logout
 };
 
 export default function AppHeader({ showBack = false, onLogout }: Props) {
   const params = useLocalSearchParams<Record<string, string>>();
 
-  // read data
+  // διάβασε όνομα από διάφορα κλειδιά στα params
   const paramName =
     (params?.name as string) ||
     (params?.displayName as string) ||
@@ -43,7 +43,7 @@ export default function AppHeader({ showBack = false, onLogout }: Props) {
     return () => { cancelled = true; };
   }, [paramName]);
 
-  // check
+  // Επανέλεγξε κάθε φορά που η οθόνη επανέρχεται σε focus
   useFocusEffect(
     React.useCallback(() => {
       if (paramName) return;
@@ -136,11 +136,11 @@ const styles = StyleSheet.create({
 
   rightRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
 
-  connectedText: { fontSize: 15, color: '#666', fontWeight: '400' },
-  userName: { color: colors.primary, fontWeight: '400', fontSize: 15 },
+  connectedText: { fontSize: 14, color: '#666', fontWeight: '600' },
+  userName: { color: colors.primary, fontWeight: '800' },
 
   textBtn: { paddingHorizontal: 6, paddingVertical: 4 },
-  textBtnLabel: { fontSize: 15, fontWeight: '400' },
+  textBtnLabel: { fontSize: 14, fontWeight: '700' },
   pressed: { opacity: 0.7 },
 
   divider: { height: 1, backgroundColor: '#E0E0E0', marginTop: 4, marginBottom: 12 },
