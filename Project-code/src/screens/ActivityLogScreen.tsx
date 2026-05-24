@@ -4,12 +4,13 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useCallback, useEffect, useState } from 'react';
 import {
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
-  useWindowDimensions
+  useWindowDimensions,
 } from 'react-native';
 import { Calendar, LocaleConfig } from 'react-native-calendars';
 import AppHeader from '../components/AppHeader';
@@ -1231,6 +1232,14 @@ statusTagGradient: {
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: 12,
+     ...(Platform.OS !== 'web' && {
+    flexDirection: 'column',   // κάθετα στη στοίχιση
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',             // 🔹 να πιάνουν όλο το πλάτος
+    gap: 50,
+    marginVertical: 15,
+  }),
   },
 
   advancedFilterText: {
@@ -1290,6 +1299,10 @@ statusTagGradient: {
     flex: 1,
     marginRight: 12,
     position: 'relative',
+    ...(Platform.OS !== 'web' && {
+    marginRight: 0,
+    width: '100%',
+  }),
   },
   categoryDropdownButton: {
     flexDirection: 'row',
@@ -1303,12 +1316,19 @@ statusTagGradient: {
     gap: 8,
     width: '100%', 
     minHeight: 40,
+    ...(Platform.OS !== 'web' && {
+    minHeight: 44,      
+    paddingVertical: 8,   
+
+
+  }),
   },
   categoryDropdownText: {
     flex: 1,
     fontSize: 14,
     color: '#374151',
     fontWeight: '500',
+    textAlign: Platform.OS !== 'web' ? 'center' : 'left',
   },
   categoryModalOverlay: {
     flex: 1,
@@ -1398,6 +1418,11 @@ statusTagGradient: {
   actionDropdownContainer: {
     flex: 1,
     marginLeft: 12,
+    ...(Platform.OS !== 'web' && {
+    marginLeft: 0,
+    width: '100%',
+    marginTop: 6,
+  }),
   },
   actionDropdownButton: {
     flexDirection: 'row',
@@ -1411,12 +1436,17 @@ statusTagGradient: {
     gap: 8,
     width: '100%', 
     minHeight: 44,
+    ...(Platform.OS !== 'web' && {
+    minHeight: 44,
+    paddingVertical: 8,
+  }),
   },
   actionDropdownText: {
     flex: 1,
     fontSize: 14,
     color: '#374151',
     fontWeight: '500',
+    textAlign: Platform.OS !== 'web' ? 'center' : 'left',
   },
   actionModalOverlay: {
     flex: 1,
@@ -1490,7 +1520,11 @@ statusTagGradient: {
 },
 
 advancedFilterContainer: {
-  flex: 1,              // κάνει το κουμπί να έχει ίδιο πλάτος με τα άλλα δύο
+  flex: 1,   
+  ...(Platform.OS !== 'web' && {
+    width: '100%',
+    marginTop: 6,
+  }),           // κάνει το κουμπί να έχει ίδιο πλάτος με τα άλλα δύο
 },
 
 advancedFilterButton: {
@@ -1506,6 +1540,10 @@ advancedFilterButton: {
   gap: 8,
   width: '100%',
   minHeight: 58,
+   ...(Platform.OS !== 'web' && {
+    minHeight: 44,
+    paddingVertical: 8,
+  }),
 },
 
 

@@ -54,7 +54,7 @@ export default function DashboardScreen() {
   );
 
   const [warehousePreview, setWarehousePreview] = useState<WarehousePreview | null>(null);
-
+  const MOBILE_CARD_HEIGHT = 180;
   
   const [activityCounts, setActivityCounts] = useState({
     authentication: 0,
@@ -325,8 +325,22 @@ export default function DashboardScreen() {
 
       <View ref={ref} style={styles.content}>
         {/* Πάνω 4 κάρτες */}
-        <View style={[styles.grid, isWide ? styles.gridWide : undefined]}>
+        <View
+          style={[
+            styles.grid,
+            isWide ? styles.gridWide : undefined,
+            Platform.OS !== 'web' && { 
+              flexWrap: 'wrap',  
+              rowGap: 6, 
+              justifyContent: 'space-between',
+              columnGap: 6,
+              paddingHorizontal: 8,
+            }, //  iOS/Android
+          ]}
+        >
           {CARDS.map((c) => (
+
+            
             <DashboardCard
               key={c.key}
               kind={c.key}
@@ -345,15 +359,26 @@ export default function DashboardScreen() {
           ))}
         </View>
 
-        {/* Κάτω mini cards  */}
-        <View style={styles.statsRow}>
-          <StatCard title="Συνολικοί Πελάτες" value={String(customersPreview?.count ?? 0)} color="#B8C8FF" />
-          <StatCard title="Τεμάχια στην Αποθήκη" value={String(warehouseActiveCount)} color="#F5A5C0" />
-
-          <StatCard title="Καταγραφές Log" value={String(activityTotal)} color="#A3E3BB" />
-          <StatCard title="Σύνολο Δεδομένων" value={String(totalData)} color="#C3B2F7" />
-
-        </View>
+        {/* Κάτω mini cards */}
+        {Platform.OS === 'web' ? (
+          <View style={styles.statsRow}>
+            <StatCard title="Συνολικοί Πελάτες" value={String(customersPreview?.count ?? 0)} color="#B8C8FF" />
+            <StatCard title="Τεμάχια στην Αποθήκη" value={String(warehouseActiveCount)} color="#F5A5C0" />
+            <StatCard title="Καταγραφές Log" value={String(activityTotal)} color="#A3E3BB" />
+            <StatCard title="Σύνολο Δεδομένων" value={String(totalData)} color="#C3B2F7" />
+          </View>
+        ) : (
+          <>
+            <View style={styles.statsRow}>
+              <StatCard title={`Συνολικοί\nΠελάτες`} value={String(customersPreview?.count ?? 0)} color="#B8C8FF" />
+              <StatCard title={`Καταγραφές\nLog`} value={String(activityTotal)} color="#A3E3BB" />
+            </View>
+            <View style={styles.statsRow}>
+              <StatCard title={`Τεμάχια στην\nΑποθήκη`} value={String(warehouseActiveCount)} color="#F5A5C0" />
+              <StatCard title={`Σύνολο\nΔεδομένων`} value={String(totalData)} color="#C3B2F7" />
+            </View>
+          </>
+        )}
 
         {/* Calendar for Ready to Deliver Orders */}
         <View style={styles.calendarSection}>
@@ -609,7 +634,7 @@ function DashboardCard({ kind, title, bg, icon, onPress, isWide, customersPrevie
   const { previews } = usePreview();
   const effectivePreview = customersPreview ?? previews.customers;
   const [hovered, setHovered] = useState(false);
-  
+
   return (
     <Pressable
       onPress={onPress}
@@ -624,8 +649,21 @@ function DashboardCard({ kind, title, bg, icon, onPress, isWide, customersPrevie
           transform: [{ scale: hovered ? 1.04 : 1 }],
           ...getShadow('rgba(59,130,246,0.12)'),
           ...(Platform.OS === 'web'
-            ? { transition: 'transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out' } as any
+            ? ({
+                transition:
+                  'transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out',
+              } as any)
             : {}),
+
+          //  (iOS / Android) 
+          ...(Platform.OS !== 'web' && {
+            width: kind === 'activeorders' ? '100%' : '48%', // 2x2 + 1 full
+            marginHorizontal: 0,
+            marginBottom: 10,
+            minHeight: kind === 'history' ? 175 : 155,
+            paddingVertical: 10,
+            overflow: 'visible',
+          }),
         },
       ]}
     >
@@ -633,7 +671,10 @@ function DashboardCard({ kind, title, bg, icon, onPress, isWide, customersPrevie
         colors={[`${bg}00`, `${bg}`, `${bg}`]}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
-        style={styles.cardInner}
+        style={[
+          styles.cardInner,
+          Platform.OS !== 'web' && { paddingHorizontal: 10, paddingVertical: 8, borderRadius: 18, overflow: 'hidden', } 
+        ]}
       >
         {/* glossy rim για web */}
         {Platform.OS === 'web' ? <View style={styles.glossRim} /> : null}
@@ -642,58 +683,67 @@ function DashboardCard({ kind, title, bg, icon, onPress, isWide, customersPrevie
         <View style={styles.cardHeader}>
           <Ionicons
             name={icon as any}
-            size={22}
+            size={Platform.OS !== 'web' ? 18 : 22}   // 👈 μικρότερο icon σε mobile
             color="#1F2A44"
             style={{ marginRight: 8 }}
           />
-          <Text style={styles.cardTitle}>{title}</Text>
+          <Text style={[styles.cardTitle, Platform.OS !== 'web' && { fontSize: 16 }]}>
+            {title}
+          </Text>
         </View>
 
         {/* περιεχόμενο ανά είδος */}
         {kind === 'customers' && effectivePreview && (
-          <View style={styles.previewNoContainer}>
-            <View style={styles.previewHeaderRow}>
-              <Text style={styles.previewHeaderText}>Συνολικοί Πελάτες</Text>
+          <View style={[styles.previewNoContainer, Platform.OS !== 'web' && { marginTop: 8 }]}>
+            <View style={[styles.previewHeaderRow, Platform.OS !== 'web' && { paddingVertical: 6 }]}>
+              <Text style={[styles.previewHeaderText, Platform.OS !== 'web' && { fontSize: 13 }]}>
+                {Platform.OS === 'web' ? 'Συνολικοί Πελάτες' : 'Πελάτες'}
+              </Text>
               <View style={styles.previewBadge}>
-                <Text style={styles.previewBadgeText}>
+                <Text style={[styles.previewBadgeText, Platform.OS !== 'web' && { fontSize: 13 }]}>
                   {effectivePreview.count}
                 </Text>
               </View>
             </View>
 
-            <View style={styles.previewChipsWrap}>
-              {effectivePreview.names.map((n: string, idx: number) => (
-                <View key={`${n}-${idx}`} style={styles.previewChip}>
-                  <Ionicons
-                    name="person-outline"
-                    size={14}
-                    color={colors.primary}
-                    style={{ marginRight: 6 }}
-                  />
-                  <Text
-                    style={styles.previewChipText}
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
+            <View style={[styles.previewChipsWrap, Platform.OS !== 'web' && {  flexShrink: 1, minHeight: 0, width: '100%' }]}>
+              {(Platform.OS !== 'web' ? effectivePreview.names.slice(0, 2) : effectivePreview.names).map(
+                (n: string, idx: number) => (
+                  <View
+                    key={`${n}-${idx}`}
+                    style={[
+                      styles.previewChip,
+                      Platform.OS !== 'web' && { paddingVertical: 6, paddingHorizontal: 10, minWidth: 0, } 
+                    ]}
                   >
-                    {n || '—'}
-                  </Text>
-                </View>
-              ))}
+                    <Ionicons
+                      name="person-outline"
+                      size={12} 
+                      color={colors.primary}
+                      style={{ marginRight: 6 }}
+                    />
+                    <Text
+                      style={[styles.previewChipText, Platform.OS !== 'web' && { fontSize: 13, flex: 1,minWidth: 0, }]}
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                    >
+                      {n || '—'}
+                    </Text>
+                  </View>
+                )
+              )}
             </View>
           </View>
         )}
 
         {kind === 'warehouse' && (
-          <View style={styles.hminiClip}>
-            <WarehouseMiniCard
-              onPressOpenWarehouse={onPress}
-              preview={warehousePreview}
-            />
+          <View style={[styles.hminiClip, Platform.OS !== 'web' && { maxHeight: 120 }]}>{/* 👈 compact */}
+            <WarehouseMiniCard onPressOpenWarehouse={onPress} preview={warehousePreview} />
           </View>
         )}
 
         {kind === 'history' && (
-          <View style={styles.hminiClip}>
+          <View style={[styles.hminiClip, Platform.OS !== 'web' && { maxHeight: 137 }]}>
             <HistoryMiniCard
               onPressGoHistory={onPress}
               itemsCount={(historyItemsPreview || []).length}
@@ -703,23 +753,18 @@ function DashboardCard({ kind, title, bg, icon, onPress, isWide, customersPrevie
         )}
 
         {kind === 'activity' && (
-          <View style={styles.hminiClip}>
-            <ActivityMiniCard
-              onPressOpenLog={onPress}
-              counts={activityCounts}
-            />
+          <View style={[styles.hminiClip, Platform.OS !== 'web' && { maxHeight: 120 }]}>
+            <ActivityMiniCard onPressOpenLog={onPress} counts={activityCounts} />
           </View>
         )}
 
         {kind === 'activeorders' && (
-          <View style={styles.hminiClip}>
-            <ActiveOrdersMiniCard
-              onPressOpenOrders={onPress}
-              ordersPreview={activeOrdersPreview || []}
-            />
+          <View style={[styles.hminiClip, Platform.OS !== 'web' && { maxHeight: 120 }]}>
+            <ActiveOrdersMiniCard onPressOpenOrders={onPress} ordersPreview={activeOrdersPreview || []} />
           </View>
         )}
       </LinearGradient>
+
     </Pressable>
 
   );
@@ -736,43 +781,49 @@ function HistoryMiniCard({
   itemsCount: number;
   ordersCount: number;
 }) {
+  const isMobile = Platform.OS !== 'web'; // true σε iOS/Android, false σε web
+
   return (
     <View style={styles.hminiWrap}>
-     
-
       {/* Μικρή search bar (ψευδο-input) */}
       <Pressable style={styles.hminiSearch} onPress={onPressGoHistory}>
         <Ionicons name="search-outline" size={16} color="#6B7280" style={{ marginRight: 6 }} />
         <Text style={styles.hminiSearchText} numberOfLines={1}>
-          Αναζήτηση σε όλα τα δεδομένα...
+           {Platform.OS === 'web' ? 'Αναζήτηση σε όλα τα δεδομένα...' : 'Αναζήτηση...'}
         </Text>
       </Pressable>
 
-      {/* 4 mini “dropdowns” (ψευδο κουμπιά) */}
-      <View style={styles.hminiGrid2}>
-        <Pressable style={styles.hminiDrop}>
-          <Text style={styles.hminiDropText}>Όλα ▾</Text>
-        </Pressable>
-        <Pressable style={styles.hminiDrop}>
-          <Text style={styles.hminiDropText}>Όλα τα έτη ▾</Text>
-        </Pressable>
-      </View>
-      <View style={styles.hminiGrid2}>
-        <Pressable style={styles.hminiDrop}>
-          <Text style={styles.hminiDropText}>Νεότερα πρώτα ▾</Text>
-        </Pressable>
-        <Pressable style={styles.hminiDrop}>
-          <Text style={styles.hminiDropText}>Κατηγορία ▾</Text>
-        </Pressable>
-      </View>
+      {/* 4 mini “dropdowns” — ΜΟΝΟ στο web */}
+      {!isMobile && (
+        <>
+          <View style={styles.hminiGrid2}>
+            <Pressable style={styles.hminiDrop}>
+              <Text style={styles.hminiDropText}>Όλα ▾</Text>
+            </Pressable>
+            <Pressable style={styles.hminiDrop}>
+              <Text style={styles.hminiDropText}>Όλα τα έτη ▾</Text>
+            </Pressable>
+          </View>
+          <View style={styles.hminiGrid2}>
+            <Pressable style={styles.hminiDrop}>
+              <Text style={styles.hminiDropText}>Νεότερα πρώτα ▾</Text>
+            </Pressable>
+            <Pressable style={styles.hminiDrop}>
+              <Text style={styles.hminiDropText}>Κατηγορία ▾</Text>
+            </Pressable>
+          </View>
+        
+      
 
-      {/* CTA */}
+
       <Pressable style={styles.hminiCTA} onPress={onPressGoHistory}>
         <Text style={styles.hminiCTAText}>Κλικ για πλήρες ιστορικό</Text>
       </Pressable>
+      </>
+      )}
 
       {/* Ανάλυση Ιστορικού */}
-      <View style={styles.hminiAnalysis}>
+      <View style={[styles.hminiAnalysis, isMobile && { marginTop: 8 }]}>
         <Text style={styles.hminiAnalysisTitle}>Ανάλυση Ιστορικού</Text>
 
         <View style={styles.hminiStatRow}>
@@ -807,8 +858,10 @@ function ActivityMiniCard({
   onPressOpenLog?: () => void;
   counts: { authentication: number; orders: number; customers: number };
 }) {
+  const isMobile = Platform.OS !== 'web'; // true σε iOS/Android, false σε web
+
   const rows = [
-    { key: 'authentication', label: 'Πιστοποίηση', icon: 'lock-closed', color: '#8B5CF6', value: counts.authentication },
+    { key: 'authentication', label: Platform.OS === 'web' ? 'Πιστοποίηση' : 'Πιστοπ.', icon: 'lock-closed', color: '#8B5CF6', value: counts.authentication },
     { key: 'orders',         label: 'Παραγγελίες',   icon: 'cart-outline',  color: '#F59E0B', value: counts.orders },
     { key: 'customers',      label: 'Πελάτες',       icon: 'people-outline',color: '#3B82F6', value: counts.customers },
   ];
@@ -819,19 +872,21 @@ function ActivityMiniCard({
       <Pressable style={styles.hminiSearch} onPress={onPressOpenLog}>
         <Ionicons name="search-outline" size={16} color="#6B7280" style={{ marginRight: 6 }} />
         <Text style={styles.hminiSearchText} numberOfLines={1}>
-          Αναζήτηση δραστηριοτήτων...
+          {Platform.OS === 'web' ? 'Αναζήτηση δραστηριοτήτων...' : 'Αναζήτηση δραστ...'}
         </Text>
       </Pressable>
 
-      {/* 3 φίλτρα */}
-      <View style={styles.alogGrid3}>
-        <Pressable style={styles.hminiDrop}><Text style={styles.hminiDropText}>Σύνδεση ▾</Text></Pressable>
-        <Pressable style={styles.hminiDrop}><Text style={styles.hminiDropText}>Ράφια ▾</Text></Pressable>
-        <Pressable style={styles.hminiDrop}><Text style={styles.hminiDropText}>Σήμερα ▾</Text></Pressable>
-      </View>
+      {/* 3 φίλτρα — ΜΟΝΟ στο web */}
+      {!isMobile && (
+        <View style={styles.alogGrid3}>
+          <Pressable style={styles.hminiDrop}><Text style={styles.hminiDropText}>Σύνδεση ▾</Text></Pressable>
+          <Pressable style={styles.hminiDrop}><Text style={styles.hminiDropText}>Ράφια ▾</Text></Pressable>
+          <Pressable style={styles.hminiDrop}><Text style={styles.hminiDropText}>Σήμερα ▾</Text></Pressable>
+        </View>
+      )}
 
-      {/* Ανάλυση Log */}
-      <View style={styles.hminiAnalysis}>
+      {/* Ανάλυση Log (συνεχίζει να φαίνεται παντού) */}
+      <View style={[styles.hminiAnalysis, isMobile && { marginTop: 6 }]}>
         <Text style={styles.hminiAnalysisTitle}>Ανάλυση Log</Text>
         {rows.map((r) => (
           <View key={r.key} style={styles.hminiStatRow}>
@@ -853,6 +908,7 @@ function ActivityMiniCard({
   );
 }
 
+
 function ActiveOrdersMiniCard({
   onPressOpenOrders,
   ordersPreview,
@@ -860,6 +916,8 @@ function ActiveOrdersMiniCard({
   onPressOpenOrders?: () => void;
   ordersPreview: any[];
 }) {
+  const isMobile = Platform.OS !== 'web'; // true σε iOS/Android, false σε web
+
   const statusCounts = React.useMemo(() => {
     const counts: Record<string, number> = {};
     ordersPreview.forEach((o: any) => {
@@ -879,16 +937,18 @@ function ActiveOrdersMiniCard({
         </View>
       </View>
 
-      {/* Search bar */}
-      <Pressable style={styles.hminiSearch} onPress={onPressOpenOrders}>
-        <Ionicons name="search-outline" size={16} color="#6B7280" style={{ marginRight: 6 }} />
-        <Text style={styles.hminiSearchText} numberOfLines={1}>
-          Αναζήτηση παραγγελιών...
-        </Text>
-      </Pressable>
+      {/* Search bar — ΜΟΝΟ στο web */}
+      {!isMobile && (
+        <Pressable style={styles.hminiSearch} onPress={onPressOpenOrders}>
+          <Ionicons name="search-outline" size={16} color="#6B7280" style={{ marginRight: 6 }} />
+          <Text style={styles.hminiSearchText} numberOfLines={1}>
+            Αναζήτηση παραγγελιών...
+          </Text>
+        </Pressable>
+      )}
 
       {/* Status breakdown */}
-      <View style={styles.hminiAnalysis}>
+      <View style={[styles.hminiAnalysis, isMobile && { marginTop: 6 }]}>
         <Text style={styles.hminiAnalysisTitle}>Κατάσταση</Text>
         {Object.entries(statusCounts).map(([status, count]) => (
           <View key={status} style={styles.hminiStatRow}>
@@ -912,6 +972,7 @@ function ActiveOrdersMiniCard({
     </View>
   );
 }
+
 
 function WarehouseMiniCard({
   onPressOpenWarehouse,
@@ -937,7 +998,7 @@ function WarehouseMiniCard({
       <Pressable style={styles.hminiSearch} onPress={onPressOpenWarehouse}>
         <Ionicons name="search-outline" size={16} color="#6B7280" style={{ marginRight: 6 }} />
         <Text style={styles.hminiSearchText} numberOfLines={1}>
-          Αναζήτηση ραφιού, κωδικού ή τεμαχίου...
+         {Platform.OS === 'web' ? 'Αναζήτηση ραφιού, κωδικού ή τεμαχίου...' : 'Αναζήτηση ραφιού'}
         </Text>
       </Pressable>
 
@@ -1003,10 +1064,22 @@ function StatCard({
 
 const getShadow = (c = 'rgba(0,0,0,0.1)') =>
   Platform.select({
-    ios:   { shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 12, shadowOffset: { width: 0, height: 8 } },
-    android: { elevation: 6 },
+    ios:     {},
+    android: {}, 
     web:   { boxShadow: `0 10px 24px ${c}, 0 2px 8px rgba(0,0,0,0.06)` } as any,
   });
+
+
+const NO_SHADOW_MOBILE = Platform.select({
+  ios:     { shadowColor: 'transparent', shadowOpacity: 0, shadowRadius: 0, shadowOffset: { width: 0, height: 0 } },
+  android: { elevation: 0 },
+  web:     {},
+}) as object;
+
+const SOFT_BORDER_MOBILE = Platform.OS === 'web' ? {} : {
+  borderWidth: StyleSheet.hairlineWidth,
+  borderColor: 'rgba(31,42,68,0.08)',
+};
 
 const styles = StyleSheet.create({
   content: { flex: 1, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'flex-start' },
@@ -1014,7 +1087,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    flexWrap: 'nowrap',
+    flexWrap: 'wrap',
     width: '100%',
     marginTop: 10,
   },
@@ -1033,8 +1106,8 @@ const styles = StyleSheet.create({
 
   // εφέ σκιάς
   ...(Platform.select({
-    ios: { shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 12, shadowOffset: { width: 0, height: 8 } },
-    android: { elevation: 6 },
+    ios: { shadowColor: 'transparent', shadowOpacity: 0, shadowRadius: 0, shadowOffset: { width: 0, height: 0 } },
+    android: { elevation: 0 },
     web: { boxShadow: '0 10px 24px rgba(0,0,0,0.06), 0 2px 8px rgba(0,0,0,0.04)' } as any,
   }) as object),
 },
@@ -1074,6 +1147,8 @@ const styles = StyleSheet.create({
     marginTop: 8,
     width: '100%',
     maxHeight: 150,
+    flexShrink: 1,
+    minHeight: 0,
     overflow: 'hidden',
   },
   previewChip: {
@@ -1085,11 +1160,16 @@ const styles = StyleSheet.create({
     width: '100%',
     ...(Platform.select({
       ios: { shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 3 } },
-      android: { elevation: 2 },
+      android: { elevation: 2, minWidth: 0, },
       web: { boxShadow: '0 3px 8px rgba(0,0,0,0.08)' } as any,
     }) as object),
+
+    ...NO_SHADOW_MOBILE,
+    ...(Platform.OS !== 'web' ? SOFT_BORDER_MOBILE : {}),
+
   },
-  previewChipText: { fontSize: 14, color: '#1F2A44' },
+
+  previewChipText: { fontSize: 14, color: '#1F2A44', flexShrink: 1,  minWidth: 0, },
 
   /** Κάτω mini cards */
   statsRow: {
@@ -1097,9 +1177,16 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'stretch',
     width: '100%',
-    marginTop: 30,
-    paddingHorizontal: 20,
-    gap: 12,
+    marginTop: Platform.OS !== 'web' ? 16 : 30,
+    paddingHorizontal: Platform.OS !== 'web' ? 16 : 20,
+    gap: Platform.OS !== 'web' ? 10 : 12,
+    flexWrap: Platform.OS !== 'web' ? 'wrap' : 'nowrap',
+
+    ...(Platform.OS !== 'web'
+      ? {
+          rowGap: 10,
+        }
+      : {}),
   },
 
   statCard: {
@@ -1118,6 +1205,8 @@ const styles = StyleSheet.create({
       android: { elevation: 4 },
       web: {}, 
     }) as object),
+    ...NO_SHADOW_MOBILE,
+    ...(Platform.OS !== 'web' ? SOFT_BORDER_MOBILE : {}),
   },
 
   statValue: {
@@ -1144,8 +1233,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     zIndex: 9999,
     ...(Platform.select({
-      ios: { shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 8, shadowOffset: { width: 0, height: 6 } },
-      android: { elevation: 6 },
+      ios: { shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
+      android: { elevation: 2 },
       web: { boxShadow: '0 8px 18px rgba(0,0,0,0.18)', cursor: 'pointer' } as any,
     }) as object),
   },
@@ -1244,7 +1333,14 @@ hminiSearch: {
     ios: { shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 3 } },
     android: { elevation: 2 },
   }) as object),
+  ...NO_SHADOW_MOBILE,
+  ...(Platform.OS !== 'web' ? SOFT_BORDER_MOBILE : {}),
+  ...(Platform.OS !== 'web' ? { backgroundColor: 'rgba(255,255,255,0.65)' } : {}),
 },
+
+
+
+
 hminiSearchText: {
   color: '#6B7280',
   fontSize: 13,
@@ -1262,15 +1358,24 @@ hminiDrop: {
   borderRadius: 12,
   paddingVertical: 10,
   paddingHorizontal: 12,
-  alignItems: 'flex-start',
+  alignItems: 'center', 
   justifyContent: 'center',
   minWidth: 0,
   ...(Platform.select({
     web: { boxShadow: '0 3px 8px rgba(0,0,0,0.08)' } as any,
-    ios: { shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 3 } },
-    android: { elevation: 2 },
+    ios: { shadowColor: 'transparent', shadowOpacity: 0, shadowRadius: 0, shadowOffset: { width: 0, height: 0 } },
+    android: { elevation: 0 }, // 👈 χωρίς σκιά στο mobile
   }) as object),
+  ...(Platform.OS !== 'web' ? { 
+    backgroundColor: 'rgba(255,255,255,0.65)', 
+    flexBasis: '30%',
+    maxWidth: '32%',
+  } : {}),
 },
+
+
+
+
 hminiDropText: { fontSize: 13, color: '#1F2A44' },
 
 /* CTA */
@@ -1339,9 +1444,11 @@ hminiDivider: {
 hminiClip: {
   alignSelf: 'stretch',
   width: '100%',
-  marginTop: 20,     
-  maxHeight: 240,    
-  overflow: 'hidden' 
+  marginTop: 20,
+  ...(Platform.OS !== 'web'
+    ? { maxHeight: undefined, overflow: 'visible' } // mobile
+    : { maxHeight: 240, overflow: 'hidden' }        // web
+  ),
 },
 
 /* ---- Activity mini card ---- */
@@ -1354,6 +1461,8 @@ alogGrid3: {
   flexDirection: 'row',
   gap: 6, 
   marginBottom: 6,
+  flexWrap: 'wrap',        
+  rowGap: 6, 
 },
 
 
@@ -1411,18 +1520,20 @@ wminiGrid: {
 },
 
 wminiShelf: {
-  flexBasis: '48%',       // 👉 2 ανά σειρά
+  flexBasis: '48%',     
   backgroundColor: 'rgba(255,255,255,0.75)',
   borderRadius: 14,
   borderWidth: 1.5,
   borderColor: '#DDE7D9',
-  paddingVertical: 10,    // λίγο πιο compact
+  paddingVertical: 10,  
   paddingHorizontal: 10,
   ...(Platform.select({
     web: { boxShadow: '0 3px 8px rgba(0,0,0,0.06)' } as any,
     ios: { shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 3 } },
     android: { elevation: 2 },
   }) as object),
+    ...NO_SHADOW_MOBILE,
+  ...(Platform.OS !== 'web' ? SOFT_BORDER_MOBILE : {}),
 },
 
 wminiShelfEmpty: {
