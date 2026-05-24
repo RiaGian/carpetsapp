@@ -357,31 +357,14 @@ function OrderCard({
       </View>
 
       {/* expanded details */}
-      {expanded && (() => {
-        // Calculate final cost and reminder
-        // total is already formatted, so we need to parse it back
-        const totalNum = parseFloat(total.replace(/[^\d.,]/g, '').replace(',', '.')) || 0
-        const depositNum = deposit !== '—' ? (parseFloat(deposit.replace(/[^\d.,]/g, '').replace(',', '.')) || 0) : 0
-        const hasDeposit = deposit !== '—' && depositNum > 0
-        const finalCost = totalNum + depositNum
-        const reminder = totalNum // totalAmount is already items - deposit (remaining balance)
-
-        return (
-          <View style={styles.orderDetailsBox}>
-            <KV label="Ημερομηνία παραγγελίας" value={date} />
-            <KV label="Αρ. Δελτίου Παραλαβής" value={(receiptNumber || '').trim() || '—'} />
-            <KV label="Αριθμός τεμαχίων" value={typeof itemsCount === 'number' ? String(itemsCount) : '—'} />
-            <KV label="Συνολικό κόστος" value={fmtMoney(finalCost)} />
-            {hasDeposit && (
-              <>
-                <KV label="Προκαταβολή" value={deposit} />
-                <KV label="Υπόλοιπο" value={fmtMoney(reminder)} />
-              </>
-            )}
-            {!hasDeposit && (
-              <KV label="Προκαταβολή" value={deposit} />
-            )}
-            <KV label="Τρόπος πληρωμής" value={paymentMethod} />
+      {expanded && (
+        <View style={styles.orderDetailsBox}>
+          <KV label="Ημερομηνία παραγγελίας" value={date} />
+          <KV label="Αρ. Δελτίου Παραλαβής" value={(receiptNumber || '').trim() || '—'} />
+          <KV label="Αριθμός τεμαχίων" value={typeof itemsCount === 'number' ? String(itemsCount) : '—'} />
+          <KV label="Συνολικό κόστος" value={total} />
+          <KV label="Προκαταβολή" value={deposit} />
+          <KV label="Τρόπος πληρωμής" value={paymentMethod} />
           {status === 'Προς παράδοση' && deliveryDate && (() => {
             const deliveryDateTime = new Date(deliveryDate)
             const deliveryDateStr = deliveryDateTime.toLocaleDateString('el-GR', { 
@@ -413,35 +396,34 @@ function OrderCard({
             )
           })()}
 
-            {notes ? <View style={{ height: 6 }} /> : null}
-            {notes ? <Text style={styles.orderNotes}>{notes}</Text> : null}
+          {notes ? <View style={{ height: 6 }} /> : null}
+          {notes ? <Text style={styles.orderNotes}>{notes}</Text> : null}
 
-            {/* action bar */}
-            <View style={styles.orderActionsRow}>
-              <View style={{ flex: 1 }} />
+          {/* action bar */}
+          <View style={styles.orderActionsRow}>
+            <View style={{ flex: 1 }} />
 
-               {/* dropdown */}
-              <View style={{ marginRight: 8 }}>
-                <SimpleDropdown
-                  value={status}
-                  placeholder="Κατάσταση"
-                  options={ORDER_STATUS_OPTIONS}
-                  onChange={onChangeStatus}
-                  width={160}
-                />
-              </View>
-
-              <TouchableOpacity onPress={onEdit} style={[styles.actionBtn, styles.actionBtnPrimary]}>
-                <Text style={styles.actionBtnPrimaryText}>Επεξεργασία</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity onPress={onClose} style={[styles.actionBtn, styles.actionBtnDanger]}>
-                <Text style={styles.actionBtnDangerText}>Κλείσιμο</Text>
-              </TouchableOpacity>
+             {/* dropdown */}
+            <View style={{ marginRight: 8 }}>
+              <SimpleDropdown
+                value={status}
+                placeholder="Κατάσταση"
+                options={ORDER_STATUS_OPTIONS}
+                onChange={onChangeStatus}
+                width={160}
+              />
             </View>
+
+            <TouchableOpacity onPress={onEdit} style={[styles.actionBtn, styles.actionBtnPrimary]}>
+              <Text style={styles.actionBtnPrimaryText}>Επεξεργασία</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity onPress={onClose} style={[styles.actionBtn, styles.actionBtnDanger]}>
+              <Text style={styles.actionBtnDangerText}>Κλείσιμο</Text>
+            </TouchableOpacity>
           </View>
-        )
-      })()}
+        </View>
+      )}
     </TouchableOpacity>
   )
 }

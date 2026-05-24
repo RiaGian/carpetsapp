@@ -33,8 +33,6 @@ import {
   updateOrder,
 } from '../services/orders'
 import { removeItemFromShelf } from '../services/warehouseItems'
-import { database } from '../database/initializeDatabase'
-import { Q } from '@nozbe/watermelondb'
 
 /**  helpers/types */
 type CustomerRow = {
@@ -392,44 +390,16 @@ const isReturnsPending = useMemo(() => {
           
         }])
 
-        // Fetch shelf information for all items
-        const itemIds = items.map((it: any) => it.id)
-        const warehouseItems = itemIds.length > 0 ? await database.get('warehouse_items')
-          .query(
-            Q.where('item_id', Q.oneOf(itemIds)),
-            Q.where('is_active', true)
-          )
-          .fetch() : []
-        
-        const shelfIds = Array.from(new Set(warehouseItems.map((wi: any) => wi._raw?.shelf_id).filter(Boolean)))
-        const shelves = shelfIds.length > 0 ? await database.get('shelves')
-          .query(Q.where('id', Q.oneOf(shelfIds)))
-          .fetch() : []
-        
-        const shelvesById = new Map(shelves.map((s: any) => [s.id, s]))
-        const itemToShelf = new Map<string, string>()
-        warehouseItems.forEach((wi: any) => {
-          const itemId = wi._raw?.item_id
-          const shelfId = wi._raw?.shelf_id
-          if (itemId && shelfId) {
-            const shelf = shelvesById.get(shelfId)
-            if (shelf) {
-              itemToShelf.set(itemId, (shelf as any).code || '')
-            }
-          }
-        })
-
         const mapped: PieceItem[] = items.map((it: any) => {
           const cat = it.category ?? null
           const perM2 = cat === 'Χαλί' || cat === 'Μοκέτα' || cat === 'Διαδρομάκι'
-          const shelfCode = itemToShelf.get(it.id) || ''
 
           return {
             id: it.id,
             category: cat,
             color: it.color ?? '',
             code: it.item_code ?? '',
-            shelf: shelfCode,
+            shelf: it.shelf ?? '',
             status: (it.status as ('άπλυτο' | 'πλυμένο')) ?? 'άπλυτο',
             workType: (it.storage_status as ('Επιστροφή' | 'Φύλαξη')) ?? 'Επιστροφή',
             cost: (typeof it.price === 'number' ? it.price.toFixed(2) : (it.price ?? '0.00')).toString(),
@@ -577,12 +547,6 @@ const isReturnsPending = useMemo(() => {
       : 0
     return Math.max(0, tot - dep).toFixed(2)
   }, [totalCost, depositAmount, depositEnabled])
-
-  // Calculate final total cost: sum of all order items (advance payment + remaining balance)
-  const finalTotalCost = useMemo(() => {
-    const tot = parseFloat(totalCost) || 0
-    return tot.toFixed(2)
-  }, [totalCost])
   
   const selectedCustomerDisplay = useMemo(() => {
     if (!selectedCustomer) return 'Επιλέξτε Πελάτη'
@@ -674,7 +638,7 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
       category: !ord.category,
       qty: !ord.qty || parseInt(ord.qty) < 1,
       color: !ord.color,
-      itemCode: !ord.itemCode || !/^[A-ZΑ-Ω]{1}\d{5}$/.test(ord.itemCode.toUpperCase()),
+      itemCode: !ord.itemCode || !/^[A-ZΑ-Ω]{3}\d{3}$/.test(ord.itemCode.toUpperCase()),
     }
 
     // ενημέρωσε inline errors
@@ -686,7 +650,7 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
     // 🔒 ΜΠΛΟΚΑΡΕ αν ο live uniqueness έλεγχος έχει βρει διπλότυπο
     const idxKey = index ?? 0
     if (codeErrors[idxKey]) {
-      // (προαιρετικά: "ξανακοκκίνισε" το πεδίο itemCode για έμφαση)
+      // (προαιρετικά: “ξανακοκκίνισε” το πεδίο itemCode για έμφαση)
       setOrderFieldErrors(prev => ({ 
         ...prev, 
         [idxKey]: { ...(prev[idxKey] || {}), itemCode: true } 
@@ -699,11 +663,11 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
     const count = isNaN(n) || n < 1 ? 1 : n
 
     const od = (ord.date && ord.date.length === 10) ? ord.date : ddmmyyyy()
-    const prefix = (ord.itemCode || '').slice(0, 1).toUpperCase()
-    const numPart = parseInt((ord.itemCode || '').slice(1), 10) || 1
+    const prefix = (ord.itemCode || '').slice(0, 3).toUpperCase()
+    const numPart = parseInt((ord.itemCode || '').slice(3), 10) || 1
 
     let codes: string[] = []
-    if (prefix && /^[A-ZΑ-Ω]{1}$/.test(prefix)) {
+    if (prefix && /^[A-ZΑ-Ω]{3}$/.test(prefix)) {
       codes = await generateSequentialCodes(prefix, numPart, count)
     }
 
@@ -1361,7 +1325,7 @@ const savePieceModal = () => {
                           if (clean.length > 0) clearOrderErr(idx, 'itemCode')
 
                           // αν είναι σωστό pattern, κάνε uniqueness check
-                          if (/^[A-ZΑ-Ω]{1}\d{5}$/.test(clean)) {
+                          if (/^[A-ZΑ-Ω]{3}\d{3}$/.test(clean)) {
                             const taken = await existsItemCode(clean)
                             setCodeErrors(prev => ({ ...prev, [idx]: taken }))
                           } else {
@@ -1524,9 +1488,6 @@ const savePieceModal = () => {
                         <Text style={[styles.pieceSubtitle, { color: isWashed ? '#059669' : (isUnwashed ? '#DC2626' : '#666'), fontWeight: '500' }]}>
                           Κατάσταση: {status}
                         </Text>
-                        {!!p.shelf && <Text style={[styles.pieceSubtitle, { color: '#3B82F6', fontWeight: '600' }]}>
-                          Ράφι: {p.shelf}
-                        </Text>}
                         </View>
 
                         <View style={styles.costControl}>
@@ -1554,7 +1515,7 @@ const savePieceModal = () => {
                         </Pressable>
                         </View>
 
-                        {(p.saved || p.newlyAdded) && (
+                        {p.saved && (
                           <Pressable style={styles.addPieceSmallBtn} onPress={() => openPieceModalFor(i)}>
                             <Text style={styles.addPieceSmallBtnText}>Επεξεργασία</Text>
                           </Pressable>
@@ -1895,7 +1856,7 @@ const savePieceModal = () => {
           </View>
           <Text style={styles.totalHeaderTitle}>Συνολικό Κόστος</Text>
           <View style={styles.totalAmountWrap}>
-            <Text style={styles.totalAmountText}>{finalTotalCost} €</Text>
+            <Text style={styles.totalAmountText}>{balance} €</Text>
           </View>
         </View>
 
