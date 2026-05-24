@@ -150,10 +150,6 @@ export default function EditOrderScreen() {
   const updateOrderUI = (index: number, patch: Partial<OrderItemUI>) => {
     setOrders(prev => prev.map((o, i) => (i === index ? { ...o, ...patch } : o)))
   }
-  const addOrderUI = () => setOrders(prev => [...prev, makeEmptyOrder()])
-  const removeOrderUI = (index: number) => {
-    setOrders(prev => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)))
-  }
   const onChangeOrderDateAt = (index: number, txt: string) => {
     const digits = txt.replace(/\D/g, '').slice(0, 8);
     let out = '';
@@ -286,10 +282,6 @@ const clearReturnsPending = (customerId: string, orderId: string) => {
   })
 }
 
-const isReturnsPending = useMemo(() => {
-  if (!selectedCustomer || !orderId) return false
-  return (pendingReturnsByCustomer[selectedCustomer] || []).includes(String(orderId))
-}, [pendingReturnsByCustomer, selectedCustomer, orderId])
 
 
   const orderStatusLabels: Record<string, string> = {
@@ -308,16 +300,6 @@ const isReturnsPending = useMemo(() => {
     'Παραδόθηκε': 'delivered',
   };
 
-  const [originalOrder, setOriginalOrder] = useState<null | {
-    customerId?: string | null
-    orderDate?: string | null
-    notes?: string | null
-    paymentMethod?: string | null
-    deposit?: number | null
-    totalAmount?: number | null
-    orderStatus?: string | null
-    hasDebt?: boolean | null
-  }>(null)
 
   const orderStatusDisplay = orderStatus
     ? orderStatusLabels[orderStatus]
@@ -338,17 +320,6 @@ const isReturnsPending = useMemo(() => {
         setDepositEnabled(!!order.deposit && order.deposit > 0)
         setNotes(order.notes || '')
         setHasDebt(typeof order.hasDebt === 'boolean' ? order.hasDebt : false)
-
-        setOriginalOrder({
-        customerId: order.customerId ?? null,
-        orderDate: order.orderDate ?? null,
-        notes: order.notes ?? null,
-        paymentMethod: order.paymentMethod ?? null,
-        deposit: typeof order.deposit === 'number' ? order.deposit : null,
-        totalAmount: typeof order.totalAmount === 'number' ? order.totalAmount : null,
-        orderStatus: order.orderStatus ?? null,
-        hasDebt: typeof order.hasDebt === 'boolean' ? order.hasDebt : null,
-      })
 
         if (order.orderStatus) {
           setOrderStatus(ORDER_STATUS_LABEL_TO_KEY[order.orderStatus] ?? 'new')
@@ -656,10 +627,6 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
     color?: boolean
     itemCode?: boolean
   }>>({})
-
-  const flagOrderErr = (i: number, key: 'category'|'qty'|'color'|'itemCode') => {
-    setOrderFieldErrors(prev => ({ ...prev, [i]: { ...(prev[i] || {}), [key]: true }}))
-  }
 
   const clearOrderErr = (i: number, key: 'category'|'qty'|'color'|'itemCode') => {
     setOrderFieldErrors(prev => {
@@ -1126,8 +1093,6 @@ const savePieceModal = () => {
 
         {/* ===== Στοιχεία Παραγγελίας ===== */}
         {orders.map((ord, idx) => {
-          const isLast = idx === orders.length - 1
-          const canRemove = orders.length > 1 && idx > 0
           return (
             <View key={`order-${idx}`} style={[styles.cardBox, styles.cardBoxLarge, { marginTop: 16 }]}>
               <View style={styles.orderIconFab}>
@@ -1501,8 +1466,6 @@ const savePieceModal = () => {
 
             <View style={styles.piecesList}>
                 {pieces.map((p, i) => {
-                    const isExisting = p.saved && !p.newlyAdded 
-                    
                     // Check status for color coding
                     const status = p.status || 'άπλυτο'
                     const isUnwashed = status === 'άπλυτο'

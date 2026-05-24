@@ -3733,22 +3733,7 @@ const isWeb = Platform.OS === 'web';
                   ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
                   contentContainerStyle={{ paddingBottom: 20 }}
                   renderItem={({ item }) => (
-                    <TouchableOpacity
-                      style={styles.itemRow}
-                      activeOpacity={0.8}
-                      onPress={() => {
-                        setSelectedItem(item)
-                        setItemEdit({
-                          item_code: item.item_code || '',
-                          category: item.category || '',
-                          color: item.color || '',
-                          price: item.price != null ? String(item.price) : '',
-                          status: item.status || '',
-                          storage_status: item.storage_status || '',
-                          order_date: item.order_date || '',
-                        })
-                      }}
-                    >
+                    <View style={styles.itemRow}>
                       <View style={styles.itemIconBox}>
                         <Ionicons name="cube-outline" size={20} color={colors.primary} />
                       </View>
@@ -3759,7 +3744,7 @@ const isWeb = Platform.OS === 'web';
                         <Text style={styles.itemDate}>{fmtDate(item.created_at)}</Text>
                       </View>
                       <Text style={styles.itemPrice}>{fmtMoney(item.price)}</Text>
-                    </TouchableOpacity>
+                    </View>
                   )}
                 />
               )}

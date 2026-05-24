@@ -21,6 +21,7 @@ import { useAuth } from '../state/AuthProvider'
 import { colors } from '../theme/colors'
 
 // <- services/history (load from DB)
+import { database } from '../database/initializeDatabase'
 import {
   listHistoryCustomers,
   listHistoryItems,
@@ -30,6 +31,7 @@ import {
   type HistoryItem,
   type HistoryOrder,
 } from '../services/history'
+import { getOrderById } from '../services/orders'
 
 function StatusChip({ status }: { status?: string }) {
   const s = (status || '').toLowerCase()
@@ -306,13 +308,74 @@ const [dateToInput, setDateToInput] = React.useState('')
   // states for dropdown (customer;s
   const [customerId, setCustomerId] = React.useState<string | null>(null)
   const [customerLabel, setCustomerLabel] = React.useState<string>('Όλοι')
-  const [customerOpts, setCustomerOpts] = React.useState<Array<{ id: string; label: string }>>([])
+  const [customerOpts, setCustomerOpts] = React.useState<{ id: string; label: string }[]>([])
 
   // data states
   const [loading, setLoading] = React.useState(false)
   const [rowsCustomers, setRowsCustomers] = React.useState<HistoryCustomer[]>([])
   const [rowsItems, setRowsItems] = React.useState<HistoryItem[]>([])
   const [rowsOrders, setRowsOrders] = React.useState<HistoryOrder[]>([])
+  
+  // expanded item details
+  const [expandedItemId, setExpandedItemId] = React.useState<string | null>(null)
+  const [itemDetails, setItemDetails] = React.useState<{
+    customerName: string | null
+    pricePerM2: string | null
+    status: string
+  } | null>(null)
+  const [loadingItemDetails, setLoadingItemDetails] = React.useState(false)
+
+  // Function to fetch item details (customer, price per m2, status)
+  const fetchItemDetails = React.useCallback(async (item: HistoryItem) => {
+    setLoadingItemDetails(true)
+    try {
+      let customerName: string | null = null
+      let pricePerM2: string | null = null
+      const status = item.status || '—'
+
+      // Get order item to access price_per_m2
+      const orderItems = database.get('order_items')
+      const orderItem: any = await orderItems.find(item.id)
+      
+      if (orderItem) {
+        pricePerM2 = orderItem.price_per_m2 ? String(orderItem.price_per_m2) : null
+        
+        // Get order to access customer
+        if (item.orderId) {
+          try {
+            const order = await getOrderById(item.orderId)
+            if (order.customerId) {
+              const customers = database.get('customers')
+              const customer: any = await customers.find(order.customerId)
+              if (customer) {
+                const fn = (customer.firstName ?? customer.firstname ?? customer._raw?.first_name ?? '').trim()
+                const ln = (customer.lastName ?? customer.lastname ?? customer._raw?.last_name ?? '').trim()
+                customerName = `${fn} ${ln}`.trim() || null
+                
+                // If price_per_m2 is not in item, try to get from customer
+                if (!pricePerM2 && customer.pricePerSqm) {
+                  pricePerM2 = String(customer.pricePerSqm)
+                }
+              }
+            }
+          } catch (e) {
+            console.error('Error fetching order/customer:', e)
+          }
+        }
+      }
+
+      setItemDetails({
+        customerName,
+        pricePerM2,
+        status,
+      })
+    } catch (e) {
+      console.error('Error fetching item details:', e)
+      setItemDetails(null)
+    } finally {
+      setLoadingItemDetails(false)
+    }
+  }, [])
 
   const [dateRange, setDateRange] = React.useState<{ start: string | null; end: string | null }>({
     start: null,
@@ -1354,20 +1417,72 @@ const toExclusiveEndLocal = (t: number) => {
                 data={rowsItems}
                 keyExtractor={(it) => it.id}
                 ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-                renderItem={({ item }) => (
-                  <View style={styles.cardRow}>
-                    <View style={styles.squareIcon}>
-                      <Ionicons name="cube-outline" size={18} color={colors.primary} />
+                renderItem={({ item }) => {
+                  const isExpanded = expandedItemId === item.id
+                  return (
+                    <View>
+                      <Pressable
+                        style={styles.cardRow}
+                        onPress={() => {
+                          if (isExpanded) {
+                            setExpandedItemId(null)
+                            setItemDetails(null)
+                          } else {
+                            setExpandedItemId(item.id)
+                            fetchItemDetails(item)
+                          }
+                        }}
+                      >
+                        <View style={styles.squareIcon}>
+                          <Ionicons name="cube-outline" size={18} color={colors.primary} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.rowTitle}>{item.item_code || `#${item.id.slice(0, 6)}`}</Text>
+                          <Text style={styles.rowSub} numberOfLines={1}>
+                            {item.category || '—'} {item.color ? `• ${item.color}` : ''}
+                          </Text>
+                        </View>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          <Text style={styles.rowRight}>{item.order_date || '—'}</Text>
+                          <Ionicons
+                            name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                            size={18}
+                            color="#6B7280"
+                          />
+                        </View>
+                      </Pressable>
+                      
+                      {isExpanded && (
+                        <View style={styles.itemDetailsBox}>
+                          {loadingItemDetails ? (
+                            <Text style={styles.detailText}>Φόρτωση...</Text>
+                          ) : itemDetails ? (
+                            <>
+                              <View style={styles.detailRow}>
+                                <Text style={styles.detailLabel}>Πελάτης:</Text>
+                                <Text style={styles.detailValue}>
+                                  {itemDetails.customerName || '—'}
+                                </Text>
+                              </View>
+                              <View style={styles.detailRow}>
+                                <Text style={styles.detailLabel}>Τιμή/τ.μ.:</Text>
+                                <Text style={styles.detailValue}>
+                                  {itemDetails.pricePerM2 ? `${itemDetails.pricePerM2} €` : '—'}
+                                </Text>
+                              </View>
+                              <View style={styles.detailRow}>
+                                <Text style={styles.detailLabel}>Κατάσταση:</Text>
+                                <StatusChip status={itemDetails.status} />
+                              </View>
+                            </>
+                          ) : (
+                            <Text style={styles.detailText}>Δεν βρέθηκαν στοιχεία</Text>
+                          )}
+                        </View>
+                      )}
                     </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.rowTitle}>{item.item_code || `#${item.id.slice(0, 6)}`}</Text>
-                      <Text style={styles.rowSub} numberOfLines={1}>
-                        {item.category || '—'} {item.color ? `• ${item.color}` : ''}
-                      </Text>
-                    </View>
-                    <Text style={styles.rowRight}>{item.order_date || '—'}</Text>
-                  </View>
-                )}
+                  )
+                }}
               />
             )
           ) : rowsOrders.length === 0 ? (
@@ -1577,6 +1692,38 @@ pillCodeText: { color: '#fff', fontWeight: '800' },
   emptyState: { padding: 18, alignItems: 'center', justifyContent: 'center' },
   emptyTitle: { fontSize: 15, color: '#111827', fontWeight: '700' },
 
+  itemDetailsBox: {
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 8,
+    marginLeft: 0,
+    marginRight: 0,
+  },
+  detailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  detailLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    marginRight: 8,
+    minWidth: 100,
+  },
+  detailValue: {
+    fontSize: 14,
+    color: '#111827',
+    flex: 1,
+  },
+  detailText: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontStyle: 'italic',
+  },
   cardRow: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -2,7 +2,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 
 import { Q } from '@nozbe/watermelondb';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -21,8 +21,9 @@ import { usePreview } from '../state/PreviewProvider';
 
 import { useFocusEffect } from '@react-navigation/native';
 import { Calendar } from 'react-native-calendars';
-import { observeCustomers } from '../services/customer';
-import { observeActiveOrders, observeReadyForDeliveryOrders } from '../services/orders';
+import { createCustomer, listCustomers, observeCustomers } from '../services/customer';
+import { createOrder, observeActiveOrders, observeReadyForDeliveryOrders } from '../services/orders';
+
 
 type CustomersPreview = { count: number; names: string[] };
 type ShelfPreview = { code: string; count: number };
@@ -52,9 +53,25 @@ export default function DashboardScreen() {
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string>(
     new Date().toISOString().split('T')[0] // Today's date by default
   );
+  
+  // Pickup creation modal state
+  const [pickupModalOpen, setPickupModalOpen] = useState(false);
+  const [pickupCustomerId, setPickupCustomerId] = useState<string | null>(null);
+  const [pickupCustomers, setPickupCustomers] = useState<{ id: string; label: string; firstName: string; lastName: string; phone: string; afm: string; address: string }[]>([]);
+  const [pickupDate, setPickupDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [pickupTime, setPickupTime] = useState<string>('10:00');
+  const [pickupDateModalOpen, setPickupDateModalOpen] = useState(false);
+  const [pickupSearchQuery, setPickupSearchQuery] = useState('');
+  const [pickupDebouncedQuery, setPickupDebouncedQuery] = useState('');
+  
+  // New customer creation state
+  const [newCustomerMode, setNewCustomerMode] = useState(false);
+  const [newCustomerFirstName, setNewCustomerFirstName] = useState('');
+  const [newCustomerLastName, setNewCustomerLastName] = useState('');
+  const [newCustomerPhone, setNewCustomerPhone] = useState('');
+  const [creatingPickup, setCreatingPickup] = useState(false);
 
   const [warehousePreview, setWarehousePreview] = useState<WarehousePreview | null>(null);
-  const MOBILE_CARD_HEIGHT = 180;
   
   const [activityCounts, setActivityCounts] = useState({
     authentication: 0,
@@ -139,6 +156,68 @@ export default function DashboardScreen() {
     }, [])
   );
 
+  // Helper functions for search
+  const normalize = (s: string) =>
+    s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
+  const isAFM = (q: string) => /^\d{9}$/.test(q);
+  const isPhone = (q: string) => /^\d{7,}$/.test(q);
+
+  // Load customers for pickup modal
+  useFocusEffect(
+    useCallback(() => {
+      if (pickupModalOpen) {
+        listCustomers(1000).then((customers) => {
+          const options = customers.map((c: any) => ({
+            id: c.id,
+            label: `${c.firstName || ''} ${c.lastName || ''}`.trim() || '—',
+            firstName: c.firstName || '',
+            lastName: c.lastName || '',
+            phone: c.phone || '',
+            afm: c.afm || '',
+            address: c.address || '',
+          }));
+          setPickupCustomers(options);
+        }).catch((e) => {
+          console.error('Failed to load customers:', e);
+        });
+      } else {
+        // Reset search when modal closes
+        setPickupSearchQuery('');
+        setPickupDebouncedQuery('');
+      }
+    }, [pickupModalOpen])
+  );
+
+  // Debounce search query
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      setPickupDebouncedQuery(pickupSearchQuery.trim());
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [pickupSearchQuery]);
+
+  // Filter customers based on search
+  const filteredPickupCustomers = React.useMemo(() => {
+    const q = pickupDebouncedQuery;
+    if (!q) return pickupCustomers;
+
+    if (isAFM(q)) {
+      return pickupCustomers.filter(c => (c.afm || '').includes(q));
+    }
+    if (isPhone(q)) {
+      return pickupCustomers.filter(c => (c.phone || '').includes(q));
+    }
+
+    const nq = normalize(q);
+    return pickupCustomers.filter(c => {
+      const fullName = `${c.firstName} ${c.lastName}`.trim();
+      const hay = [fullName, c.address || '', c.afm || '', c.phone || '']
+        .map(x => normalize(x))
+        .join(' | ');
+      return hay.includes(nq);
+    });
+  }, [pickupDebouncedQuery, pickupCustomers]);
+
   // Live observe ready for delivery orders (for calendar)
   useFocusEffect(
     useCallback(() => {
@@ -156,6 +235,10 @@ export default function DashboardScreen() {
               ? `${customer.first_name} ${customer.last_name}`.trim()
               : customer.first_name || customer.last_name || '—';
             
+            const notes = r.notes || r._raw?.notes || '';
+            // Check if it's a pickup order (marked with ΠΑΡΑΛΑΒΗ) or delivery order
+            const isPickup = notes && notes.trim() === 'ΠΑΡΑΛΑΒΗ';
+            
             return {
               id: r.id,
               orderId: r.id,
@@ -165,6 +248,7 @@ export default function DashboardScreen() {
               status: r.orderStatus || r.order_status || 'Προς παράδοση',
               totalAmount: r.totalAmount || r.total_amount || 0,
               hasDebt: r.hasDebt || r.has_debt || false,
+              isPickup,
             };
           });
         setReadyForDeliveryOrders(ordersWithDelivery);
@@ -384,7 +468,7 @@ export default function DashboardScreen() {
         <View style={styles.calendarSection}>
             <View style={styles.calendarHeader}>
               <Ionicons name="calendar-outline" size={24} color={colors.primary} style={{ marginRight: 8 }} />
-              <Text style={styles.calendarTitle}>Ημερολόγιο Παραδόσεων</Text>
+              <Text style={styles.calendarTitle}>Ημερολόγιο</Text>
               <View style={styles.calendarBadge}>
                 <Text style={styles.calendarBadgeText}>{readyForDeliveryOrders.length}</Text>
               </View>
@@ -414,25 +498,28 @@ export default function DashboardScreen() {
                   },
                 };
                 
-                // Mark dates with delivery orders
-                readyForDeliveryOrders.forEach((order) => {
+                // Mark dates with delivery orders (separate pickup and delivery)
+                const pickupOrders = readyForDeliveryOrders.filter(o => o.isPickup);
+                const deliveryOrders = readyForDeliveryOrders.filter(o => !o.isPickup);
+                
+                // Mark delivery orders (blue)
+                deliveryOrders.forEach((order) => {
                   if (order.deliveryDate) {
                     const dateStr = new Date(order.deliveryDate).toISOString().split('T')[0];
-                    const ordersForDate = readyForDeliveryOrders.filter((o) => {
+                    const deliveryOrdersForDate = deliveryOrders.filter((o) => {
                       if (!o.deliveryDate) return false;
                       return new Date(o.deliveryDate).toISOString().split('T')[0] === dateStr;
                     }).length;
                     
                     if (marked[dateStr]) {
-                      // If already marked (e.g., today), add dots
+                      // If already marked, add delivery dot
                       marked[dateStr].dots = marked[dateStr].dots || [];
                       marked[dateStr].dots.push({
                         color: dateStr === today ? '#FFFFFF' : '#3B82F6',
                         selectedDotColor: '#FFFFFF',
                       });
-                      marked[dateStr].count = ordersForDate;
                     } else {
-                      // New date with orders
+                      // New date with delivery orders
                       marked[dateStr] = {
                         selected: dateStr === selectedCalendarDate,
                         selectedColor: dateStr === selectedCalendarDate ? '#3B82F6' : 'transparent',
@@ -453,7 +540,51 @@ export default function DashboardScreen() {
                           color: '#3B82F6',
                           selectedDotColor: '#FFFFFF',
                         }],
-                        count: ordersForDate,
+                        count: deliveryOrdersForDate,
+                      };
+                    }
+                  }
+                });
+                
+                // Mark pickup orders (orange/amber)
+                pickupOrders.forEach((order) => {
+                  if (order.deliveryDate) {
+                    const dateStr = new Date(order.deliveryDate).toISOString().split('T')[0];
+                    const pickupOrdersForDate = pickupOrders.filter((o) => {
+                      if (!o.deliveryDate) return false;
+                      return new Date(o.deliveryDate).toISOString().split('T')[0] === dateStr;
+                    }).length;
+                    
+                    if (marked[dateStr]) {
+                      // If already marked, add pickup dot
+                      marked[dateStr].dots = marked[dateStr].dots || [];
+                      marked[dateStr].dots.push({
+                        color: dateStr === today ? '#FFFFFF' : '#F59E0B',
+                        selectedDotColor: '#FFFFFF',
+                      });
+                    } else {
+                      // New date with pickup orders only
+                      marked[dateStr] = {
+                        selected: dateStr === selectedCalendarDate,
+                        selectedColor: dateStr === selectedCalendarDate ? '#F59E0B' : 'transparent',
+                        marked: true,
+                        customStyles: {
+                          container: {
+                            backgroundColor: dateStr === selectedCalendarDate ? '#F59E0B' : '#FEF3C7',
+                            borderColor: '#F59E0B',
+                            borderWidth: dateStr === selectedCalendarDate ? 0 : 1,
+                            borderRadius: 8,
+                          },
+                          text: {
+                            color: dateStr === selectedCalendarDate ? '#FFFFFF' : '#92400E',
+                            fontWeight: dateStr === selectedCalendarDate ? '700' : '600',
+                          },
+                        },
+                        dots: [{
+                          color: '#F59E0B',
+                          selectedDotColor: '#FFFFFF',
+                        }],
+                        count: pickupOrdersForDate,
                       };
                     }
                   }
@@ -541,74 +672,98 @@ export default function DashboardScreen() {
                 return timeA - timeB;
               });
 
-              if (ordersForSelectedDate.length === 0) {
-                return (
-                  <View style={styles.eventsContainer}>
-                    <Text style={styles.noEventsText}>
-                      Δεν υπάρχουν παραγγελίες για {new Date(selectedCalendarDate).toLocaleDateString('el-GR', { 
-                        weekday: 'long', 
-                        day: 'numeric', 
-                        month: 'long',
-                        year: 'numeric'
-                      })}
-                    </Text>
-                  </View>
-                );
-              }
-
               return (
                 <View style={styles.eventsContainer}>
                   <View style={styles.eventsHeader}>
-                    <Ionicons name="list-outline" size={20} color={colors.primary} style={{ marginRight: 8 }} />
-                    <Text style={styles.eventsTitle}>
-                      {ordersForSelectedDate.length} {ordersForSelectedDate.length === 1 ? 'Παραγγελία' : 'Παραγγελίες'} - {new Date(selectedCalendarDate).toLocaleDateString('el-GR', { 
-                        weekday: 'long', 
-                        day: 'numeric', 
-                        month: 'long'
-                      })}
-                    </Text>
+                    {ordersForSelectedDate.length === 0 ? (
+                      <Text style={styles.noEventsText}>
+                        Δεν υπάρχουν παραγγελίες για {new Date(selectedCalendarDate).toLocaleDateString('el-GR', { 
+                          weekday: 'long', 
+                          day: 'numeric', 
+                          month: 'long',
+                          year: 'numeric'
+                        })}
+                      </Text>
+                    ) : (
+                      <>
+                        <View style={{ flex: 1 }}>
+                          <Ionicons name="list-outline" size={20} color={colors.primary} style={{ marginRight: 8 }} />
+                          <Text style={styles.eventsTitle}>
+                            {ordersForSelectedDate.length} {ordersForSelectedDate.length === 1 ? 'Παραγγελία' : 'Παραγγελίες'} - {new Date(selectedCalendarDate).toLocaleDateString('el-GR', { 
+                              weekday: 'long', 
+                              day: 'numeric', 
+                              month: 'long'
+                            })}
+                          </Text>
+                        </View>
+                      </>
+                    )}
+                    <TouchableOpacity
+                      onPress={() => {
+                        setPickupDate(selectedCalendarDate);
+                        setPickupModalOpen(true);
+                      }}
+                      style={styles.createPickupButtonSmall}
+                    >
+                      <Ionicons name="add-circle" size={16} color="#FFFFFF" style={{ marginRight: 4 }} />
+                      <Text style={styles.createPickupButtonTextSmall}>Δημιουργία Παραλαβής</Text>
+                    </TouchableOpacity>
                   </View>
-                  <ScrollView style={styles.eventsList} showsVerticalScrollIndicator={false}>
-                    {ordersForSelectedDate.map((order) => {
-                      const deliveryTime = new Date(order.deliveryDate).toLocaleTimeString('el-GR', { 
-                        hour: '2-digit', 
-                        minute: '2-digit' 
-                      });
-                      return (
-                        <Pressable
-                          key={order.id}
-                          onPress={() => router.push(`/editorder?orderId=${order.id}` as any)}
-                          style={styles.eventCard}
-                        >
-                          <View style={styles.eventTimeContainer}>
-                            <Ionicons name="time-outline" size={16} color="#3B82F6" />
-                            <Text style={styles.eventTime}>{deliveryTime}</Text>
-                          </View>
-                          <View style={styles.eventContent}>
-                            <View style={styles.eventHeader}>
-                              <Text style={styles.eventOrderId}>
-                                #{order.orderId.slice(0, 6).toUpperCase()}
-                              </Text>
-                              {order.hasDebt && (
-                                <View style={styles.debtBadge}>
-                                  <Text style={styles.debtBadgeText}>Χρέος</Text>
+                  {ordersForSelectedDate.length > 0 && (
+                    <ScrollView style={styles.eventsList} showsVerticalScrollIndicator={false}>
+                      {ordersForSelectedDate.map((order) => {
+                        const deliveryTime = new Date(order.deliveryDate).toLocaleTimeString('el-GR', { 
+                          hour: '2-digit', 
+                          minute: '2-digit' 
+                        });
+                        const isPickup = order.isPickup;
+                        const eventColor = isPickup ? '#F59E0B' : '#3B82F6';
+                        const eventBgColor = isPickup ? '#FEF3C7' : '#EFF6FF';
+                        const eventTextColor = isPickup ? '#92400E' : '#1E40AF';
+                        
+                        return (
+                          <Pressable
+                            key={order.id}
+                            onPress={() => router.push(`/editorder?orderId=${order.id}` as any)}
+                            style={[styles.eventCard, { borderColor: eventColor, backgroundColor: eventBgColor }]}
+                          >
+                            <View style={[styles.eventTimeContainer, { borderRightColor: eventColor }]}>
+                              <Ionicons name={isPickup ? "arrow-down-circle-outline" : "time-outline"} size={16} color={eventColor} />
+                              <Text style={[styles.eventTime, { color: eventTextColor }]}>{deliveryTime}</Text>
+                            </View>
+                            <View style={styles.eventContent}>
+                              <View style={styles.eventHeader}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                  <Text style={[styles.eventOrderId, { color: eventTextColor }]}>
+                                    #{order.orderId.slice(0, 6).toUpperCase()}
+                                  </Text>
+                                  <View style={[styles.typeBadge, { backgroundColor: eventColor }]}>
+                                    <Text style={styles.typeBadgeText}>
+                                      {isPickup ? 'Παραλαβή' : 'Παράδοση'}
+                                    </Text>
+                                  </View>
                                 </View>
-                              )}
-                            </View>
-                            <Text style={styles.eventCustomerName} numberOfLines={1}>
-                              {order.customerName}
-                            </Text>
-                            <View style={styles.eventFooter}>
-                              <Text style={styles.eventAmount}>
-                                {order.totalAmount.toFixed(2)} €
+                                {order.hasDebt && (
+                                  <View style={styles.debtBadge}>
+                                    <Text style={styles.debtBadgeText}>Χρέος</Text>
+                                  </View>
+                                )}
+                              </View>
+                              <Text style={[styles.eventCustomerName, { color: eventTextColor }]} numberOfLines={1}>
+                                {order.customerName}
                               </Text>
+                              <View style={styles.eventFooter}>
+                                <Text style={[styles.eventAmount, { color: eventTextColor }]}>
+                                  {order.totalAmount.toFixed(2)} €
+                                </Text>
+                              </View>
                             </View>
-                          </View>
-                          <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
+                            <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+                          </Pressable>
+                        );
+                      })}
+                    </ScrollView>
+                  )}
                 </View>
               );
             })()}
@@ -625,6 +780,332 @@ export default function DashboardScreen() {
       >
         <Ionicons name="cart" size={24} color="#FFFFFF" />
       </Pressable>
+
+      {/* Pickup Creation Modal */}
+      <Modal
+        visible={pickupModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setPickupModalOpen(false);
+          setNewCustomerMode(false);
+          setPickupCustomerId(null);
+          setNewCustomerFirstName('');
+          setNewCustomerLastName('');
+          setNewCustomerPhone('');
+        }}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Δημιουργία Παραλαβής</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setPickupModalOpen(false);
+                  setNewCustomerMode(false);
+                  setPickupCustomerId(null);
+                  setNewCustomerFirstName('');
+                  setNewCustomerLastName('');
+                  setNewCustomerPhone('');
+                  setPickupSearchQuery('');
+                  setPickupDebouncedQuery('');
+                }}
+              >
+                <Ionicons name="close" size={24} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+              {/* Customer Selection */}
+              {!newCustomerMode ? (
+                <>
+                  <View style={styles.modalField}>
+                    <Text style={styles.modalLabel}>Πελάτης</Text>
+                    <View style={styles.searchContainer}>
+                      <Ionicons name="search-outline" size={20} color="#6B7280" style={{ marginRight: 8 }} />
+                      <TextInput
+                        style={styles.searchInput}
+                        value={pickupSearchQuery}
+                        onChangeText={setPickupSearchQuery}
+                        placeholder="Όνομα, Επώνυμο, ΑΦΜ, Τηλέφωνο, Διεύθυνση"
+                        placeholderTextColor="#9CA3AF"
+                      />
+                      {pickupSearchQuery.length > 0 && (
+                        <TouchableOpacity
+                          onPress={() => setPickupSearchQuery('')}
+                          style={{ padding: 4 }}
+                        >
+                          <Ionicons name="close-circle" size={20} color="#9CA3AF" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                    {pickupDebouncedQuery && filteredPickupCustomers.length === 0 ? (
+                      <View style={styles.noResultsContainer}>
+                        <Text style={styles.noResultsText}>
+                          Δεν βρέθηκαν πελάτες με &quot;{pickupDebouncedQuery}&quot;
+                        </Text>
+                      </View>
+                    ) : filteredPickupCustomers.length > 0 ? (
+                      <ScrollView style={styles.customerList} nestedScrollEnabled>
+                        {filteredPickupCustomers.map((customer) => (
+                          <TouchableOpacity
+                            key={customer.id}
+                            onPress={() => {
+                              setPickupCustomerId(customer.id);
+                              setPickupSearchQuery('');
+                            }}
+                            style={[
+                              styles.customerOption,
+                              pickupCustomerId === customer.id && styles.customerOptionSelected
+                            ]}
+                          >
+                            <View style={styles.customerOptionContent}>
+                              <Text style={[
+                                styles.customerOptionName,
+                                pickupCustomerId === customer.id && styles.customerOptionNameSelected
+                              ]}>
+                                {customer.label}
+                              </Text>
+                              {customer.phone && (
+                                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+                                  <Ionicons name="call-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+                                  <Text style={styles.customerOptionDetail}>{customer.phone}</Text>
+                                </View>
+                              )}
+                              {customer.address && (
+                                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+                                  <Ionicons name="location-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+                                  <Text style={styles.customerOptionDetail}>{customer.address}</Text>
+                                </View>
+                              )}
+                            </View>
+                            {pickupCustomerId === customer.id && (
+                              <Ionicons name="checkmark-circle" size={20} color="#3B82F6" />
+                            )}
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    ) : null}
+                    {pickupCustomerId && (
+                      <View style={styles.selectedCustomerContainer}>
+                        <Text style={styles.selectedCustomerLabel}>Επιλεγμένος πελάτης:</Text>
+                        <Text style={styles.selectedCustomerName}>
+                          {pickupCustomers.find(c => c.id === pickupCustomerId)?.label || '—'}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => setPickupCustomerId(null)}
+                          style={styles.clearSelectionButton}
+                        >
+                          <Ionicons name="close-circle" size={18} color="#6B7280" />
+                          <Text style={styles.clearSelectionText}>Ακύρωση επιλογής</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => setNewCustomerMode(true)}
+                    style={styles.newCustomerButton}
+                  >
+                    <Ionicons name="person-add-outline" size={18} color="#3B82F6" style={{ marginRight: 6 }} />
+                    <Text style={styles.newCustomerButtonText}>Νέος πελάτης</Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <>
+                  <View style={styles.modalField}>
+                    <Text style={styles.modalLabel}>Όνομα *</Text>
+                    <TextInput
+                      style={styles.modalInput}
+                      value={newCustomerFirstName}
+                      onChangeText={setNewCustomerFirstName}
+                      placeholder="Όνομα"
+                    />
+                  </View>
+                  <View style={styles.modalField}>
+                    <Text style={styles.modalLabel}>Επώνυμο *</Text>
+                    <TextInput
+                      style={styles.modalInput}
+                      value={newCustomerLastName}
+                      onChangeText={setNewCustomerLastName}
+                      placeholder="Επώνυμο"
+                    />
+                  </View>
+                  <View style={styles.modalField}>
+                    <Text style={styles.modalLabel}>Τηλέφωνο</Text>
+                    <TextInput
+                      style={styles.modalInput}
+                      value={newCustomerPhone}
+                      onChangeText={setNewCustomerPhone}
+                      placeholder="Τηλέφωνο"
+                      keyboardType="phone-pad"
+                    />
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setNewCustomerMode(false);
+                      setNewCustomerFirstName('');
+                      setNewCustomerLastName('');
+                      setNewCustomerPhone('');
+                    }}
+                    style={styles.cancelNewCustomerButton}
+                  >
+                    <Text style={styles.cancelNewCustomerButtonText}>Ακύρωση</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+
+              {/* Date Selection */}
+              <View style={styles.modalField}>
+                <Text style={styles.modalLabel}>Ημερομηνία</Text>
+                <TouchableOpacity
+                  onPress={() => setPickupDateModalOpen(true)}
+                  style={styles.dateTimeButton}
+                >
+                  <Ionicons name="calendar-outline" size={18} color="#3B82F6" style={{ marginRight: 8 }} />
+                  <Text style={styles.dateTimeButtonText}>
+                    {new Date(pickupDate).toLocaleDateString('el-GR', {
+                      weekday: 'long',
+                      day: 'numeric',
+                      month: 'long',
+                      year: 'numeric'
+                    })}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Time Selection */}
+              <View style={styles.modalField}>
+                <Text style={styles.modalLabel}>Ώρα</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  value={pickupTime}
+                  onChangeText={setPickupTime}
+                  placeholder="Ώρα (π.χ. 10:00)"
+                  keyboardType="numeric"
+                />
+              </View>
+
+              {/* Submit Button */}
+              <TouchableOpacity
+                onPress={async () => {
+                  if (!newCustomerMode && !pickupCustomerId) {
+                    Alert.alert('Προσοχή', 'Παρακαλώ επιλέξτε πελάτη.');
+                    return;
+                  }
+                  if (newCustomerMode && (!newCustomerFirstName.trim() || !newCustomerLastName.trim())) {
+                    Alert.alert('Προσοχή', 'Παρακαλώ συμπληρώστε όνομα και επώνυμο.');
+                    return;
+                  }
+                  if (!pickupTime.match(/^\d{1,2}:\d{2}$/)) {
+                    Alert.alert('Προσοχή', 'Παρακαλώ εισάγετε έγκυρη ώρα (π.χ. 10:00).');
+                    return;
+                  }
+
+                  setCreatingPickup(true);
+                  try {
+                    let customerId = pickupCustomerId;
+                    
+                    // Create new customer if needed
+                    if (newCustomerMode) {
+                      const newCustomer = await createCustomer({
+                        firstName: newCustomerFirstName.trim(),
+                        lastName: newCustomerLastName.trim(),
+                        phone: newCustomerPhone.trim() || undefined,
+                      }, 'system');
+                      customerId = newCustomer.id;
+                    }
+
+                    // Create delivery datetime
+                    const [hours, minutes] = pickupTime.split(':');
+                    const deliveryDateTime = new Date(pickupDate);
+                    deliveryDateTime.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0);
+
+                    // Create order with delivery date and mark as pickup
+                    const order = await createOrder({
+                      customerId: customerId!,
+                      paymentMethod: 'cash',
+                      deposit: 0,
+                      totalAmount: 0,
+                      orderDate: pickupDate.split('T')[0],
+                      createdBy: 'system',
+                      orderStatus: 'Προς παράδοση',
+                      hasDebt: false,
+                      notes: 'ΠΑΡΑΛΑΒΗ', // Mark as pickup order
+                    }, 'system');
+                    
+                    // Update order with delivery date
+                    const orders = database.get('orders');
+                    await database.write(async () => {
+                      const orderModel = await orders.find(order.id);
+                      await orderModel.update((rec: any) => {
+                        rec.deliveryDate = deliveryDateTime.toISOString();
+                      });
+                    });
+
+                    Alert.alert('OK', 'Η παραλαβή δημιουργήθηκε επιτυχώς.');
+                    setPickupModalOpen(false);
+                    setNewCustomerMode(false);
+                    setPickupCustomerId(null);
+                    setNewCustomerFirstName('');
+                    setNewCustomerLastName('');
+                    setNewCustomerPhone('');
+                    setPickupDate(new Date().toISOString().split('T')[0]);
+                    setPickupTime('10:00');
+                    setPickupSearchQuery('');
+                    setPickupDebouncedQuery('');
+                  } catch (e: any) {
+                    console.error('Failed to create pickup:', e);
+                    Alert.alert('Σφάλμα', e.message || 'Αποτυχία δημιουργίας παραλαβής.');
+                  } finally {
+                    setCreatingPickup(false);
+                  }
+                }}
+                style={[styles.submitButton, creatingPickup && styles.submitButtonDisabled]}
+                disabled={creatingPickup}
+              >
+                <Text style={styles.submitButtonText}>
+                  {creatingPickup ? 'Δημιουργία...' : 'Δημιουργία Παραλαβής'}
+                </Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+
+        {/* Date Picker Modal */}
+        {pickupDateModalOpen && (
+          <Modal
+            visible={pickupDateModalOpen}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setPickupDateModalOpen(false)}
+          >
+            <View style={styles.modalBackdrop}>
+              <View style={styles.datePickerModal}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Επιλογή Ημερομηνίας</Text>
+                  <TouchableOpacity onPress={() => setPickupDateModalOpen(false)}>
+                    <Ionicons name="close" size={24} color="#6B7280" />
+                  </TouchableOpacity>
+                </View>
+                <Calendar
+                  current={pickupDate}
+                  onDayPress={(day) => {
+                    setPickupDate(day.dateString);
+                    setPickupDateModalOpen(false);
+                  }}
+                  markedDates={{
+                    [pickupDate]: {
+                      selected: true,
+                      selectedColor: '#3B82F6',
+                    },
+                  }}
+                  minDate={new Date().toISOString().split('T')[0]}
+                />
+              </View>
+            </View>
+          </Modal>
+        )}
+      </Modal>
     </Page>
   );
 }
@@ -1600,6 +2081,7 @@ wminiShelfEmptyText: { color: '#6B7280' },
   eventsHeader: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     marginBottom: 12,
   },
   eventsTitle: {
@@ -1618,7 +2100,7 @@ wminiShelfEmptyText: { color: '#6B7280' },
     borderRadius: 12,
     padding: 16,
     marginBottom: 12,
-    borderWidth: 1,
+    borderWidth: 2,
     borderColor: '#E5E7EB',
     ...(Platform.select({
       ios: { shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
@@ -1631,9 +2113,19 @@ wminiShelfEmptyText: { color: '#6B7280' },
     alignItems: 'center',
     marginRight: 16,
     paddingRight: 16,
-    borderRightWidth: 1,
+    borderRightWidth: 2,
     borderRightColor: '#E5E7EB',
     minWidth: 60,
+  },
+  typeBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  typeBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
   },
   eventTime: {
     fontSize: 14,
@@ -1683,9 +2175,284 @@ wminiShelfEmptyText: { color: '#6B7280' },
   noEventsText: {
     fontSize: 14,
     color: '#6B7280',
-    textAlign: 'center',
-    paddingVertical: 20,
     fontStyle: 'italic',
+    flex: 1,
+  },
+  createPickupButtonSmall: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#3B82F6',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    ...(Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 3, shadowOffset: { width: 0, height: 2 } },
+      android: { elevation: 2 },
+      web: { boxShadow: '0 2px 4px rgba(0,0,0,0.1)' } as any,
+    }) as object),
+  },
+  createPickupButtonTextSmall: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    width: '100%',
+    maxWidth: 500,
+    maxHeight: '90%',
+    ...(Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 5 } },
+      android: { elevation: 10 },
+      web: { boxShadow: '0 10px 25px rgba(0,0,0,0.2)' } as any,
+    }) as object),
+  },
+  datePickerModal: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    width: '100%',
+    maxWidth: 400,
+    padding: 20,
+    ...(Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 5 } },
+      android: { elevation: 10 },
+      web: { boxShadow: '0 10px 25px rgba(0,0,0,0.2)' } as any,
+    }) as object),
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1F2A44',
+  },
+  modalBody: {
+    padding: 20,
+    maxHeight: 500,
+  },
+  modalField: {
+    marginBottom: 20,
+  },
+  modalLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 8,
+  },
+  modalInput: {
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: '#111827',
+    backgroundColor: '#FFFFFF',
+  },
+  dropdownContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  dropdownText: {
+    fontSize: 14,
+    color: '#111827',
+    flex: 1,
+  },
+  dropdownList: {
+    maxHeight: 200,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    marginTop: 4,
+    backgroundColor: '#FFFFFF',
+  },
+  dropdownOption: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  dropdownOptionSelected: {
+    backgroundColor: '#EFF6FF',
+  },
+  dropdownOptionText: {
+    fontSize: 14,
+    color: '#111827',
+  },
+  dropdownOptionTextSelected: {
+    color: '#3B82F6',
+    fontWeight: '600',
+  },
+  newCustomerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    marginTop: 8,
+  },
+  newCustomerButtonText: {
+    color: '#3B82F6',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  cancelNewCustomerButton: {
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  cancelNewCustomerButtonText: {
+    color: '#6B7280',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  dateTimeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  dateTimeButtonText: {
+    fontSize: 14,
+    color: '#111827',
+    flex: 1,
+  },
+  submitButton: {
+    backgroundColor: '#3B82F6',
+    borderRadius: 10,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 10,
+    ...(Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
+      android: { elevation: 3 },
+      web: { boxShadow: '0 4px 6px rgba(0,0,0,0.1)' } as any,
+    }) as object),
+  },
+  submitButtonDisabled: {
+    opacity: 0.6,
+  },
+  submitButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#111827',
+    padding: 0,
+  },
+  customerList: {
+    maxHeight: 300,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    marginTop: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  customerOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  customerOptionSelected: {
+    backgroundColor: '#EFF6FF',
+  },
+  customerOptionContent: {
+    flex: 1,
+  },
+  customerOptionName: {
+    fontSize: 15,
+    color: '#111827',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  customerOptionNameSelected: {
+    color: '#3B82F6',
+  },
+  customerOptionDetail: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  noResultsContainer: {
+    padding: 20,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  noResultsText: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontStyle: 'italic',
+  },
+  selectedCustomerContainer: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#F0F9FF',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#BAE6FD',
+  },
+  selectedCustomerLabel: {
+    fontSize: 12,
+    color: '#0369A1',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  selectedCustomerName: {
+    fontSize: 15,
+    color: '#0C4A6E',
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  clearSelectionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  clearSelectionText: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginLeft: 4,
   },
 
 });
