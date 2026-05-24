@@ -883,21 +883,17 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                 android: 'numeric',
                 default: 'numeric',
               })}
-              style={[
-                {
-                  alignSelf: 'stretch',
-                  height: 42,
-                  borderRadius: 10,
-                  fontSize: 15,
-                  paddingHorizontal: 12,
-                  backgroundColor: 'rgba(240, 240, 240, 0.6)',
-                  borderColor: '#D1D5DB',
-                  borderWidth: 1,
-                  color: '#111827',
-                  width: Platform.OS === 'web' ? '100%' : '100%',
-                },
-                Platform.OS === 'web' && { width: '100%', maxWidth: 880, alignSelf: 'center' },
-              ]}
+              style={{
+                width: 880,
+                height: 42,
+                borderRadius: 10,
+                fontSize: 15,
+                paddingHorizontal: 12,
+                backgroundColor: 'rgba(240, 240, 240, 0.6)', 
+                borderColor: '#D1D5DB',
+                borderWidth: 1,
+                color: '#111827', 
+              }}
             />
           </View>
         </View>
@@ -1066,12 +1062,10 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                       style={{
                         position: 'absolute',
                         right: 8,
-                        top: Platform.OS === 'web' ? 0 : 2,   
-                        bottom: 0,
-                        justifyContent: 'center',
-                        paddingHorizontal: 4,
+                        top: '50%',
+                        transform: [{ translateY: -10 }],
+                        padding: 4,
                       }}
-
                       hitSlop={8}
                       accessibilityLabel="Άνοιγμα ημερολογίου"
                     >
@@ -1089,14 +1083,14 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                   <View
                     style={{
                       position: 'absolute',
-                      top: Platform.OS === 'web' ? '100%' : 76,
+                      top: '100%',
                       left: 0,
                       marginTop: 4,
-                      zIndex: Platform.OS === 'web' ? 99999 : 10000,
-                      elevation: 1000,
+                      zIndex: 99999,      // 🔼 Πάνω απ’ όλα
+                      elevation: 1000,    // Android
                       backgroundColor: '#fff',
                       borderRadius: 12,
-                      overflow: 'visible',
+                      overflow: 'hidden',
                       shadowColor: '#000',
                       shadowOpacity: 0.15,
                       shadowRadius: 8,
@@ -1310,7 +1304,6 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                   style={[
                     styles.pieceRow,
                     { position: 'relative' },
-                    Platform.OS !== 'web' && { height: 72, overflow: 'hidden' },
                     p.saved && styles.pieceRowCompleted, 
                   ]}
                 >
@@ -1331,18 +1324,8 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
 
                   <View style={styles.pieceInfo}>
                     <Text style={styles.pieceTitle}>Τεμάχιο {i + 1}</Text>
-                    <Text style={styles.pieceSubtitle}>
-                      {Platform.OS === 'web'
-                        ? `Κατηγορία: ${p.category ?? '—'}`
-                        : (
-                            <>
-                              Κατηγορία:
-                              {'\n'}
-                              {p.category ?? '—'}
-                            </>
-                          )
-                      }
-                    </Text>
+                    <Text style={styles.pieceSubtitle}>Κατηγορία: {p.category ?? '—'}</Text>
+                    {!!p.code && <Text style={styles.pieceSubtitle}>Κωδικός: {p.code}</Text>}
                   </View>
 
                   {/* Κόστος με – [input] + */}
@@ -1627,33 +1610,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
           onRequestClose={() => setSuccessOpen(false)}
         >
           <View style={styles.modalBackdrop}>
-            <View
-              style={[
-                styles.modalCard,
-                Platform.OS === 'web'
-                  ? {
-                      // 🔒 Web: ίδιο όπως πριν
-                      paddingVertical: 106,
-                      paddingHorizontal: 30,
-                      justifyContent: 'flex-start',
-                      paddingTop: 50,
-                      width: '50%',
-                      height: 300,
-                    }
-                  : {
-                      // 📱 Μόνο mobile
-                      width: '92%',
-                      maxWidth: 460,
-                      paddingVertical: 24,
-                      paddingHorizontal: 18,
-                      justifyContent: 'center',
-                      alignItems: 'center',
-                      height: undefined,
-                      minHeight: 220,
-                    },
-              ]}
-            >
-
+            <View style={[styles.modalCard, { paddingVertical: 106, paddingHorizontal: 30,justifyContent: 'flex-start', paddingTop: 50, width: '50%', height: 300 }]}>
               <View style={styles.modalHeader}>
                 {/* Εικονίδιο επιτυχίας */}
                 <Ionicons name="checkmark-circle-outline" size={64} color="#10B981" style={{ marginBottom: 8 }} />
@@ -2098,13 +2055,12 @@ modalActionsBottom: {
     backgroundColor: 'transparent',
     borderWidth: 0,
     shadowColor: 'transparent',
-    ...(Platform.OS !== 'web' && { fontSize: 14, marginLeft: 2 }),
+    ...(Platform.OS === 'web' ? { outlineWidth: 0 } : {}),
   },
 
   euroSuffix: {
     fontSize: 15,
     color: '#333',
-    ...(Platform.OS !== 'web' && { fontSize: 14, marginLeft: 2 }),
   },
   amountHint: {
     fontSize: 12,
@@ -2268,37 +2224,24 @@ modalActionsBottom: {
     fontWeight: '400',
   },
   orderInnerPanel: {
-  backgroundColor: '#FBFBFB',
-  borderColor: '#EEEEEE',
-  borderWidth: 1,
-  borderRadius: 12,
-  padding: 12,
-  overflow: 'visible',
-
-  marginLeft: Platform.OS === 'web' ? 48 : 0,
-  ...(Platform.OS !== 'web' && {
-    alignSelf: 'center',
-    width: '94%',
-    maxWidth: 480,
-  }),
-},
-
+    backgroundColor: '#FBFBFB',
+    borderColor: '#EEEEEE',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginLeft: 48,
+    overflow: 'visible',
+  },
   orderRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 12,
   },
   fieldGroup: {
-  flexGrow: 1,
-  flexBasis: 200,
-  minWidth: 180,
-
-  ...(Platform.OS !== 'web' && {
-    alignSelf: 'center',
-    width: '100%',
-    maxWidth: 460,
-  }),
-},
+    flexGrow: 1,
+    flexBasis: 200,
+    minWidth: 180,
+  },
   inputLabelInline: {
     fontSize: 15,
     color: '#1F2A44',
@@ -2375,12 +2318,6 @@ modalActionsBottom: {
   piecesList: {
     marginLeft: 48,
     gap: 10,
-    ...(Platform.OS !== 'web' && {
-      marginLeft: 0,
-      alignSelf: 'center',
-      width: '94%',
-      maxWidth: 480,
-    }),
   },
   pieceRow: {
     flexDirection: 'row',
@@ -2392,69 +2329,41 @@ modalActionsBottom: {
     borderRadius: 12,
     paddingVertical: 10,
     paddingHorizontal: 12,
-    ...(Platform.OS !== 'web' && {
-   height: 72,        
-   overflow: 'hidden' 
-    }),
+    gap: 10,
   },
-
   pieceInfo: {
-  flexShrink: 1,
-  flexGrow: 1,
-  ...(Platform.OS !== 'web' && {
-   minWidth: 150,    
-   flexBasis: '58%',  
-   paddingRight: 8,
- }),
-},
-
+    flexShrink: 1,
+    flexGrow: 1,
+  },
   pieceTitle: {
     fontSize: 15,
     color: '#1F2A44',
     fontWeight: '400',
-
-    ...(Platform.OS !== 'web' && {
-   fontSize: 13.5,    
- }),
   },
   pieceSubtitle: {
     fontSize: 12,
     color: '#666',
     marginTop: 2,
-    ...(Platform.OS !== 'web' && {
-   fontSize: 11.5,   
- }),
   },
   costControl: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     marginRight: 24,
-   ...(Platform.OS !== 'web' && {
-    flexBasis: '45%',            
-    justifyContent: 'flex-end',
-    flexShrink: 1,
-    marginLeft: 0,               
-    marginRight: 0,               
-    gap: 4,                       
-    transform: [{ translateX: -10 }],
-    }),
   },
   stepBtn: {
     width: 34,
-  height: 34,
+    height: 34,
     borderRadius: 8,
     backgroundColor: '#F0F0F0',
     alignItems: 'center',
     justifyContent: 'center',
-    ...(Platform.OS !== 'web' && { width: 16, height: 16 }),
   },
   stepBtnText: {
     fontSize: 15,
     color: '#333',
     fontWeight: '400',
     lineHeight: 18,
-    ...(Platform.OS !== 'web' && { fontSize: 13 }),
   },
   costInputWrap: {
     flexDirection: 'row',
@@ -2466,12 +2375,6 @@ modalActionsBottom: {
     paddingVertical: 8,
     paddingHorizontal: 12,
     minWidth: 110,
-   ...(Platform.OS !== 'web' && {
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-    minWidth: 100,    
-    maxWidth: 120,
-  }),
   },
   costInput: {
     flex: 1,
@@ -2480,11 +2383,7 @@ modalActionsBottom: {
     paddingVertical: 0,
     marginRight: 6,
     textAlign: 'right',
-   ...(Platform.OS !== 'web' && {
-      fontSize: 13,
-      marginRight: 3,
-    }),
-
+    ...(Platform.OS === 'web' ? { outlineWidth: 0 } : {}),
   },
   piecesActions: {
     marginTop: 12,
@@ -2676,7 +2575,6 @@ modalActionsBottom: {
   },
 
   input: {
-    width: Platform.OS === 'web' ? '100%' : '100%',
     borderWidth: 2,
     borderColor: '#E5E7EB', 
     borderRadius: 10,

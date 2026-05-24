@@ -437,12 +437,7 @@ function ShelfChip({ code }: { code?: string }) {
 
               {/* Select All Button */}
               {filtered.length > 0 && (
-                <View
-                  style={{
-                    marginBottom: Platform.OS !== 'web' ? 1 : 8, // πιο μικρό κενό για κινητά
-                    alignItems: 'flex-end',
-                  }}
-                >
+                <View style={{ marginBottom: 8, alignItems: 'flex-end' }}>
                   <Pressable
                     onPress={allSelected ? deselectAllItems : selectAllItems}
                     style={{
@@ -486,13 +481,7 @@ function ShelfChip({ code }: { code?: string }) {
                 </View>
               ) : (
                 <>
-                  <View style={[
-                      { marginTop: 6 },
-                      Platform.OS !== 'web'
-                        ? { height: 380, maxHeight: 380 }   // 👉 bounded ύψος σε mobile
-                        : { flex: 1, maxHeight: 420 }       // web όπως ήταν
-                    ]}
-                  >
+                  <View style={{ flex: 1, maxHeight: 420, marginTop: 6 }}>
                     <ScrollView
                       contentContainerStyle={{ paddingBottom: 12 }}
                       showsVerticalScrollIndicator
@@ -577,17 +566,7 @@ function ShelfChip({ code }: { code?: string }) {
                   
                   {/* Pagination Controls */}
                   {totalPages > 1 && (
-                    <View
-                      style={[
-                        styles.paginationContainer,
-                        Platform.OS !== 'web' && {
-                          paddingVertical: 6,
-                          marginTop: 2,
-                          marginBottom: 1,   // <- κόβει κενό κάτω από τα κουμπιά
-                          borderTopWidth: 0,
-                        },
-                      ]}
-                    >
+                    <View style={styles.paginationContainer}>
                       <Pressable
                         onPress={() => setCurrentPage(prev => Math.max(1, prev - 1))}
                         disabled={currentPage === 1}
@@ -601,7 +580,7 @@ function ShelfChip({ code }: { code?: string }) {
                           styles.paginationButtonText,
                           currentPage === 1 && styles.paginationButtonTextDisabled
                         ]}>
-                          {Platform.OS !== 'web' ? 'Πίσω' : 'Προηγούμενη'}
+                          Προηγούμενη
                         </Text>
                       </Pressable>
 
@@ -709,35 +688,6 @@ function ShelfChip({ code }: { code?: string }) {
 
           {/* Κάρτα Προορισμού */}
           <View style={styles.destinationCard}>
-            {Platform.OS !== 'web' ? (
-              // 👉 mobile: "Προορισμός Ράφι A7" στην ίδια γραμμή
-              <View style={[styles.destLeft, { gap: 8 }]}>
-                <View style={styles.destIcon}>
-                  <Ionicons name="cube" size={16} color={PURPLE} />
-                </View>
-
-                <View style={{ flexDirection: 'row', alignItems: 'baseline', flexShrink: 1 }}>
-                  <Text style={[styles.destTitle, { marginRight: 6 }]}>Προορισμός</Text>
-
-                  {shelfCode ? (
-                    <Text
-                      numberOfLines={1}
-                      style={[styles.destSubtitle, { fontWeight: '600' }]}
-                    >
-                      Ράφι {shelfCode}
-                    </Text>
-                  ) : (
-                    <Text
-                      numberOfLines={1}
-                      style={[styles.destSubtitle, { color: '#9CA3AF', fontStyle: 'italic' }]}
-                    >
-                      Δεν έχει επιλεγεί ράφι
-                    </Text>
-                  )}
-                </View>
-              </View>
-            ) : (
-
             <View style={styles.destLeft}>
               <View style={styles.destIcon}>
                 <Ionicons name="cube" size={16} color={PURPLE} />
@@ -753,7 +703,6 @@ function ShelfChip({ code }: { code?: string }) {
                 )}
               </View>
             </View>
-            )}
 
             {typeof itemCount === 'number' && (
               <Pressable onPress={() => {}} hitSlop={8}>
@@ -764,12 +713,7 @@ function ShelfChip({ code }: { code?: string }) {
 
           {/* Footer actions */}
           {activeTab === 'free' && (
-            <View
-              style={[
-                styles.footer,
-                Platform.OS !== 'web' && { marginTop: 6 }  
-              ]}
-            >
+            <View style={styles.footer}>
               <Pressable style={styles.cancelBtn} onPress={() => router.back()}>
                 <Ionicons name="arrow-back" size={16} color="#374151" />
                 <Text style={styles.cancelText}>Ακύρωση</Text>
@@ -963,13 +907,7 @@ const styles = StyleSheet.create({
   },
   sectionBarText: { color: '#6B21A8', fontWeight: '400' },
 
-  fieldGroup: { 
-    marginBottom: 14,
-    ...(Platform.OS !== 'web' && {
-    marginBottom: 2,   // <- μικρό κενό για mobile
-  }),
-   },
-
+  fieldGroup: { marginBottom: 14 },
   fieldLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
   dot: { width: 8, height: 8, borderRadius: 99, backgroundColor: '#7C3AED' },
   fieldLabel: { fontSize: 13, color: '#111827', fontWeight: '400' },
@@ -998,10 +936,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: 10,
-     ...(Platform.OS !== 'web' && {
-    paddingVertical: 6, // 👉 πιο λεπτό για κινητό
-    marginTop: 4,       // 👉 πιο κοντά στο pagination
-  }),
   },
   destLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   destIcon: {
@@ -1013,15 +947,7 @@ const styles = StyleSheet.create({
   destSubtitle: { fontSize: 14, color: '#111827', fontWeight: '400' },
   destCountLink: { fontSize: 12, color: colors.primary, fontWeight: '400' },
 
-  footer: { 
-    flexDirection: 'row', 
-    gap: 12, 
-    marginTop: 16,
-    ...(Platform.OS !== 'web' && {
-    marginTop: 6,  
-    gap: 8,
-  }),
-   },
+  footer: { flexDirection: 'row', gap: 12, marginTop: 16 },
   cancelBtn: {
     flex: 1,
     flexDirection: 'row',
@@ -1033,19 +959,8 @@ const styles = StyleSheet.create({
     borderColor: BORDER,
     borderRadius: 12,
     paddingVertical: 12,
-    ...(Platform.OS !== 'web' && {
-    paddingVertical: 3,  
-    paddingHorizontal: 16,
-    borderRadius: 10,
-    minHeight: 40,
-  }),
   },
-  cancelText: { 
-    color: '#374151', 
-    fontSize: 14, 
-    fontWeight: '400',
-    ...(Platform.OS !== 'web' && { fontSize: 13 }),
-   },
+  cancelText: { color: '#374151', fontSize: 14, fontWeight: '400' },
   primaryBtn: {
     flex: 1,
     flexDirection: 'row',
@@ -1057,21 +972,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 12,
     paddingVertical: 12,
-    ...(Platform.OS !== 'web' && {
-    paddingVertical: 3,    
-    paddingHorizontal: 16, 
-    borderRadius: 10,
-    minHeight: 40,
-  }),
   },
   primaryBtnDisabled: { opacity: 1 },
-  primaryText: { 
-    color: '#FFFFFF', 
-    fontSize: 14, 
-    fontWeight: '400',
-    ...(Platform.OS !== 'web' && { fontSize: 13 }),
-   },
-
+  primaryText: { color: '#FFFFFF', fontSize: 14, fontWeight: '400' },
 
   /* Modal επιλογής */
   modalOverlay: {
@@ -1103,21 +1006,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     marginBottom: 14,
-    ...(Platform.OS !== 'web' && {
-    paddingVertical: 6,   // ↓ λιγότερος “αέρας”
-    height: 42,           // ή 40–44 ανάλογα το γούστο
-    marginBottom: 8,
-  }),
   },
-
-  searchInput: { 
-    flex: 1, 
-    fontSize: 14, 
-    color: '#111827',
-  ...(Platform.OS !== 'web' && {
-    fontSize: 13,
-    paddingVertical: 0,   // να μην “σπρώχνει” το ύψος
-  }), },
+  searchInput: { flex: 1, fontSize: 14, color: '#111827' },
 
   emptyBox: {
     alignItems: 'center',
@@ -1197,15 +1087,14 @@ moveBtn: {
   alignItems: 'center',
   gap: 6,
   backgroundColor: '#3B82F6',
+  paddingHorizontal: 14,
+  paddingVertical: 10,
   borderRadius: 12,
   alignSelf: 'center',
   shadowColor: '#000',
   shadowOpacity: 0.08,
   shadowRadius: 6,
   elevation: 2,
-   ...(Platform.OS !== 'web'
-    ? { paddingHorizontal: 10, paddingVertical: 6 } 
-    : { paddingHorizontal: 14, paddingVertical: 10 }),
 },
 moveBtnText: { color: '#fff', fontWeight: '400' },
 
@@ -1262,11 +1151,6 @@ shelfMeta: { color: '#6B7280', fontSize: 12 },
     marginTop: 8,
     backgroundColor: '#F9FAFB',
     borderRadius: 0,
-    ...(Platform.OS !== 'web' && {
-    paddingVertical: 8, 
-    marginTop: 1, 
-    marginBottom: 1,     
-  }),
   },
   paginationButton: {
     flexDirection: 'row',
@@ -1278,10 +1162,9 @@ shelfMeta: { color: '#6B7280', fontSize: 12 },
     borderRadius: 8,
     borderWidth: 1.5,
     borderColor: '#E5E7EB',
-     ...(Platform.OS !== 'web' && {
-    paddingVertical: 4, // ↓ πιο λεπτά κουμπιά
-    paddingHorizontal: 10,
-  }),
+    ...(Platform.select({
+      web: { cursor: 'pointer' } as any,
+    }) as object),
   },
   paginationButtonDisabled: {
     opacity: 0.5,
@@ -1293,9 +1176,6 @@ shelfMeta: { color: '#6B7280', fontSize: 12 },
     fontSize: 14,
     fontWeight: '600',
     color: PURPLE,
-    ...(Platform.OS !== 'web' && {
-    fontSize: 13,
-  }),
   },
   paginationButtonTextDisabled: {
     color: '#9CA3AF',
@@ -1309,9 +1189,6 @@ shelfMeta: { color: '#6B7280', fontSize: 12 },
     fontWeight: '600',
     color: '#1F2A44',
     marginBottom: 2,
-    ...(Platform.OS !== 'web' && {
-    fontSize: 13, // ↓ μικρότερη γραμματοσειρά
-  }),
   },
   paginationSubtext: {
     fontSize: 12,

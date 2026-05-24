@@ -150,10 +150,6 @@ export default function EditOrderScreen() {
   const updateOrderUI = (index: number, patch: Partial<OrderItemUI>) => {
     setOrders(prev => prev.map((o, i) => (i === index ? { ...o, ...patch } : o)))
   }
-  const addOrderUI = () => setOrders(prev => [...prev, makeEmptyOrder()])
-  const removeOrderUI = (index: number) => {
-    setOrders(prev => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)))
-  }
   const onChangeOrderDateAt = (index: number, txt: string) => {
     const digits = txt.replace(/\D/g, '').slice(0, 8);
     let out = '';
@@ -286,10 +282,6 @@ const clearReturnsPending = (customerId: string, orderId: string) => {
   })
 }
 
-const isReturnsPending = useMemo(() => {
-  if (!selectedCustomer || !orderId) return false
-  return (pendingReturnsByCustomer[selectedCustomer] || []).includes(String(orderId))
-}, [pendingReturnsByCustomer, selectedCustomer, orderId])
 
 
   const orderStatusLabels: Record<string, string> = {
@@ -308,16 +300,6 @@ const isReturnsPending = useMemo(() => {
     'Παραδόθηκε': 'delivered',
   };
 
-  const [originalOrder, setOriginalOrder] = useState<null | {
-    customerId?: string | null
-    orderDate?: string | null
-    notes?: string | null
-    paymentMethod?: string | null
-    deposit?: number | null
-    totalAmount?: number | null
-    orderStatus?: string | null
-    hasDebt?: boolean | null
-  }>(null)
 
   const orderStatusDisplay = orderStatus
     ? orderStatusLabels[orderStatus]
@@ -338,17 +320,6 @@ const isReturnsPending = useMemo(() => {
         setDepositEnabled(!!order.deposit && order.deposit > 0)
         setNotes(order.notes || '')
         setHasDebt(typeof order.hasDebt === 'boolean' ? order.hasDebt : false)
-
-        setOriginalOrder({
-        customerId: order.customerId ?? null,
-        orderDate: order.orderDate ?? null,
-        notes: order.notes ?? null,
-        paymentMethod: order.paymentMethod ?? null,
-        deposit: typeof order.deposit === 'number' ? order.deposit : null,
-        totalAmount: typeof order.totalAmount === 'number' ? order.totalAmount : null,
-        orderStatus: order.orderStatus ?? null,
-        hasDebt: typeof order.hasDebt === 'boolean' ? order.hasDebt : null,
-      })
 
         if (order.orderStatus) {
           setOrderStatus(ORDER_STATUS_LABEL_TO_KEY[order.orderStatus] ?? 'new')
@@ -656,10 +627,6 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
     color?: boolean
     itemCode?: boolean
   }>>({})
-
-  const flagOrderErr = (i: number, key: 'category'|'qty'|'color'|'itemCode') => {
-    setOrderFieldErrors(prev => ({ ...prev, [i]: { ...(prev[i] || {}), [key]: true }}))
-  }
 
   const clearOrderErr = (i: number, key: 'category'|'qty'|'color'|'itemCode') => {
     setOrderFieldErrors(prev => {
@@ -1126,8 +1093,6 @@ const savePieceModal = () => {
 
         {/* ===== Στοιχεία Παραγγελίας ===== */}
         {orders.map((ord, idx) => {
-          const isLast = idx === orders.length - 1
-          const canRemove = orders.length > 1 && idx > 0
           return (
             <View key={`order-${idx}`} style={[styles.cardBox, styles.cardBoxLarge, { marginTop: 16 }]}>
               <View style={styles.orderIconFab}>
@@ -1140,18 +1105,7 @@ const savePieceModal = () => {
                 Στοιχεία παραγγελίας {orders.length > 1 ? `#${idx + 1}` : ''}
               </Text>
 
-              <View
-                style={[
-                  styles.orderInnerPanel,
-                  Platform.OS !== 'web' && {
-                    marginLeft: -3, 
-                    width: '92%', 
-                    alignSelf: 'center', 
-                    
-                  },
-                ]}
-              >
-
+              <View style={styles.orderInnerPanel}>
                 <View style={styles.orderRow}>
 
                   {/* Κατηγορία */}
@@ -1160,7 +1114,7 @@ const savePieceModal = () => {
                     <Pressable
                       onPress={() => {
                         updateOrderUI(idx, { categoryOpen: !ord.categoryOpen })
-                        clearOrderErr(idx, 'category') 
+                        clearOrderErr(idx, 'category') // μόλις πάει να διορθώσει, καθάρισε το error
                       }}
                       style={[
                         styles.fakeInputInline,
@@ -1185,7 +1139,7 @@ const savePieceModal = () => {
                             <Pressable
                               onPress={() => {
                                 updateOrderUI(idx, { category: label, categoryOpen: false })
-                                clearOrderErr(idx, 'category') 
+                                clearOrderErr(idx, 'category') // καθάρισμα με την επιλογή
                               }}
                               style={styles.dropdownItem}
                             >
@@ -1235,13 +1189,7 @@ const savePieceModal = () => {
                   <View style={[styles.fieldGroup, styles.popHost, { minWidth: 200, flexBasis: 240 }]}>
 
                     <Text style={styles.inputLabelInline}>Ημερομηνία</Text>
-                    <View
-                      style={[
-                        styles.amountInputWrap,
-                        { position: 'relative' },
-                        Platform.OS !== 'web' && { width: '90%' }, 
-                      ]}
-                    >
+                    <View style={[styles.amountInputWrap, { position: 'relative' }]}>
                       <TextInput
                         value={ord.date}
                         onChangeText={(t) => onChangeOrderDateAt(idx, t)}
@@ -1257,7 +1205,7 @@ const savePieceModal = () => {
                         style={{
                           position: 'absolute',
                           right: 8,
-                          top: '90%',
+                          top: '50%',
                           transform: [{ translateY: -10 }],
                           padding: 4,
                         }}
@@ -1501,8 +1449,6 @@ const savePieceModal = () => {
 
             <View style={styles.piecesList}>
                 {pieces.map((p, i) => {
-                    const isExisting = p.saved && !p.newlyAdded 
-                    
                     // Check status for color coding
                     const status = p.status || 'άπλυτο'
                     const isUnwashed = status === 'άπλυτο'
@@ -1515,20 +1461,17 @@ const savePieceModal = () => {
 
                     return (
                     <View
-                      key={p.id ?? `piece-${i}`}
-                      style={[
+                        key={p.id ?? `piece-${i}`}
+                        style={[
                         styles.pieceRow,
-                        { position: 'relative', backgroundColor, borderColor },
-                        Platform.OS !== 'web' && {
-                          paddingVertical: 4,  
-                          maxHeight: 100,
-                          gap: 2, 
-                          overflow: 'hidden',  
-                          width: '139%', 
-                          alignSelf: 'center',
-                          marginLeft: '-22%',       
+                        { 
+                          position: 'relative',
+                          backgroundColor,
+                          borderColor,
                         },
-                      ]}
+                        // Don't apply pieceRowCompleted if we have status-based colors
+                        // isExisting && styles.pieceRowCompleted,
+                        ]}
                     >
                         <Pressable
                         onPress={() => removePiece(i)}
@@ -1537,14 +1480,7 @@ const savePieceModal = () => {
                         <Text style={{ color: '#9CA3AF', fontWeight: 'bold', opacity: 0.8, fontSize: 14 }}>Χ</Text>
                         </Pressable>
 
-                        <View
-                          style={[
-                            styles.pieceInfo,
-                            Platform.OS !== 'web' && {
-                              marginLeft: 14,   
-                            },
-                          ]}
-                        >
+                        <View style={styles.pieceInfo}>
                         <Text style={styles.pieceTitle}>Τεμάχιο {i + 1}</Text>
                         <Text style={styles.pieceSubtitle}>Κατηγορία: {p.category ?? '—'}</Text>
                         {!!p.code && <Text style={styles.pieceSubtitle}>Κωδικός: {p.code}</Text>}
@@ -1556,56 +1492,17 @@ const savePieceModal = () => {
                         </Text>}
                         </View>
 
-                      <View
-                        style={[
-                          Platform.OS !== 'web'
-                            ? { flexDirection: 'column', alignItems: 'center', gap: 6 } // mobile
-                            : { flexDirection: 'row', alignItems: 'center', gap: 8 },   // web
-                        ]}
-                      >
-                        {(p.saved || p.newlyAdded) && (
-                          <Pressable
-                            style={[
-                              styles.addPieceSmallBtn,
-                              Platform.OS !== 'web' && {
-                                transform: [{ scale: 0.88 }],
-                                marginLeft: 9,
-                                marginBottom: -5,
-                              },
-                            ]}
-                            onPress={() => openPieceModalFor(i)}
-                          >
-                            <Text
-                              style={[
-                                styles.addPieceSmallBtnText,
-                                Platform.OS !== 'web' && { fontSize: 13 },
-                              ]}
-                            >
-                              Επεξεργασία
-                            </Text>
-                          </Pressable>
-                        )}
-
-                        <View
-                          style={[
-                            styles.costControl,
-                            Platform.OS !== 'web' && {
-                              transform: [{ scale: 0.9 }],
-                              marginLeft: 0,
-                              gap: 6,
-                            },
-                          ]}
-                        >
-                          <Pressable style={styles.stepBtn} onPress={() => stepPieceCost(i, -1)}>
+                        <View style={styles.costControl}>
+                        <Pressable style={styles.stepBtn} onPress={() => stepPieceCost(i, -1)}>
                             <Text style={styles.stepBtnText}>–</Text>
-                          </Pressable>
-                          <View style={styles.costInputWrap}>
+                        </Pressable>
+                        <View style={styles.costInputWrap}>
                             <TextInput
                               value={p.cost}
                               onChangeText={(t) =>
                                 updatePiece(i, {
-                                  cost: t.replace(/[^\d.,]/g, ''),
-                                  dirty: true,
+                                  cost: t.replace(/[^\d.,]/g, ''), 
+                                  dirty: true,                    
                                 })
                               }
                               placeholder="0.00"
@@ -1614,14 +1511,17 @@ const savePieceModal = () => {
                               style={styles.costInput}
                             />
                             <Text style={styles.euroSuffix}>€</Text>
-                          </View>
-                          <Pressable style={styles.stepBtn} onPress={() => stepPieceCost(i, 1)}>
-                            <Text style={styles.stepBtnText}>+</Text>
-                          </Pressable>
                         </View>
-                      </View>
+                        <Pressable style={styles.stepBtn} onPress={() => stepPieceCost(i, 1)}>
+                            <Text style={styles.stepBtnText}>+</Text>
+                        </Pressable>
+                        </View>
 
-
+                        {(p.saved || p.newlyAdded) && (
+                          <Pressable style={styles.addPieceSmallBtn} onPress={() => openPieceModalFor(i)}>
+                            <Text style={styles.addPieceSmallBtnText}>Επεξεργασία</Text>
+                          </Pressable>
+                        )}
 
                     </View>
                     )
@@ -2721,7 +2621,7 @@ const styles = StyleSheet.create({
     toggleKnobOnSmall: { transform: [{ translateX: 18 }] },
 
     amountRow: { marginTop: 12, marginLeft: 48, gap: 6 },
-    euroSuffix: { fontSize: 15, color: '#333' , ...(Platform.OS !== 'web' && { fontSize: 14, marginLeft: 2 }),},
+    euroSuffix: { fontSize: 15, color: '#333' },
   title: {
     fontSize: 28,
     color: '#1F2A44',
@@ -2950,50 +2850,15 @@ dropdownMenuAbove: {
     paddingVertical: 10,
     paddingHorizontal: 12,
     gap: 10,
-    ...(Platform.OS !== 'web' && {
-      paddingHorizontal: 0, 
-  width: '100%',       
-  }),
   },
   pieceRowCompleted: { backgroundColor: 'rgba(16,185,129,0.12)', borderColor: '#10B981' },
   pieceInfo: { flexShrink: 1, flexGrow: 1 },
   pieceTitle: { fontSize: 15, color: '#1F2A44', fontWeight: '400' },
   pieceSubtitle: { fontSize: 12, color: '#666', marginTop: 2 },
 
-  costControl: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    gap: 8, 
-    marginRight: 24,
-     ...(Platform.OS !== 'web' && {
-    gap: 4,               
-    transform: [{ scale: 0.68 }], 
-    marginRight: 12,      
-  }),
-
-   }
-   
-   ,
-  stepBtn: { 
-    width: 34, 
-    height: 34, 
-    borderRadius: 8, 
-    backgroundColor: '#F0F0F0', 
-    alignItems: 'center', 
-    justifyContent: 'center' ,
-     ...(Platform.OS !== 'web' && {
-    transform: [{ scale: 0.8 }],  
-    marginHorizontal: -7,           
-  }),
-  },
-
-  stepBtnText: {
-     fontSize: 15, 
-     color: '#333',
-      fontWeight: '400', 
-      lineHeight: 18 
-    },
-
+  costControl: { flexDirection: 'row', alignItems: 'center', gap: 8, marginRight: 24 },
+  stepBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: '#F0F0F0', alignItems: 'center', justifyContent: 'center' },
+  stepBtnText: { fontSize: 15, color: '#333', fontWeight: '400', lineHeight: 18 },
   costInputWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -3004,12 +2869,6 @@ dropdownMenuAbove: {
     paddingVertical: 8,
     paddingHorizontal: 12,
     minWidth: 110,
-    ...(Platform.OS !== 'web' && {
-     minWidth: 0,            // ξεκλείδωσε το min
-    width: undefined,       // ❗ μην το “κλειδώνεις” με fixed width
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-  }),
   },
   costInput: {
     flex: 1,
@@ -3018,15 +2877,7 @@ dropdownMenuAbove: {
     paddingVertical: 0,
     marginRight: 6,
     textAlign: 'right',
-   ...(Platform.OS !== 'web' && {
-    flexGrow: 0,
-    flexShrink: 1,
-    minWidth: 68,           // δώσε όριο να χωράει "20.00"
-    maxWidth: 84,           // κρατά το input compact
-    fontSize: 14,
-    marginRight: 4,
-    textAlign: 'center',
-  }),
+    ...(Platform.OS === 'web' ? { outlineWidth: 0 } : {}),
   },
   
 
