@@ -62,6 +62,7 @@ export const schema = appSchema({
         { name: 'order_status', type: 'string', isIndexed: true },
         { name: 'has_debt', type: 'boolean', isOptional: true },
         { name: 'receipt_number', type: 'string', isOptional: true },
+        { name: 'delivery_date', type: 'string', isOptional: true }, // ISO datetime string for delivery scheduling
         { name: 'created_by', type: 'string', isIndexed: true }, // -> users.id
         { name: 'created_at', type: 'number' },
         { name: 'last_modified_at', type: 'number' },
@@ -80,6 +81,10 @@ export const schema = appSchema({
         { name: 'status', type: 'string' },
         { name: 'storage_status', type: 'string', isOptional: true }, 
         { name: 'order_date', type: 'string', isOptional: true },
+        { name: 'length_m', type: 'string', isOptional: true },
+        { name: 'width_m', type: 'string', isOptional: true },
+        { name: 'area_m2', type: 'string', isOptional: true },
+        { name: 'price_per_m2', type: 'string', isOptional: true },
         { name: 'created_at', type: 'number' },
       ],
     }),

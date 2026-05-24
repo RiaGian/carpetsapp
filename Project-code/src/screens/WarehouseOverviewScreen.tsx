@@ -10,7 +10,6 @@ export default function WarehouseOverviewScreen() {
   const [φυλαξη, setΦυλαξη] = useState<any[]>([])
   const [επιστροφη, setΕπιστροφη] = useState<any[]>([])
   const [πλυμενα, setΠλυμενα] = useState<any[]>([])
-  const [απλυτα, setΑπλυτα] = useState<any[]>([])
 
     // helper
     const norm = (s?: string) =>
@@ -35,7 +34,6 @@ export default function WarehouseOverviewScreen() {
         setΦυλαξη(all.filter(x => norm(x.storage_status).includes('φυλαξ')));
         setΕπιστροφη(all.filter(x => norm(x.storage_status).includes('επιστροφ')));
         setΠλυμενα(all.filter(x => norm(x.status).includes('πλυμ')));
-        setΑπλυτα(all.filter(x => norm(x.status).includes('απλυτ')));
         } catch (e) {
         console.error('Failed to load warehouse items', e);
         } finally {
@@ -150,10 +148,9 @@ export default function WarehouseOverviewScreen() {
           {renderPanel('ΕΠΙΣΤΡΟΦΗ', '#EFF6FF', επιστροφη)}
         </View>
 
-        {/*  ΠΛΥΜΕΝΑ / ΑΠΛΥΤΑ */}
+        {/*  ΠΛΥΜΕΝΑ */}
         <View style={styles.row}>
-          {renderPanel('ΠΛΥΜΕΝΑ', '#FFE4E6', πλυμενα)}
-          {renderPanel('ΑΠΛΥΤΑ', '#FEF3C7', απλυτα)}
+          {renderPanel('ΠΛΥΜΕΝΑ', '#EDE9FE', πλυμενα)}
         </View>
       </ScrollView>
     </View>

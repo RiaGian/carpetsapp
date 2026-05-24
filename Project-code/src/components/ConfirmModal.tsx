@@ -1,5 +1,4 @@
 import { Modal, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
-import { colors } from '../theme/colors'
 
 
 type Props = {
@@ -58,6 +57,6 @@ const styles = StyleSheet.create({
   btnText: { fontWeight: '800', fontSize: 14 },
   cancel: { backgroundColor: '#F3F4F6' },
   cancelText: { color: '#374151' },
-  danger: { backgroundColor: '#e2edfeff' },
-  dangerText: { color: colors.primary },
+  danger: { backgroundColor: '#EF4444' },
+  dangerText: { color: '#FFFFFF' },
 })

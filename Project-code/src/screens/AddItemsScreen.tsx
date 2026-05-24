@@ -37,17 +37,18 @@ export default function AddItemsScreen() {
   }, [params.itemCount]);
 
   const [activeTab, setActiveTab] = useState<'free' | 'onshelf'>('free');
-  const [selectOpen, setSelectOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
 
 
 
   const [freeItems, setFreeItems] = useState<any[]>([])
   const [loadingFree, setLoadingFree] = useState(false)
   const [assigning, setAssigning] = useState(false) 
-  const [selectedItem, setSelectedItem] = useState<any | null>(null)
+  const [selectedItems, setSelectedItems] = useState<string[]>([]) // Array of item IDs
 
-  const canSubmit = !!selectedItem && activeTab === 'free'
+  const canSubmit = selectedItems.length > 0 && activeTab === 'free'
   const shelfMissing = !shelfId
 
   const [onShelfItems, setOnShelfItems] = useState<any[]>([])
@@ -62,22 +63,21 @@ export default function AddItemsScreen() {
   const [transferring, setTransferring] = useState(false)
 
 
-  // onSubmit
-const onSubmit = async () => {
-  if (!selectedItem || !shelfId || assigning) return
-  try {
-    setAssigning(true)
-    await assignItemToShelf({ orderItemId: selectedItem.id, shelfId, userId: actorId })
-    setFreeItems(prev => prev.filter(x => x.id !== selectedItem.id))
-    setSelectedItem(null)
-    router.back()
-  } catch (e: any) {
-    console.error('assign to shelf failed:', e)
-    alert(e?.message || 'Αποτυχία τοποθέτησης τεμαχίου στο ράφι.')
-  } finally {
-    setAssigning(false)
+  // Toggle item selection
+  const toggleItemSelection = (itemId: string) => {
+    setSelectedItems(prev => {
+      if (prev.includes(itemId)) {
+        return prev.filter(id => id !== itemId)
+      } else {
+        return [...prev, itemId]
+      }
+    })
   }
-}
+
+  // Deselect all items
+  const deselectAllItems = () => {
+    setSelectedItems([])
+  }
 
 const itemLabel = (it: any) => {
   const code = it.item_code || `#${String(it.id).slice(0,6).toUpperCase()}`
@@ -125,22 +125,111 @@ React.useEffect(() => {
   return () => { cancelled = true }
 }, [])
 
-// not un-washed items on shelves
+// All items that haven't been assigned to a shelf
 const filtered = React.useMemo(() => {
-  // not un-washed 
-  const washedOnly = freeItems.filter((it: any) => !isUnwashedStatus(it.status))
-
   // search
   const q = (query || '').trim().toLowerCase()
-  if (!q) return washedOnly
+  if (!q) return freeItems
 
-  return washedOnly.filter((it: any) => {
+  return freeItems.filter((it: any) => {
     const hay = [
       it.item_code, it.category, it.color, it.customer_name, it.order_id
     ].map(x => String(x || '').toLowerCase()).join(' | ')
     return hay.includes(q)
   })
 }, [query, freeItems])
+
+// Paginated results
+const paginatedResults = React.useMemo(() => {
+  const startIndex = (currentPage - 1) * itemsPerPage
+  const endIndex = startIndex + itemsPerPage
+  return filtered.slice(startIndex, endIndex)
+}, [filtered, currentPage, itemsPerPage])
+
+// Calculate total pages
+const totalPages = Math.ceil(filtered.length / itemsPerPage)
+
+// Reset to page 1 and clear selections when search query changes
+React.useEffect(() => {
+  setCurrentPage(1)
+  setSelectedItems([])
+}, [query])
+
+// Select all filtered items that are washed (πλυμένο) - defined after filtered
+const selectAllItems = React.useCallback(() => {
+  // Only select items that are washed (πλυμένο), not unwashed (άπλυτο)
+  const washedItems = filtered.filter((it: any) => {
+    const status = String(it.status || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '')
+      .trim()
+    return status === 'πλυμενο'
+  })
+  const washedIds = washedItems.map((it: any) => it.id)
+  setSelectedItems(washedIds)
+}, [filtered])
+
+// Check if all washed (πλυμένο) filtered items are selected (defined after filtered)
+const allSelected = React.useMemo(() => {
+  const washedItems = filtered.filter((it: any) => {
+    const status = String(it.status || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '')
+      .trim()
+    return status === 'πλυμενο'
+  })
+  return washedItems.length > 0 && washedItems.every((it: any) => selectedItems.includes(it.id))
+}, [filtered, selectedItems])
+
+// Check if item is unwashed (άπλυτο)
+const isUnwashedItem = (item: any) => {
+  const status = String(item.status || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .trim()
+  return status === 'απλυτο'
+}
+
+// onSubmit - add all selected items
+const onSubmit = React.useCallback(async () => {
+  if (selectedItems.length === 0 || !shelfId || assigning) return
+  
+  // Check if any selected item is unwashed (άπλυτο)
+  const selectedItemsData = freeItems.filter((item: any) => selectedItems.includes(item.id))
+  const unwashedItems = selectedItemsData.filter(isUnwashedItem)
+  
+  if (unwashedItems.length > 0) {
+    const unwashedCodes = unwashedItems.map((it: any) => it.item_code || `#${String(it.id).slice(0, 6).toUpperCase()}`).join(', ')
+    alert(
+      `Δεν μπορείτε να προσθέσετε άπλυτα τεμάχια στο ράφι.\n\n` +
+      `Τα παρακάτω τεμάχια είναι άπλυτα:\n${unwashedCodes}\n\n` +
+      `Παρακαλώ πρώτα ορίστε την κατάσταση τους ως "πλυμένο" και μετά προσπαθήστε ξανά.`
+    )
+    return
+  }
+  
+  try {
+    setAssigning(true)
+    
+    // Assign all selected items to shelf
+    for (const itemId of selectedItems) {
+      await assignItemToShelf({ orderItemId: itemId, shelfId, userId: actorId })
+    }
+    
+    // Remove added items from freeItems
+    setFreeItems(prev => prev.filter(x => !selectedItems.includes(x.id)))
+    setSelectedItems([])
+    router.back()
+  } catch (e: any) {
+    console.error('assign to shelf failed:', e)
+    alert(e?.message || 'Αποτυχία τοποθέτησης τεμαχίου στο ράφι.')
+  } finally {
+    setAssigning(false)
+  }
+}, [selectedItems, shelfId, assigning, actorId, freeItems])
 
 
 React.useEffect(() => {
@@ -331,34 +420,198 @@ function ShelfChip({ code }: { code?: string }) {
                 <Text style={styles.required}>*</Text>
               </View>
 
-              <Pressable
-                style={[
-                  styles.select,
-                  shelfMissing && { opacity: 0.6 } // οπτική ένδειξη ότι είναι κλειδωμένο
-                ]}
-                onPress={() => {
-                  if (shelfMissing) return
-                  setSelectOpen(true)
-                }}
-                disabled={shelfMissing}
-              >
-                <Ionicons name="search-outline" size={18} color="#9CA3AF" />
-                <Text
-                  style={[styles.selectText, { color: selectedItem ? '#111827' : '#9CA3AF' }]}
-                  numberOfLines={1}
-                >
-                  {selectedItem
-                    ? itemLabel(selectedItem)
-                    : 'Επιλέξτε τεμάχιο για προσθήκη στο ράφι...'}
-                </Text>
-                <Ionicons name="chevron-down" size={18} color="#9CA3AF" />
-              </Pressable>
+              {/* Search Bar */}
+              <View style={styles.searchRow}>
+                <Ionicons name="search-outline" size={18} color="#6B7280" />
+                <TextInput
+                  style={[
+                    styles.searchInput,
+                    Platform.OS === 'web' && ({ outlineStyle: 'none', outlineWidth: 0 } as any),
+                  ]}
+                  placeholder="Αναζήτηση κωδικού/περιγραφής/πελάτη..."
+                  placeholderTextColor="#9CA3AF"
+                  value={query}
+                  onChangeText={setQuery}
+                />
+              </View>
 
-              {/* helper κειμενάκι (προαιρετικό) */}
-              {!selectedItem && !shelfMissing && (
-                <Text style={{ marginTop: 6, fontSize: 12, color: '#6B7280' }}>
-                  Πάτησε για αναζήτηση και επιλογή τεμαχίου.
-                </Text>
+              {/* Select All Button */}
+              {filtered.length > 0 && (
+                <View style={{ marginBottom: 8, alignItems: 'flex-end' }}>
+                  <Pressable
+                    onPress={allSelected ? deselectAllItems : selectAllItems}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 6,
+                      paddingVertical: 6,
+                      paddingHorizontal: 12,
+                      backgroundColor: allSelected ? PURPLE : '#FFFFFF',
+                      borderRadius: 8,
+                      borderWidth: 1,
+                      borderColor: allSelected ? PURPLE : BORDER,
+                    }}
+                  >
+                    <Ionicons 
+                      name={allSelected ? "checkbox" : "square-outline"} 
+                      size={18} 
+                      color={allSelected ? '#FFFFFF' : PURPLE} 
+                    />
+                    <Text style={{
+                      fontSize: 13,
+                      fontWeight: '600',
+                      color: allSelected ? '#FFFFFF' : PURPLE,
+                    }}>
+                      {allSelected ? 'Αποεπιλογή Όλων' : 'Επιλογή Όλων'}
+                    </Text>
+                  </Pressable>
+                </View>
+              )}
+
+              {/* Items List */}
+              {loadingFree ? (
+                <View style={styles.emptyBox}>
+                  <Ionicons name="sync" size={36} color="#9CA3AF" />
+                  <Text style={styles.emptyText}>Φόρτωση…</Text>
+                </View>
+              ) : filtered.length === 0 ? (
+                <View style={styles.emptyBox}>
+                  <Ionicons name="file-tray-outline" size={36} color="#9CA3AF" />
+                  <Text style={styles.emptyText}>Δεν βρέθηκαν διαθέσιμα τεμάχια.</Text>
+                </View>
+              ) : (
+                <>
+                  <View style={{ flex: 1, maxHeight: 420, marginTop: 6 }}>
+                    <ScrollView
+                      contentContainerStyle={{ paddingBottom: 12 }}
+                      showsVerticalScrollIndicator
+                      persistentScrollbar
+                    >
+                      {paginatedResults.map((it: any) => {
+                      const code = it.item_code || `#${String(it.id).slice(0,6).toUpperCase()}`
+                      const normStatus = String(it.status || '')
+                        .toLowerCase()
+                        .normalize('NFD')
+                        .replace(/\p{Diacritic}/gu,'')
+                        .trim()
+                      const isWashed = normStatus === 'πλυμενο'
+                      const isUnwashed = normStatus === 'απλυτο'
+                      const isSelected = selectedItems.includes(it.id)
+                      const isItemUnwashed = isUnwashed
+
+                      return (
+                        <Pressable
+                          key={it.id}
+                          onPress={() => {
+                            // Don't allow selection of unwashed items - do nothing
+                            if (isItemUnwashed) {
+                              return
+                            }
+                            toggleItemSelection(it.id)
+                          }}
+                          style={[
+                            {
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              paddingVertical: 12,
+                              paddingHorizontal: 12,
+                              borderWidth: 1,
+                              borderColor: isSelected ? PURPLE : (isItemUnwashed ? '#FCA5A5' : BORDER),
+                              borderRadius: 12,
+                              backgroundColor: isSelected ? PURPLE_LIGHT : (isItemUnwashed ? '#FEF2F2' : '#FFFFFF'),
+                              marginBottom: 8,
+                              opacity: isItemUnwashed ? 0.7 : 1,
+                            },
+                            shelfMissing && { opacity: 0.6 }
+                          ]}
+                          disabled={shelfMissing || isItemUnwashed}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                              <Text style={{ fontSize: 15, fontWeight: '600', color: '#111827' }}>
+                                {code}
+                              </Text>
+                              {isWashed && (
+                                <View style={[styles.chip, styles.chipGreen]}>
+                                  <Text style={[styles.chipText, styles.chipGreenText]}>Πλυμένο</Text>
+                                </View>
+                              )}
+                              {isUnwashed && (
+                                <View style={[styles.chip, styles.chipOrange]}>
+                                  <Text style={[styles.chipText, styles.chipOrangeText]}>Άπλυτο</Text>
+                                </View>
+                              )}
+                            </View>
+                            <Text style={{ fontSize: 13, color: '#6B7280', marginBottom: 2 }}>
+                              {it.category || '—'} · {it.color || '—'}
+                            </Text>
+                            {it.customer_name ? (
+                              <Text style={{ fontSize: 12, color: '#9CA3AF' }}>
+                                {it.customer_name}
+                              </Text>
+                            ) : null}
+                            <Text style={{ fontSize: 12, color: '#059669', marginTop: 4, fontWeight: '500' }}>
+                              {it.price.toFixed(2)} €
+                            </Text>
+                          </View>
+                          {isSelected && (
+                            <Ionicons name="checkmark-circle" size={24} color={PURPLE} />
+                          )}
+                        </Pressable>
+                      )
+                      })}
+                    </ScrollView>
+                  </View>
+                  
+                  {/* Pagination Controls */}
+                  {totalPages > 1 && (
+                    <View style={styles.paginationContainer}>
+                      <Pressable
+                        onPress={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                        disabled={currentPage === 1}
+                        style={[
+                          styles.paginationButton,
+                          currentPage === 1 && styles.paginationButtonDisabled
+                        ]}
+                      >
+                        <Ionicons name="chevron-back" size={20} color={currentPage === 1 ? '#9CA3AF' : PURPLE} />
+                        <Text style={[
+                          styles.paginationButtonText,
+                          currentPage === 1 && styles.paginationButtonTextDisabled
+                        ]}>
+                          Προηγούμενη
+                        </Text>
+                      </Pressable>
+
+                      <View style={styles.paginationInfo}>
+                        <Text style={styles.paginationText}>
+                          Σελίδα {currentPage} από {totalPages}
+                        </Text>
+                        <Text style={styles.paginationSubtext}>
+                          ({filtered.length} {filtered.length === 1 ? 'τεμάχιο' : 'τεμάχια'})
+                        </Text>
+                      </View>
+
+                      <Pressable
+                        onPress={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                        disabled={currentPage === totalPages}
+                        style={[
+                          styles.paginationButton,
+                          currentPage === totalPages && styles.paginationButtonDisabled
+                        ]}
+                      >
+                        <Text style={[
+                          styles.paginationButtonText,
+                          currentPage === totalPages && styles.paginationButtonTextDisabled
+                        ]}>
+                          Επόμενη
+                        </Text>
+                        <Ionicons name="chevron-forward" size={20} color={currentPage === totalPages ? '#9CA3AF' : PURPLE} />
+                      </Pressable>
+                    </View>
+                  )}
+                </>
               )}
             </View>
           )}
@@ -473,7 +726,12 @@ function ShelfChip({ code }: { code?: string }) {
               >
                 <Ionicons name="document-text-outline" size={18} color="#FFFFFF" />
                 <Text style={styles.primaryText}>
-                  {assigning ? 'Προσθήκη...' : 'Προσθήκη Τεμαχίου'}
+                  {assigning 
+                    ? `Προσθήκη ${selectedItems.length} τεμαχίων...` 
+                    : selectedItems.length > 0 
+                      ? `Προσθήκη ${selectedItems.length} ${selectedItems.length === 1 ? 'Τεμαχίου' : 'Τεμαχίων'}`
+                      : 'Προσθήκη Τεμαχίου'
+                  }
                 </Text>
               </Pressable>
             </View>
@@ -482,141 +740,6 @@ function ShelfChip({ code }: { code?: string }) {
         </View>
       </View>
 
-      {/* Select Modal (χωρίς δεδομένα προς το παρόν) */}
-      <Modal visible={selectOpen} transparent animationType="fade">
-        <Pressable style={styles.modalOverlay} onPress={() => setSelectOpen(false)}>
-          <Pressable onPress={(e) => e.stopPropagation()} style={styles.selectModal}>
-            <View style={styles.selectHeader}>
-              <Ionicons name="checkbox-outline" size={18} color={PURPLE} />
-              <Text style={styles.selectHeaderText}>Επιλέξτε Τεμάχιο</Text>
-            </View>
-
-            <View style={styles.searchRow}>
-              <Ionicons name="search-outline" size={18} color="#6B7280" />
-              <TextInput
-                style={[
-                  styles.searchInput,
-                  Platform.OS === 'web' && ({ outlineStyle: 'none', outlineWidth: 0 } as any),
-                ]}
-                placeholder="Αναζήτηση κωδικού/περιγραφής/πελάτη..."
-                placeholderTextColor="#9CA3AF"
-                value={query}
-                onChangeText={setQuery}
-              />
-            </View>
-
-
-           {/* Body του modal */}
-                {/* Body του modal */}
-{loadingFree ? (
-  <View style={styles.emptyBox}>
-    <Ionicons name="sync" size={36} color="#9CA3AF" />
-    <Text style={styles.emptyText}>Φόρτωση…</Text>
-  </View>
-) : filtered.length === 0 ? (
-  <View style={styles.emptyBox}>
-    <Ionicons name="file-tray-outline" size={36} color="#9CA3AF" />
-    <Text style={styles.emptyText}>Δεν βρέθηκαν διαθέσιμα τεμάχια.</Text>
-  </View>
-) : (
-  <View style={{ flex: 1, maxHeight: 420, marginTop: 6 }}>
-    <ScrollView
-      contentContainerStyle={{ paddingBottom: 12 }}
-      showsVerticalScrollIndicator
-      persistentScrollbar
-    >
-      {filtered.map((it: any) => {
-        const code = it.item_code || `#${String(it.id).slice(0,6).toUpperCase()}`
-        const normStatus = String(it.status || '')
-          .toLowerCase()
-          .normalize('NFD')
-          .replace(/\p{Diacritic}/gu,'')
-          .trim()
-        const isWashed = normStatus === 'πλυμενο'
-        const isUnwashed = normStatus === 'απλυτο'
-
-        return (
-          <Pressable
-            key={it.id}
-            onPress={() => setSelectedItem(it)}
-            style={[
-              {
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                paddingVertical: 10,
-                paddingHorizontal: 12,
-                borderWidth: 1,
-                borderColor: BORDER,
-                borderRadius: 12,
-                marginBottom: 8,
-                backgroundColor: '#FFF',
-              },
-              selectedItem?.id === it.id && { borderColor: PURPLE },
-            ]}
-          >
-            {/* Αριστερά: pill κωδικού + στοιχεία */}
-            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10, flex: 1 }}>
-              <View style={styles.codePill}>
-                <Text style={styles.codePillText}>{code}</Text>
-              </View>
-
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontWeight: '800', color: '#111827' }} numberOfLines={1}>
-                  {(it.category || '—')} <Text style={{ color:'#6B7280', fontWeight: '900' }}>·</Text> {(it.color || '—')}
-                </Text>
-                {it.customer_name ? (
-                  <Text style={{ color: '#6B7280', fontSize: 12 }} numberOfLines={1}>
-                    Πελάτης: {it.customer_name}
-                  </Text>
-                ) : null}
-
-                {/* chips (ΧΩΡΙΣ ράφι εδώ) */}
-                <View style={{ flexDirection:'row', gap:8, marginTop:8 }}>
-                  {isWashed && (
-                    <View style={[styles.chip, styles.chipGreen]}>
-                      <Text style={[styles.chipText, styles.chipGreenText]}>Πλυμένο</Text>
-                    </View>
-                  )}
-                  {isUnwashed && (
-                    <View style={[styles.chip, styles.chipOrange]}>
-                      <Text style={[styles.chipText, styles.chipOrangeText]}>Άπλυτο</Text>
-                    </View>
-                  )}
-                </View>
-              </View>
-            </View>
-
-            {selectedItem?.id === it.id && (
-              <Ionicons name="checkmark-circle" size={20} color={PURPLE} />
-            )}
-          </Pressable>
-        )
-      })}
-    </ScrollView>
-  </View>
-)}
-
-
-
-            <View style={styles.modalActions}>
-              <Pressable style={styles.modalCancel} onPress={() => setSelectOpen(false)}>
-                <Text style={styles.modalCancelText}>Κλείσιμο</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.modalPick, !selectedItem && { opacity: 0.6 }]}
-                disabled={!selectedItem}
-                onPress={() => {
-                  if (!selectedItem) return
-                  setSelectOpen(false)
-                }}
-              >
-                <Text style={styles.modalPickText}>Χρήση επιλεγμένου</Text>
-              </Pressable>
-            </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
 
       {/* Move Modal */}
       <Modal visible={moveOpen} transparent animationType="fade">
@@ -1016,5 +1139,60 @@ shelfRow: {
 shelfCodeText: { fontWeight: '800', color: '#111827' },
 shelfMeta: { color: '#6B7280', fontSize: 12 },
 
+  // Pagination styles
+  paginationContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 16,
+    paddingHorizontal: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    marginTop: 8,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 0,
+  },
+  paginationButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+    ...(Platform.select({
+      web: { cursor: 'pointer' } as any,
+    }) as object),
+  },
+  paginationButtonDisabled: {
+    opacity: 0.5,
+    ...(Platform.select({
+      web: { cursor: 'not-allowed' } as any,
+    }) as object),
+  },
+  paginationButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: PURPLE,
+  },
+  paginationButtonTextDisabled: {
+    color: '#9CA3AF',
+  },
+  paginationInfo: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  paginationText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1F2A44',
+    marginBottom: 2,
+  },
+  paginationSubtext: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
 
 });

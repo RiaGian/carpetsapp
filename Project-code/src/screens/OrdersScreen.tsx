@@ -121,12 +121,12 @@ const generateSequentialCodes = async (
   let n = startNum; //counter (+1)
 
   while (codes.length < count) {
-    if (n > 999) {
+    if (n > 99999) {
       // limit
-      throw new Error('Ξεπέρασες το όριο κωδικών XXX999.');
+      throw new Error('Ξεπέρασες το όριο κωδικών X99999.');
     }
     // create candidate item's code (new)
-    const candidate = `${prefix}${String(n).padStart(3, '0')}`;
+    const candidate = `${prefix}${String(n).padStart(5, '0')}`;
     // check in DB if already code exists
     const taken = await existsItemCode(candidate);
     
@@ -266,7 +266,7 @@ export default function OrdersScreen() {
   const [codeErrors, setCodeErrors] = useState<Record<number, boolean>>({});
 
   // validation errors per row/field --> category,color,quantity,code
-  type FieldErr = 'required' | 'format' | 'max' | 'nan';
+  type FieldErr = 'required' | 'format' | 'max' | 'nan' | 'duplicate';
   type RowErr = {
     category?: FieldErr;
     color?: FieldErr;
@@ -292,9 +292,10 @@ export default function OrdersScreen() {
 
   const ERR_MSG: Record<FieldErr, string> = {
     required: 'Απαιτείται.',
-    format: 'Μη έγκυρη μορφή (XXX999).',
+    format: 'Μη έγκυρη μορφή (X99999).',
     max: 'Υπερβαίνει το μέγιστο (200).',
     nan: 'Μη έγκυρη αριθμητική τιμή.',
+    duplicate: 'Ο κωδικός υπάρχει ήδη στην παραγγελία.',
   };
 
 
@@ -330,7 +331,7 @@ export default function OrdersScreen() {
     }
 
     // --- Κωδικός (μορφή + μοναδικότητα) ---
-    const CODE_RE = /^[A-ZΑ-Ω]{3}\d{3}$/;
+    const CODE_RE = /^[A-ZΑ-Ω]{1}\d{5}$/;
     const baseCode = (ord.itemCode ?? '').trim().toUpperCase();
 
     if (!baseCode) {
@@ -340,10 +341,18 @@ export default function OrdersScreen() {
       flagFieldErr(i, { itemCode: 'format' });
       hasErr = true;
     } else {
+      // Check if code already exists in database
       const baseTaken = await existsItemCode(baseCode);
       if (baseTaken) {
         setCodeErrors(prev => ({ ...prev, [i]: true }));
         return;  //live check 
+      }
+      
+      // Check if code already exists in current order's pieces
+      const existingCodes = pieces.map(p => (p.code || '').toUpperCase()).filter(Boolean);
+      if (existingCodes.includes(baseCode)) {
+        flagFieldErr(i, { itemCode: 'duplicate' });
+        hasErr = true;
       } else {
         clearFieldErr(i, 'itemCode');
         setCodeErrors(prev => ({ ...prev, [i]: false }));
@@ -373,14 +382,23 @@ export default function OrdersScreen() {
     // --- Αν περάσει ο έλεγχος, προχώρα όπως πριν ---
     const qtyNum = Math.max(1, qtyParsed);
 
-    const prefix = baseCode.slice(0, 3);
-    const baseNum = parseInt(baseCode.slice(3), 10);
+    const prefix = baseCode.slice(0, 1);
+    const baseNum = parseInt(baseCode.slice(1), 10);
     let codes: string[] = [];
 
     try {
       codes = await generateSequentialCodes(prefix, baseNum, qtyNum);
     } catch (e: any) {
       Alert.alert('Προσοχή', e?.message || 'Αποτυχία δημιουργίας διαδοχικών κωδικών.');
+      return;
+    }
+
+    // Check if any generated codes already exist in current order's pieces
+    const existingCodes = pieces.map(p => (p.code || '').toUpperCase()).filter(Boolean);
+    const duplicateCodes = codes.filter(code => existingCodes.includes(code.toUpperCase()));
+    if (duplicateCodes.length > 0) {
+      flagFieldErr(i, { itemCode: 'duplicate' });
+      Alert.alert('Προσοχή', `Οι κωδικοί ${duplicateCodes.join(', ')} υπάρχουν ήδη στην παραγγελία.`);
       return;
     }
 
@@ -643,10 +661,10 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
       // code check
       const badCode = pieces.find(p =>
         (p.code ?? '').trim() &&
-        !/^[A-ZΑ-Ω]{3}\d{3}$/.test((p.code ?? '').trim().toUpperCase())
+        !/^[A-ZΑ-Ω]{1}\d{5}$/.test((p.code ?? '').trim().toUpperCase())
       );
       if (badCode) {
-        Alert.alert('Προσοχή', 'Ο Κωδικός τεμαχίου πρέπει να είναι της μορφής XXX999 (π.χ. CHR001).');
+        Alert.alert('Προσοχή', 'Ο Κωδικός τεμαχίου πρέπει να είναι της μορφής X99999 (π.χ. T22222).');
         return;
       }
 
@@ -1174,7 +1192,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                           }
 
                           // live check
-                          const CODE_RE = /^[A-ZΑ-Ω]{3}\d{3}$/;
+                          const CODE_RE = /^[A-ZΑ-Ω]{1}\d{5}$/;
                           if (CODE_RE.test(clean)) {
                             const taken = await existsItemCode(clean);
                             setCodeErrors(prev => ({ ...prev, [idx]: taken }));
@@ -1307,6 +1325,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                   <View style={styles.pieceInfo}>
                     <Text style={styles.pieceTitle}>Τεμάχιο {i + 1}</Text>
                     <Text style={styles.pieceSubtitle}>Κατηγορία: {p.category ?? '—'}</Text>
+                    {!!p.code && <Text style={styles.pieceSubtitle}>Κωδικός: {p.code}</Text>}
                   </View>
 
                   {/* Κόστος με – [input] + */}

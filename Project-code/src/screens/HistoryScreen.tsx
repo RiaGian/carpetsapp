@@ -87,6 +87,7 @@ function OrderStatusChip({ status }: { status?: string }) {
     'νεα':              { bg: '#DBEAFE', fg: '#1E40AF', label: 'Νέα' },
     'σε επεξεργασια':   { bg: '#FEF3C7', fg: '#92400E', label: 'Σε επεξεργασία' },
     'ετοιμη':           { bg: '#E0F2FE', fg: '#075985', label: 'Έτοιμη' },
+    'προς παραδοση':    { bg: '#FCE7F3', fg: '#9F1239', label: 'Προς παράδοση' },
     'παραδοθηκε':       { bg: '#DCFCE7', fg: '#166534', label: 'Παραδόθηκε' },
   }
 

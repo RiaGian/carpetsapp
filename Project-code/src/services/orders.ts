@@ -29,6 +29,7 @@ export type UpdateOrder = Partial<{
   orderStatus: string 
   hasDebt: boolean      
   receiptNumber: string
+  deliveryDate: string // ISO datetime string
 }>
 
 /** CREATE */
@@ -91,6 +92,31 @@ export function observeOrders(limit = 200) {
     .observe()
 }
 
+/** READ (ενεργές - όχι παραδομένες) */
+export function observeActiveOrders(limit = 200) {
+  const orders = database.get('orders')
+  return orders
+    .query(
+      Q.where('order_status', Q.notLike('Παραδόθηκε')),
+      Q.sortBy('created_at', Q.desc),
+      Q.take(limit)
+    )
+    .observe()
+}
+
+/** READ (προς παράδοση - για calendar) */
+export function observeReadyForDeliveryOrders(limit = 1000) {
+  const orders = database.get('orders')
+  return orders
+    .query(
+      Q.where('order_status', 'Προς παράδοση'),
+      Q.where('delivery_date', Q.notLike('')), // Only orders with delivery_date (not empty)
+      Q.sortBy('delivery_date', Q.asc), // Sort by delivery date
+      Q.take(limit)
+    )
+    .observe()
+}
+
 export async function listOrders(limit = 200) {
   const orders = database.get('orders')
   return orders
@@ -149,6 +175,7 @@ export async function getOrderById(id: string) {
     customerId: rec.customer?.id ?? rec.customer_id, 
     createdBy: rec.createdBy?.id ?? rec.created_by,
     receiptNumber: rec.receiptNumber ?? rec._raw?.receipt_number ?? null,
+    deliveryDate: rec.deliveryDate ?? rec._raw?.delivery_date ?? null,
   }
 }
 
@@ -222,6 +249,9 @@ export async function updateOrder(
       }
       if (typeof data.hasDebt !== 'undefined') {
         r.hasDebt = !!data.hasDebt
+      }
+      if (typeof data.deliveryDate !== 'undefined') {
+        r.deliveryDate = data.deliveryDate || null
       }
 
       r.lastModifiedAt = Date.now()
