@@ -266,7 +266,7 @@ export default function OrdersScreen() {
   const [codeErrors, setCodeErrors] = useState<Record<number, boolean>>({});
 
   // validation errors per row/field --> category,color,quantity,code
-  type FieldErr = 'required' | 'format' | 'max' | 'nan';
+  type FieldErr = 'required' | 'format' | 'max' | 'nan' | 'duplicate';
   type RowErr = {
     category?: FieldErr;
     color?: FieldErr;
@@ -295,6 +295,7 @@ export default function OrdersScreen() {
     format: 'Μη έγκυρη μορφή (X99999).',
     max: 'Υπερβαίνει το μέγιστο (200).',
     nan: 'Μη έγκυρη αριθμητική τιμή.',
+    duplicate: 'Ο κωδικός υπάρχει ήδη στην παραγγελία.',
   };
 
 
@@ -340,10 +341,18 @@ export default function OrdersScreen() {
       flagFieldErr(i, { itemCode: 'format' });
       hasErr = true;
     } else {
+      // Check if code already exists in database
       const baseTaken = await existsItemCode(baseCode);
       if (baseTaken) {
         setCodeErrors(prev => ({ ...prev, [i]: true }));
         return;  //live check 
+      }
+      
+      // Check if code already exists in current order's pieces
+      const existingCodes = pieces.map(p => (p.code || '').toUpperCase()).filter(Boolean);
+      if (existingCodes.includes(baseCode)) {
+        flagFieldErr(i, { itemCode: 'duplicate' });
+        hasErr = true;
       } else {
         clearFieldErr(i, 'itemCode');
         setCodeErrors(prev => ({ ...prev, [i]: false }));
@@ -381,6 +390,15 @@ export default function OrdersScreen() {
       codes = await generateSequentialCodes(prefix, baseNum, qtyNum);
     } catch (e: any) {
       Alert.alert('Προσοχή', e?.message || 'Αποτυχία δημιουργίας διαδοχικών κωδικών.');
+      return;
+    }
+
+    // Check if any generated codes already exist in current order's pieces
+    const existingCodes = pieces.map(p => (p.code || '').toUpperCase()).filter(Boolean);
+    const duplicateCodes = codes.filter(code => existingCodes.includes(code.toUpperCase()));
+    if (duplicateCodes.length > 0) {
+      flagFieldErr(i, { itemCode: 'duplicate' });
+      Alert.alert('Προσοχή', `Οι κωδικοί ${duplicateCodes.join(', ')} υπάρχουν ήδη στην παραγγελία.`);
       return;
     }
 

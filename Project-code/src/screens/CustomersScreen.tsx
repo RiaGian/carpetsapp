@@ -9,6 +9,7 @@ import {
   Alert,
   FlatList,
   Image,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -17,7 +18,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native'
 import { Calendar } from 'react-native-calendars'
 import { Circle, Svg } from 'react-native-svg'
@@ -357,14 +358,31 @@ function OrderCard({
       </View>
 
       {/* expanded details */}
-      {expanded && (
-        <View style={styles.orderDetailsBox}>
-          <KV label="Ημερομηνία παραγγελίας" value={date} />
-          <KV label="Αρ. Δελτίου Παραλαβής" value={(receiptNumber || '').trim() || '—'} />
-          <KV label="Αριθμός τεμαχίων" value={typeof itemsCount === 'number' ? String(itemsCount) : '—'} />
-          <KV label="Συνολικό κόστος" value={total} />
-          <KV label="Προκαταβολή" value={deposit} />
-          <KV label="Τρόπος πληρωμής" value={paymentMethod} />
+      {expanded && (() => {
+        // Calculate final cost and reminder
+        // total is already formatted, so we need to parse it back
+        const totalNum = parseFloat(total.replace(/[^\d.,]/g, '').replace(',', '.')) || 0
+        const depositNum = deposit !== '—' ? (parseFloat(deposit.replace(/[^\d.,]/g, '').replace(',', '.')) || 0) : 0
+        const hasDeposit = deposit !== '—' && depositNum > 0
+        const finalCost = totalNum + depositNum
+        const reminder = totalNum // totalAmount is already items - deposit (remaining balance)
+
+        return (
+          <View style={styles.orderDetailsBox}>
+            <KV label="Ημερομηνία παραγγελίας" value={date} />
+            <KV label="Αρ. Δελτίου Παραλαβής" value={(receiptNumber || '').trim() || '—'} />
+            <KV label="Αριθμός τεμαχίων" value={typeof itemsCount === 'number' ? String(itemsCount) : '—'} />
+            <KV label="Συνολικό κόστος" value={fmtMoney(finalCost)} />
+            {hasDeposit && (
+              <>
+                <KV label="Προκαταβολή" value={deposit} />
+                <KV label="Υπόλοιπο" value={fmtMoney(reminder)} />
+              </>
+            )}
+            {!hasDeposit && (
+              <KV label="Προκαταβολή" value={deposit} />
+            )}
+            <KV label="Τρόπος πληρωμής" value={paymentMethod} />
           {status === 'Προς παράδοση' && deliveryDate && (() => {
             const deliveryDateTime = new Date(deliveryDate)
             const deliveryDateStr = deliveryDateTime.toLocaleDateString('el-GR', { 
@@ -396,34 +414,35 @@ function OrderCard({
             )
           })()}
 
-          {notes ? <View style={{ height: 6 }} /> : null}
-          {notes ? <Text style={styles.orderNotes}>{notes}</Text> : null}
+            {notes ? <View style={{ height: 6 }} /> : null}
+            {notes ? <Text style={styles.orderNotes}>{notes}</Text> : null}
 
-          {/* action bar */}
-          <View style={styles.orderActionsRow}>
-            <View style={{ flex: 1 }} />
+            {/* action bar */}
+            <View style={styles.orderActionsRow}>
+              <View style={{ flex: 1 }} />
 
-             {/* dropdown */}
-            <View style={{ marginRight: 8 }}>
-              <SimpleDropdown
-                value={status}
-                placeholder="Κατάσταση"
-                options={ORDER_STATUS_OPTIONS}
-                onChange={onChangeStatus}
-                width={160}
-              />
+               {/* dropdown */}
+              <View style={{ marginRight: 8 }}>
+                <SimpleDropdown
+                  value={status}
+                  placeholder="Κατάσταση"
+                  options={ORDER_STATUS_OPTIONS}
+                  onChange={onChangeStatus}
+                  width={160}
+                />
+              </View>
+
+              <TouchableOpacity onPress={onEdit} style={[styles.actionBtn, styles.actionBtnPrimary]}>
+                <Text style={styles.actionBtnPrimaryText}>Επεξεργασία</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={onClose} style={[styles.actionBtn, styles.actionBtnDanger]}>
+                <Text style={styles.actionBtnDangerText}>Κλείσιμο</Text>
+              </TouchableOpacity>
             </View>
-
-            <TouchableOpacity onPress={onEdit} style={[styles.actionBtn, styles.actionBtnPrimary]}>
-              <Text style={styles.actionBtnPrimaryText}>Επεξεργασία</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity onPress={onClose} style={[styles.actionBtn, styles.actionBtnDanger]}>
-              <Text style={styles.actionBtnDangerText}>Κλείσιμο</Text>
-            </TouchableOpacity>
           </View>
-        </View>
-      )}
+        )
+      })()}
     </TouchableOpacity>
   )
 }
@@ -2518,6 +2537,7 @@ function ReadyForceConfirmModal({
   )
 }
 
+const isWeb = Platform.OS === 'web';
 
   return (
     <Page>
@@ -2529,7 +2549,11 @@ function ReadyForceConfirmModal({
           <Text style={styles.primaryBtnText}>+ Νέος Πελάτης</Text>
         </TouchableOpacity>
 
-        <View style={{ flex: 1 }} />
+        {Platform.OS === 'web' ? (
+          <View style={{ flex: 1 }} />
+        ) : (
+          <View style={{ width: 12 }} /> 
+        )}
 
         {/* Search */}
         <View
@@ -3080,7 +3104,8 @@ function ReadyForceConfirmModal({
                   </View>
                 </View>
 
-               
+              
+              {isWeb ? (
                 <View style={styles.detailsContentRow}>
                   {/* scroll */}
                   <ScrollView
@@ -3275,9 +3300,9 @@ function ReadyForceConfirmModal({
                             key={oid}
                             onPress={() => {
                               setActiveTab('orders')
-                              setExpandedOrderId(oid) // άνοιξε τη συγκεκριμένη παραγγελία
+                              setExpandedOrderId(oid) 
                             }}
-                            style={styles.debtRow} // reuse το ίδιο ωραίο row style
+                            style={styles.debtRow} 
                           >
                             <View style={styles.debtDot} />
                             <Text style={styles.returnsText}>
@@ -3293,6 +3318,159 @@ function ReadyForceConfirmModal({
 
                   </View>
                 </View>
+
+               ) : (
+                 /*  iOS/Android: */
+                <KeyboardAvoidingView
+                  behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                  keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0}
+                  style={{ flex: 1 }}
+                >
+                  <ScrollView
+                    contentContainerStyle={{ padding: 12, paddingBottom: 50 }}
+                    keyboardShouldPersistTaps="handled"
+                    showsVerticalScrollIndicator
+                  >
+                    {/* ΣΕΙΡΑ 1: Όνομα | Επώνυμο */}
+                    <View style={{ flexDirection: 'row', gap: 10 }}>
+                      <View style={{ flex: 1 }}>
+                        <FieldRow
+                          label="Όνομα"
+                          value={edit.firstName}
+                          editable={editMode}
+                          onChangeText={(v)=>{ setEdit(s=>({...s, firstName:v})); if (editErr.firstName && v.trim()) setEditErr(s=>({...s, firstName:false})); }}
+                        />
+                        {editMode && editErr.firstName && <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>Το όνομα είναι υποχρεωτικό.</Text>}
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <FieldRow
+                          label="Επώνυμο"
+                          value={edit.lastName}
+                          editable={editMode}
+                          onChangeText={(v)=>{ setEdit(s=>({...s, lastName:v})); if (editErr.lastName && v.trim()) setEditErr(s=>({...s, lastName:false})); }}
+                        />
+                        {editMode && editErr.lastName && <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>Το επώνυμο είναι υποχρεωτικό.</Text>}
+                      </View>
+                    </View>
+
+                    {/* ΣΕΙΡΑ 2: Τηλέφωνο | Διεύθυνση, Πόλη */}
+                    <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
+                      <View style={{ flex: 1 }}>
+                        <FieldRow
+                          label="Τηλέφωνο"
+                          value={edit.phone}
+                          editable={editMode}
+                          keyboardType="phone-pad"
+                          onChangeText={(v)=>{ setEdit(s=>({...s, phone:v})); if (editErr.phone && v.trim()) setEditErr(s=>({...s, phone:false})); }}
+                        />
+                        {editMode && editErr.phone && <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>Το τηλέφωνο είναι υποχρεωτικό.</Text>}
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <FieldRow
+                          label="Διεύθυνση, Πόλη"
+                          value={pairsCombined}
+                          editable={editMode}
+                          onChangeText={(v)=>{ setPairsCombined(v); if (editErr.pairs && v.trim()) setEditErr(s=>({...s, pairs:false})); }}
+                          onBlur={()=>{ const { addressPipe, cityPipe } = parsePairs(pairsCombined); setEdit(s=>({ ...s, address: addressPipe, city: cityPipe })); }}
+                        />
+                        {editMode && <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>Π.χ: Οδός1, Πόλη1 | Οδός2, Πόλη2</Text>}
+                      </View>
+                    </View>
+
+                    {/* ΣΕΙΡΑ 3: ΑΦΜ | Τιμή/τ.μ. */}
+                    <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
+                      <View style={{ flex: 1 }}>
+                        <FieldRow
+                          label="ΑΦΜ"
+                          value={edit.afm}
+                          editable={editMode}
+                          keyboardType="number-pad"
+                          inputMode="numeric"
+                          maxLength={9}
+                          onChangeText={(raw)=>{
+                            const d=(raw||'').replace(/\D/g,'');
+                            if (d.length>9){ setEdit(s=>({...s, afm:d.slice(0,9)})); setAfmEditError('Το ΑΦΜ είναι ακριβώς 9 ψηφία.'); return; }
+                            setEdit(s=>({...s, afm:d}));
+                            if (d.length===9) setAfmEditError(''); else if (d.length>0) setAfmEditError('Το ΑΦΜ πρέπει να έχει 9 ψηφία.'); else setAfmEditError('');
+                          }}
+                          onBlur={()=>{ if (edit.afm && !/^\d{9}$/.test(edit.afm)) setAfmEditError('Το ΑΦΜ πρέπει να έχει 9 ψηφία.'); }}
+                          error={!!afmEditError}
+                          errorMessage={afmEditError}
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <FieldRow
+                          label="Τιμή/τ.μ. (προαιρετικό)"
+                          value={edit.pricePerSqm}
+                          editable={editMode}
+                          keyboardType="decimal-pad"
+                          onChangeText={(raw)=>{ const v=(raw||'').replace(/[^0-9.,]/g,'').replace(',', '.'); setEdit(s=>({...s, pricePerSqm:v})); }}
+                          onBlur={()=>{ const v=(edit.pricePerSqm||'').trim(); if (v && !isNaN(Number(v))) setEdit(s=>({...s, pricePerSqm:Number(v).toFixed(2)})); }}
+                        />
+                      </View>
+                    </View>
+
+                    {/* ΠΕΡΙΓΡΑΦΗ: full-width, πιο «κοντή» */}
+                    <Text style={[styles.rightTitle, { marginTop: 12 }]}>Περιγραφή</Text>
+                    {editMode ? (
+                      <TextInput
+                        style={[styles.notesInput, { minHeight: 120 }]}  // πιο κοντή
+                        value={edit.notesBase}
+                        onChangeText={(v)=>setEdit(s=>({...s, notesBase:v}))}
+                        placeholder="Προσθέστε περιγραφή…"
+                        placeholderTextColor="#9CA3AF"
+                        multiline
+                      />
+                    ) : (
+                      <View style={[styles.notesViewBoxPolished, { minHeight: 100 }]}>
+                        <Text style={styles.notesText}>{parseNotes(selectedCustomer?.notes).desc || '—'}</Text>
+                      </View>
+                    )}
+
+                    {/* ΧΡΕΗ */}
+                    {orders.some(o=>o.hasDebt) && (
+                      <View style={styles.debtBox}>
+                        <Text style={styles.debtTitle}>Χρέη παραγγελιών</Text>
+                        {orders.filter(o=>o.hasDebt).map(o=>(
+                          <Pressable key={o.id} onPress={()=>{ setDebtOrderToPay(o.id); setShowDebtPaymentModal(true); }} style={styles.debtRow}>
+                            <View style={styles.debtDot} />
+                            <Text style={styles.debtText}>Η παραγγελία <Text style={styles.debtCode}>#{o.id.slice(0,6).toUpperCase()}</Text> έχει χρέος!</Text>
+                            <Ionicons name="chevron-forward" size={16} color="#B91C1C" />
+                          </Pressable>
+                        ))}
+                      </View>
+                    )}
+
+                    {/* ΥΠΟΛΕΙΠΟΝΤΑΙ */}
+                    {selectedCustomer && (pendingReturnsByCustomer[selectedCustomer.id]?.length || 0) > 0 && (
+                     <View style={styles.returnsBox}>
+                      {(pendingReturnsByCustomer[selectedCustomer.id] || []).map((oid) => (
+                        <Pressable
+                          key={oid}
+                          onPress={() => {
+                            setActiveTab('orders');
+                            setExpandedOrderId(oid);
+                          }}
+                          style={[styles.debtRow, styles.returnsRow]} 
+                        >
+                          <View style={styles.debtDot} />
+                          <Text style={styles.returnsText}>
+                            Υπολείπονται κομμάτια για επιστροφή στην παραγγελία{' '}
+                            <Text style={styles.debtCode}>#{oid.slice(0, 6).toUpperCase()}</Text>
+                          </Text>
+                          <Ionicons
+                            name="chevron-forward"
+                            size={16}
+                            color="#92400E"
+                            style={{ marginLeft: 8, flexShrink: 0 }} 
+                          />
+                        </Pressable>
+                      ))}
+                    </View>
+                    )}
+                  </ScrollView>
+                </KeyboardAvoidingView>
+              )}
               </View>
             )}
 
@@ -3437,7 +3615,7 @@ function ReadyForceConfirmModal({
 
                               try {
                                 await updateOrder(item.id, { orderStatus: v, hasDebt: false }, userId)
-                                // ✅ ΜΕΤΑ την επιτυχή ενημέρωση
+
                                 if (selectedCustomer) removePendingReturn(selectedCustomer.id, item.id)
                               } catch (e) {
                                 console.error('updateOrder status failed', e)
@@ -3593,7 +3771,13 @@ function ReadyForceConfirmModal({
           <View style={styles.itemEditCard}>
             {/* Header με actions δεξιά */}
             <View style={styles.itemEditHeader}>
-              <Text style={styles.itemsTitle}>Επεξεργασία τεμαχίου</Text>
+              <Text
+                style={styles.itemsTitle}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
+                {Platform.OS === 'web' ? 'Επεξεργασία τεμαχίου' : 'Επεξεργασία'}
+              </Text>
               <View style={{ flex: 1 }} />
               <TouchableOpacity
                 onPress={() => setSelectedItem(null)}
@@ -4180,6 +4364,14 @@ const styles = StyleSheet.create({
     marginTop: 12,
     paddingHorizontal: 12,
     gap: 10,
+    ...(Platform.select({
+    web: {},
+    default: {
+      flexWrap: 'wrap',       
+      paddingHorizontal: 8,
+      gap: 8,
+    },
+  }) as object),
   },
 
   primaryBtn: {
@@ -4259,12 +4451,16 @@ hairline: {
 
 notesViewBoxPolished: {
   borderWidth: 1.5,
-  borderColor: '#E5E7EB',     // ίδιο γκρι με τα inputs
-  backgroundColor: '#F9FAFB', // απαλό γκρι, όχι μπλε
-  borderRadius: 10,           // ίδιο radius με τα υπόλοιπα
+  borderColor: '#E5E7EB',    
+  backgroundColor: '#F9FAFB', 
+  borderRadius: 10,         
   paddingHorizontal: 10,
   paddingVertical: 8,
   minHeight: 160,
+  ...(Platform.select({
+    web: {},
+    default: { minHeight: 120, marginBottom: 10 }, 
+  }) as object),
 },
 
 
@@ -4285,6 +4481,10 @@ roHelperText: {
     color: '#6B7280',
     fontWeight: '700',
     marginBottom: 6,
+     ...(Platform.select({
+      web: {},
+      default: { fontSize: 11, letterSpacing: 0.2 }, // πιο compact
+    }) as object),
   },
 
   searchBox: {
@@ -4297,12 +4497,37 @@ roHelperText: {
     paddingHorizontal: 10,
     paddingVertical: 8,
     minWidth: 260,
+   ...(Platform.select({
+    web: {},
+    default: {
+      flex: 1,
+      width: '98%',      
+      maxWidth: 780,    
+      alignSelf: 'center', 
+      marginLeft: -10,     
+      minWidth: 0,
+      paddingVertical: 8,
+      borderWidth: 1.5,
+      borderRadius: 12,
+      marginTop: 6,
+    },
+  }) as object),
+
   },
 
   searchInput: { 
     flex: 1, 
     fontSize: 14, 
-    color: '#111827' 
+    color: '#111827' ,
+    ...(Platform.select({
+    web: {},
+    default: {
+      fontSize: 13,        
+      lineHeight: 18,
+      paddingVertical: 0,
+      includeFontPadding: false as any, 
+    },
+  }) as object),
   },
 
   countText: { 
@@ -4417,6 +4642,16 @@ roHelperText: {
       android: { elevation: 8 },
       web: { boxShadow: '0 18px 40px rgba(0,0,0,0.18)' } as any,
     }) as object),
+    ...(Platform.select({
+    web:{},
+    default:{
+      width: '92%',       // από 45% → 92% σε κινητό
+      maxHeight: '86%',   // να μη σκάει κάτω από το πληκτρολόγιο
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      borderRadius: 16,
+    },
+  }) as object),
   },
 
   modalHeader: { 
@@ -4465,6 +4700,16 @@ roHelperText: {
     paddingVertical: 10, 
     fontSize: 14, 
     color: '#111827',
+     ...(Platform.select({
+      web: {},
+      default: {
+        minHeight: 40,       
+        paddingVertical: 8,  
+        paddingHorizontal: 12,
+        fontSize: 11,       
+        textAlignVertical: 'center',
+      },
+    }) as object),
   },
 
   textarea: { 
@@ -4575,8 +4820,23 @@ actionGhostBtn: {
   paddingHorizontal: 12,
   paddingVertical: 8,
   marginRight: 8,
+  ...(Platform.select({
+    web: {},
+    default: {
+      paddingHorizontal: 6,
+      paddingVertical: 4,
+    },
+  }) as object),
 },
-actionGhostText: { color: '#374151', fontWeight: '600' },
+actionGhostText: { 
+  color: '#374151', 
+  fontWeight: '600' ,
+   ...(Platform.select({
+    web: {},
+    default: { fontSize: 13 },
+  }) as object),
+},
+
 actionPrimaryBtn: {
   flexDirection: 'row',
   alignItems: 'center',
@@ -4584,8 +4844,22 @@ actionPrimaryBtn: {
   borderRadius: 10,
   paddingHorizontal: 14,
   paddingVertical: 9,
+  ...(Platform.select({
+    web: {},
+    default: {
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+    },
+  }) as object),
 },
-actionPrimaryText: { color: '#fff', fontWeight: '800' },
+actionPrimaryText: { 
+  color: '#fff', 
+  fontWeight: '800' ,
+   ...(Platform.select({
+    web: {},
+    default: { fontSize: 13 },
+  }) as object),
+},
 
 itemFormGrid: {
   flexDirection: 'row',
@@ -4683,9 +4957,22 @@ itemEditCard: {
   borderRadius: 16,
   padding: 14,
   ...(Platform.select({
-    ios: { shadowColor: '#000', shadowOpacity: 0.14, shadowRadius: 16, shadowOffset: { width: 0, height: 8 } },
+    ios:     { shadowColor: '#000', shadowOpacity: 0.14, shadowRadius: 16, shadowOffset: { width: 0, height: 8 } },
     android: { elevation: 6 },
-    web: { boxShadow: '0 16px 38px rgba(0,0,0,0.14)' } as any,
+    web:     { boxShadow: '0 16px 38px rgba(0,0,0,0.14)' } as any,
+  }) as object),
+
+  // 🔽 μόνο για iOS/Android
+  ...(Platform.select({
+    web: {},
+    default: {
+      width: '98%',         // ↑ όσο πιο full-width γίνεται
+      maxWidth: 680,        // ↑ λίγο πιο φαρδύ, ιδανικό για 2 στήλες dropdowns
+      maxHeight: '92%',     // ↑ λίγο πιο ψηλό
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      borderRadius: 18,
+    },
   }) as object),
 },
 
@@ -4702,6 +4989,10 @@ itemEditCard: {
     backgroundColor: 'transparent',
     padding: 14,
     borderRadius: 10,
+     ...(Platform.select({
+      web: {},
+      default: { padding: 10, marginTop: 10, borderRadius: 10, minHeight: 260 }, // <- reserve space
+    }) as object),
   },
 
   vDivider: {
@@ -4815,6 +5106,10 @@ itemEditCard: {
     padding: 4,
     marginBottom: 12,
     gap: 6,
+     ...(Platform.select({
+    web: {},
+    default: { paddingHorizontal: 6 }, 
+  }) as object),
   },
   tabFlex: { flex: 1 },
   tabBtnXL: {
@@ -4824,6 +5119,10 @@ itemEditCard: {
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'transparent',
+    ...(Platform.select({
+    web: {},
+    default: { paddingVertical: 8, paddingHorizontal: 8, minHeight: 38 }, // ↓ mobile
+  }) as object),
   },
   tabBtnXLActive: {
     backgroundColor: '#FFFFFF',
@@ -4831,15 +5130,32 @@ itemEditCard: {
     shadowOpacity: 0.08,
     shadowRadius: 4,
     elevation: 2,
+     ...(Platform.select({
+    web: {},
+    default: {
+      shadowOpacity: 0,
+      elevation: 0,
+      borderWidth: 1,
+      borderColor: '#E5E7EB',
+    },
+  }) as object),
   },
   tabTextXL: {
     fontSize: 14,
     color: '#6B7280',
     fontWeight: '500',
+    ...(Platform.select({
+    web: {},
+    default: { fontSize: 13, lineHeight: 16 }, 
+  }) as object),
   },
   tabTextXLActive: {
     color: '#111827',
     fontWeight: '600',
+     ...(Platform.select({
+    web: {},
+    default: { fontSize: 13, lineHeight: 16 }, 
+  }) as object),
   },
 
   /* Top actions bar */
@@ -4884,7 +5200,16 @@ itemEditCard: {
     color: '#1D4ED8',
     fontWeight: '800',
   },
-  orderDateText: { color: '#6B7280' },
+  orderDateText: { 
+    color: '#6B7280',  
+    ...(Platform.select({
+      web: {},
+      default: {
+        fontSize: 9,   
+        lineHeight: 14,
+      },
+    }) as object),
+   },
   orderTotalText: { fontWeight: '800', color: '#111827' },
 
   badgeRow: {
@@ -5033,6 +5358,10 @@ itemsTitle: {
   fontSize: 16,
   fontWeight: '700',
   color: '#111827',
+   ...(Platform.select({
+    web: {},
+    default: { fontSize: 14 },
+  }) as object),
 },
 
 itemRow: {
@@ -5387,6 +5716,10 @@ debtTitle: {
   fontSize: 14,
   color: '#991B1B',
   marginBottom: 6,
+  ...(Platform.select({
+    web: {},
+    default: { fontSize: 13 }, 
+  }) as object),
 },
 
 debtRow: {
@@ -5407,6 +5740,10 @@ debtText: {
   flex: 1,
   color: '#B91C1C',
   fontWeight: '600',
+  ...(Platform.select({
+    web: {},
+    default: { fontSize: 12, lineHeight: 16 }, 
+  }) as object),
 },
 
 debtCode: {
@@ -5428,8 +5765,23 @@ returnsTitle: {
   color: '#92400E',
   marginBottom: 4,
 },
+
+
+returnsRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  ...(Platform.select({
+    web: {},
+    default: { paddingHorizontal: 10, paddingVertical: 6, justifyContent: 'space-between' },
+  }) as object),
+},
+
 returnsText: {
   color: '#7C2D12',
+  ...(Platform.select({
+    web: {},
+    default: { fontSize: 12, lineHeight: 16, paddingRight: 6, flex: 1 },
+  }) as object),
 },
 
   // Pagination styles
