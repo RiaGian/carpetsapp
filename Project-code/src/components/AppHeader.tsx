@@ -63,55 +63,36 @@ export default function AppHeader({ showBack = false, onLogout, onBack }: Props)
 
   return (
     <View style={styles.wrapper}>
-  <View style={[styles.header, Platform.OS !== 'web' && styles.headerMobile]}>
-    {/* Αριστερά */}
-    <View style={styles.leftRow}>
-      {showBack && (
-        <Pressable onPress={goBack} style={({ pressed }) => [styles.textBtn, pressed && styles.pressed]}>
-          <Text style={[styles.textBtnLabel, { color: '#666' }]}>← Πίσω</Text>
-        </Pressable>
-      )}
+      <View style={styles.header}>
+        {/* Αριστερά: Πίσω (optional) + Logo + App name */}
+        <View style={styles.leftRow}>
+          {showBack && (
+            <Pressable onPress={goBack} style={({ pressed }) => [styles.textBtn, pressed && styles.pressed]}>
+              <Text style={[styles.textBtnLabel, { color: '#666' }]}>← Πίσω</Text>
+            </Pressable>
+          )}
 
-      <View style={[styles.logoRow, showBack && { marginLeft: 8 }]}>
-        <Image
-          source={require('../../assets/images/logo.png')}
-          style={[styles.logo, Platform.OS !== 'web' && styles.logoMobile]}
-          resizeMode="contain"
-        />
-        <Text style={[styles.logoText, { marginLeft: 8 }, Platform.OS !== 'web' && styles.logoTextMobile]}>
-          Carpets App
-        </Text>
+          <View style={[styles.logoRow, showBack && { marginLeft: 8 }]}>
+            <Image source={require('../../assets/images/logo.png')} style={styles.logo} resizeMode="contain" />
+            <Text style={[styles.logoText, { marginLeft: 8 }]}>Carpets App</Text>
+          </View>
+        </View>
+
+        {/* Δεξιά: Συνδεδεμένος + Αποσύνδεση */}
+        <View style={styles.rightRow}>
+          <Text style={styles.connectedText}>
+            Συνδεδεμένος: <Text style={styles.userName}>{displayName}</Text>
+          </Text>
+
+          <Pressable onPress={doLogout} style={({ pressed }) => [styles.textBtn, pressed && styles.pressed]}>
+            <Text style={[styles.textBtnLabel, { color: '#666' }]}>Αποσύνδεση</Text>
+          </Pressable>
+        </View>
       </View>
+
+      {/* Divider */}
+      <View style={styles.divider} />
     </View>
-
-    {/* Δεξιά */}
-    <View style={[styles.rightRow, Platform.OS !== 'web' && styles.rightRowMobile]}>
-      <Text
-        style={[styles.connectedText, Platform.OS !== 'web' && styles.connectedTextMobile]}
-        numberOfLines={1}
-        ellipsizeMode="tail"
-      >
-        {Platform.OS === 'web' ? 'Συνδεδεμένος: ' : ''}
-        <Text
-          style={[styles.userName, Platform.OS !== 'web' && styles.userNameMobile]}
-          numberOfLines={1}
-          ellipsizeMode="tail"
-        >
-          {displayName}
-        </Text>
-      </Text>
-
-      <Pressable onPress={doLogout} style={({ pressed }) => [styles.textBtn, pressed && styles.pressed]}>
-        <Text style={[styles.textBtnLabel, { color: '#666' }, Platform.OS !== 'web' && styles.textBtnLabelMobile]}>
-          Αποσύνδεση
-        </Text>
-      </Pressable>
-    </View>
-  </View>
-
-  <View style={styles.divider} />
-</View>
-
   );
 }
 
@@ -147,25 +128,4 @@ const styles = StyleSheet.create({
   pressed: { opacity: 0.7 },
 
   divider: { height: 1, backgroundColor: '#E0E0E0', marginTop: 4, marginBottom: 12 },
-
-  headerMobile: {
-  flexWrap: 'wrap',
-  paddingHorizontal: 8,
-  marginBottom: 4,
-},
-
-rightRowMobile: {
-  flexBasis: '100%',          // πάει 2η γραμμή
-  justifyContent: 'space-between',
-  marginTop: 6,
-  gap: 10,
-},
-
-logoMobile: { width: 38, height: 30 },
-logoTextMobile: { fontSize: 21, fontWeight: '700' },
-
-connectedTextMobile: { fontSize: 17, color: '#666', maxWidth: '65%' },
-userNameMobile: { fontSize: 15, color: colors.primary },
-
-textBtnLabelMobile: { fontSize: 15 },
 });
