@@ -28,13 +28,13 @@ import {
 import { useAuth } from '../state/AuthProvider'
 
 
+import { Q } from '@nozbe/watermelondb'
+import { database } from '../database/initializeDatabase'
 import {
   getOrderById,
   updateOrder,
 } from '../services/orders'
 import { removeItemFromShelf } from '../services/warehouseItems'
-import { database } from '../database/initializeDatabase'
-import { Q } from '@nozbe/watermelondb'
 
 /**  helpers/types */
 type CustomerRow = {
@@ -1140,7 +1140,18 @@ const savePieceModal = () => {
                 Στοιχεία παραγγελίας {orders.length > 1 ? `#${idx + 1}` : ''}
               </Text>
 
-              <View style={styles.orderInnerPanel}>
+              <View
+                style={[
+                  styles.orderInnerPanel,
+                  Platform.OS !== 'web' && {
+                    marginLeft: -3, 
+                    width: '92%', 
+                    alignSelf: 'center', 
+                    
+                  },
+                ]}
+              >
+
                 <View style={styles.orderRow}>
 
                   {/* Κατηγορία */}
@@ -1149,7 +1160,7 @@ const savePieceModal = () => {
                     <Pressable
                       onPress={() => {
                         updateOrderUI(idx, { categoryOpen: !ord.categoryOpen })
-                        clearOrderErr(idx, 'category') // μόλις πάει να διορθώσει, καθάρισε το error
+                        clearOrderErr(idx, 'category') 
                       }}
                       style={[
                         styles.fakeInputInline,
@@ -1174,7 +1185,7 @@ const savePieceModal = () => {
                             <Pressable
                               onPress={() => {
                                 updateOrderUI(idx, { category: label, categoryOpen: false })
-                                clearOrderErr(idx, 'category') // καθάρισμα με την επιλογή
+                                clearOrderErr(idx, 'category') 
                               }}
                               style={styles.dropdownItem}
                             >
@@ -1224,7 +1235,13 @@ const savePieceModal = () => {
                   <View style={[styles.fieldGroup, styles.popHost, { minWidth: 200, flexBasis: 240 }]}>
 
                     <Text style={styles.inputLabelInline}>Ημερομηνία</Text>
-                    <View style={[styles.amountInputWrap, { position: 'relative' }]}>
+                    <View
+                      style={[
+                        styles.amountInputWrap,
+                        { position: 'relative' },
+                        Platform.OS !== 'web' && { width: '90%' }, 
+                      ]}
+                    >
                       <TextInput
                         value={ord.date}
                         onChangeText={(t) => onChangeOrderDateAt(idx, t)}
@@ -1240,7 +1257,7 @@ const savePieceModal = () => {
                         style={{
                           position: 'absolute',
                           right: 8,
-                          top: '50%',
+                          top: '90%',
                           transform: [{ translateY: -10 }],
                           padding: 4,
                         }}
@@ -1498,17 +1515,20 @@ const savePieceModal = () => {
 
                     return (
                     <View
-                        key={p.id ?? `piece-${i}`}
-                        style={[
+                      key={p.id ?? `piece-${i}`}
+                      style={[
                         styles.pieceRow,
-                        { 
-                          position: 'relative',
-                          backgroundColor,
-                          borderColor,
+                        { position: 'relative', backgroundColor, borderColor },
+                        Platform.OS !== 'web' && {
+                          paddingVertical: 4,  
+                          maxHeight: 100,
+                          gap: 2, 
+                          overflow: 'hidden',  
+                          width: '139%', 
+                          alignSelf: 'center',
+                          marginLeft: '-22%',       
                         },
-                        // Don't apply pieceRowCompleted if we have status-based colors
-                        // isExisting && styles.pieceRowCompleted,
-                        ]}
+                      ]}
                     >
                         <Pressable
                         onPress={() => removePiece(i)}
@@ -1517,7 +1537,14 @@ const savePieceModal = () => {
                         <Text style={{ color: '#9CA3AF', fontWeight: 'bold', opacity: 0.8, fontSize: 14 }}>Χ</Text>
                         </Pressable>
 
-                        <View style={styles.pieceInfo}>
+                        <View
+                          style={[
+                            styles.pieceInfo,
+                            Platform.OS !== 'web' && {
+                              marginLeft: 14,   
+                            },
+                          ]}
+                        >
                         <Text style={styles.pieceTitle}>Τεμάχιο {i + 1}</Text>
                         <Text style={styles.pieceSubtitle}>Κατηγορία: {p.category ?? '—'}</Text>
                         {!!p.code && <Text style={styles.pieceSubtitle}>Κωδικός: {p.code}</Text>}
@@ -1529,17 +1556,56 @@ const savePieceModal = () => {
                         </Text>}
                         </View>
 
-                        <View style={styles.costControl}>
-                        <Pressable style={styles.stepBtn} onPress={() => stepPieceCost(i, -1)}>
+                      <View
+                        style={[
+                          Platform.OS !== 'web'
+                            ? { flexDirection: 'column', alignItems: 'center', gap: 6 } // mobile
+                            : { flexDirection: 'row', alignItems: 'center', gap: 8 },   // web
+                        ]}
+                      >
+                        {(p.saved || p.newlyAdded) && (
+                          <Pressable
+                            style={[
+                              styles.addPieceSmallBtn,
+                              Platform.OS !== 'web' && {
+                                transform: [{ scale: 0.88 }],
+                                marginLeft: 9,
+                                marginBottom: -5,
+                              },
+                            ]}
+                            onPress={() => openPieceModalFor(i)}
+                          >
+                            <Text
+                              style={[
+                                styles.addPieceSmallBtnText,
+                                Platform.OS !== 'web' && { fontSize: 13 },
+                              ]}
+                            >
+                              Επεξεργασία
+                            </Text>
+                          </Pressable>
+                        )}
+
+                        <View
+                          style={[
+                            styles.costControl,
+                            Platform.OS !== 'web' && {
+                              transform: [{ scale: 0.9 }],
+                              marginLeft: 0,
+                              gap: 6,
+                            },
+                          ]}
+                        >
+                          <Pressable style={styles.stepBtn} onPress={() => stepPieceCost(i, -1)}>
                             <Text style={styles.stepBtnText}>–</Text>
-                        </Pressable>
-                        <View style={styles.costInputWrap}>
+                          </Pressable>
+                          <View style={styles.costInputWrap}>
                             <TextInput
                               value={p.cost}
                               onChangeText={(t) =>
                                 updatePiece(i, {
-                                  cost: t.replace(/[^\d.,]/g, ''), 
-                                  dirty: true,                    
+                                  cost: t.replace(/[^\d.,]/g, ''),
+                                  dirty: true,
                                 })
                               }
                               placeholder="0.00"
@@ -1548,17 +1614,14 @@ const savePieceModal = () => {
                               style={styles.costInput}
                             />
                             <Text style={styles.euroSuffix}>€</Text>
-                        </View>
-                        <Pressable style={styles.stepBtn} onPress={() => stepPieceCost(i, 1)}>
+                          </View>
+                          <Pressable style={styles.stepBtn} onPress={() => stepPieceCost(i, 1)}>
                             <Text style={styles.stepBtnText}>+</Text>
-                        </Pressable>
-                        </View>
-
-                        {(p.saved || p.newlyAdded) && (
-                          <Pressable style={styles.addPieceSmallBtn} onPress={() => openPieceModalFor(i)}>
-                            <Text style={styles.addPieceSmallBtnText}>Επεξεργασία</Text>
                           </Pressable>
-                        )}
+                        </View>
+                      </View>
+
+
 
                     </View>
                     )
@@ -2658,7 +2721,7 @@ const styles = StyleSheet.create({
     toggleKnobOnSmall: { transform: [{ translateX: 18 }] },
 
     amountRow: { marginTop: 12, marginLeft: 48, gap: 6 },
-    euroSuffix: { fontSize: 15, color: '#333' },
+    euroSuffix: { fontSize: 15, color: '#333' , ...(Platform.OS !== 'web' && { fontSize: 14, marginLeft: 2 }),},
   title: {
     fontSize: 28,
     color: '#1F2A44',
@@ -2887,15 +2950,50 @@ dropdownMenuAbove: {
     paddingVertical: 10,
     paddingHorizontal: 12,
     gap: 10,
+    ...(Platform.OS !== 'web' && {
+      paddingHorizontal: 0, 
+  width: '100%',       
+  }),
   },
   pieceRowCompleted: { backgroundColor: 'rgba(16,185,129,0.12)', borderColor: '#10B981' },
   pieceInfo: { flexShrink: 1, flexGrow: 1 },
   pieceTitle: { fontSize: 15, color: '#1F2A44', fontWeight: '400' },
   pieceSubtitle: { fontSize: 12, color: '#666', marginTop: 2 },
 
-  costControl: { flexDirection: 'row', alignItems: 'center', gap: 8, marginRight: 24 },
-  stepBtn: { width: 34, height: 34, borderRadius: 8, backgroundColor: '#F0F0F0', alignItems: 'center', justifyContent: 'center' },
-  stepBtnText: { fontSize: 15, color: '#333', fontWeight: '400', lineHeight: 18 },
+  costControl: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    gap: 8, 
+    marginRight: 24,
+     ...(Platform.OS !== 'web' && {
+    gap: 4,               
+    transform: [{ scale: 0.68 }], 
+    marginRight: 12,      
+  }),
+
+   }
+   
+   ,
+  stepBtn: { 
+    width: 34, 
+    height: 34, 
+    borderRadius: 8, 
+    backgroundColor: '#F0F0F0', 
+    alignItems: 'center', 
+    justifyContent: 'center' ,
+     ...(Platform.OS !== 'web' && {
+    transform: [{ scale: 0.8 }],  
+    marginHorizontal: -7,           
+  }),
+  },
+
+  stepBtnText: {
+     fontSize: 15, 
+     color: '#333',
+      fontWeight: '400', 
+      lineHeight: 18 
+    },
+
   costInputWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2906,6 +3004,12 @@ dropdownMenuAbove: {
     paddingVertical: 8,
     paddingHorizontal: 12,
     minWidth: 110,
+    ...(Platform.OS !== 'web' && {
+     minWidth: 0,            // ξεκλείδωσε το min
+    width: undefined,       // ❗ μην το “κλειδώνεις” με fixed width
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  }),
   },
   costInput: {
     flex: 1,
@@ -2914,7 +3018,15 @@ dropdownMenuAbove: {
     paddingVertical: 0,
     marginRight: 6,
     textAlign: 'right',
-    ...(Platform.OS === 'web' ? { outlineWidth: 0 } : {}),
+   ...(Platform.OS !== 'web' && {
+    flexGrow: 0,
+    flexShrink: 1,
+    minWidth: 68,           // δώσε όριο να χωράει "20.00"
+    maxWidth: 84,           // κρατά το input compact
+    fontSize: 14,
+    marginRight: 4,
+    textAlign: 'center',
+  }),
   },
   
 

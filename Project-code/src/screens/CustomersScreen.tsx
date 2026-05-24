@@ -419,26 +419,35 @@ function OrderCard({
 
             {/* action bar */}
             <View style={styles.orderActionsRow}>
-              <View style={{ flex: 1 }} />
-
+              {Platform.OS === 'web' ? <View style={{ flex: 1 }} /> : null}
                {/* dropdown */}
-              <View style={{ marginRight: 8 }}>
-                <SimpleDropdown
-                  value={status}
-                  placeholder="Κατάσταση"
-                  options={ORDER_STATUS_OPTIONS}
-                  onChange={onChangeStatus}
-                  width={160}
-                />
+                <View style={{ marginRight: 8 }}>
+                  <SimpleDropdown
+                    value={status}
+                    placeholder="Κατάσταση"
+                    options={ORDER_STATUS_OPTIONS}
+                    onChange={onChangeStatus}
+                    width={160}
+                  />
+                </View>
+            <View
+                style={[
+                  { flexDirection: 'row', alignItems: 'center' },
+                  Platform.OS !== 'web' && { flexDirection: 'column', alignItems: 'flex-end', gap: 6 },
+                ]}
+              >
+                <TouchableOpacity onPress={onEdit} style={[styles.actionBtn, styles.actionBtnPrimary]}>
+                  <Text style={styles.actionBtnPrimaryText}>
+                    {Platform.OS === 'web' ? 'Επεξεργασία' : 'Επεξεργασία'}
+                    </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity onPress={onClose} style={[styles.actionBtn, styles.actionBtnDanger]}>
+                  <Text style={styles.actionBtnDangerText}>
+                    {Platform.OS === 'web' ? 'Κλείσιμο' : 'Κλείσιμο'}
+                    </Text>
+                </TouchableOpacity>
               </View>
-
-              <TouchableOpacity onPress={onEdit} style={[styles.actionBtn, styles.actionBtnPrimary]}>
-                <Text style={styles.actionBtnPrimaryText}>Επεξεργασία</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity onPress={onClose} style={[styles.actionBtn, styles.actionBtnDanger]}>
-                <Text style={styles.actionBtnDangerText}>Κλείσιμο</Text>
-              </TouchableOpacity>
             </View>
           </View>
         )
@@ -5252,6 +5261,12 @@ itemEditCard: {
     alignItems: 'center',
     gap: 8,
     marginTop: 10,
+    ...(Platform.OS !== 'web' && {
+    justifyContent: 'flex-start',
+    alignItems: 'flex-start',
+    marginLeft: -4,  
+    gap: 10,
+  }),
   },
 
   actionBtn: {
@@ -5268,13 +5283,32 @@ itemEditCard: {
 
   actionBtnPrimary: {
     backgroundColor: '#3B82F6',
+     ...(Platform.OS !== 'web'
+    ? {
+        paddingVertical: 6,
+        paddingHorizontal: 14,
+        marginRight: -20,
+      }
+    : {}),
   },
-  actionBtnPrimaryText: { color: '#fff', fontWeight: '400' },
+  actionBtnPrimaryText: { color: '#fff', fontWeight: '400', ...(Platform.OS !== 'web' ? { fontSize: 13 } : {}), },
 
   actionBtnDanger: {
     backgroundColor: '#FEE2E2',
+    ...(Platform.OS !== 'web'
+    ? {
+        paddingVertical: 6,  
+        paddingHorizontal: 14,
+        marginTop: 6,        
+      }
+    : {}),
   },
-  actionBtnDangerText: { color: '#B91C1C', fontWeight: '400' },
+  actionBtnDangerText: { 
+    color: '#B91C1C', 
+    fontWeight: '400', 
+    ...(Platform.OS !== 'web' ? { fontSize: 13 } : {
+
+    }), },
 
   rightTitle: { 
     fontSize: 12, 

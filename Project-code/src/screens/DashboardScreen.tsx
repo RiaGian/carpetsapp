@@ -359,15 +359,26 @@ export default function DashboardScreen() {
           ))}
         </View>
 
-        {/* Κάτω mini cards  */}
-        <View style={styles.statsRow}>
-          <StatCard title="Συνολικοί Πελάτες" value={String(customersPreview?.count ?? 0)} color="#B8C8FF" />
-          <StatCard title="Τεμάχια στην Αποθήκη" value={String(warehouseActiveCount)} color="#F5A5C0" />
-
-          <StatCard title="Καταγραφές Log" value={String(activityTotal)} color="#A3E3BB" />
-          <StatCard title="Σύνολο Δεδομένων" value={String(totalData)} color="#C3B2F7" />
-
-        </View>
+        {/* Κάτω mini cards */}
+        {Platform.OS === 'web' ? (
+          <View style={styles.statsRow}>
+            <StatCard title="Συνολικοί Πελάτες" value={String(customersPreview?.count ?? 0)} color="#B8C8FF" />
+            <StatCard title="Τεμάχια στην Αποθήκη" value={String(warehouseActiveCount)} color="#F5A5C0" />
+            <StatCard title="Καταγραφές Log" value={String(activityTotal)} color="#A3E3BB" />
+            <StatCard title="Σύνολο Δεδομένων" value={String(totalData)} color="#C3B2F7" />
+          </View>
+        ) : (
+          <>
+            <View style={styles.statsRow}>
+              <StatCard title={`Συνολικοί\nΠελάτες`} value={String(customersPreview?.count ?? 0)} color="#B8C8FF" />
+              <StatCard title={`Καταγραφές\nLog`} value={String(activityTotal)} color="#A3E3BB" />
+            </View>
+            <View style={styles.statsRow}>
+              <StatCard title={`Τεμάχια στην\nΑποθήκη`} value={String(warehouseActiveCount)} color="#F5A5C0" />
+              <StatCard title={`Σύνολο\nΔεδομένων`} value={String(totalData)} color="#C3B2F7" />
+            </View>
+          </>
+        )}
 
         {/* Calendar for Ready to Deliver Orders */}
         <View style={styles.calendarSection}>
@@ -686,7 +697,7 @@ function DashboardCard({ kind, title, bg, icon, onPress, isWide, customersPrevie
           <View style={[styles.previewNoContainer, Platform.OS !== 'web' && { marginTop: 8 }]}>
             <View style={[styles.previewHeaderRow, Platform.OS !== 'web' && { paddingVertical: 6 }]}>
               <Text style={[styles.previewHeaderText, Platform.OS !== 'web' && { fontSize: 13 }]}>
-                Συνολικοί Πελάτες
+                {Platform.OS === 'web' ? 'Συνολικοί Πελάτες' : 'Πελάτες'}
               </Text>
               <View style={styles.previewBadge}>
                 <Text style={[styles.previewBadgeText, Platform.OS !== 'web' && { fontSize: 13 }]}>
@@ -778,7 +789,7 @@ function HistoryMiniCard({
       <Pressable style={styles.hminiSearch} onPress={onPressGoHistory}>
         <Ionicons name="search-outline" size={16} color="#6B7280" style={{ marginRight: 6 }} />
         <Text style={styles.hminiSearchText} numberOfLines={1}>
-          Αναζήτηση σε όλα τα δεδομένα...
+           {Platform.OS === 'web' ? 'Αναζήτηση σε όλα τα δεδομένα...' : 'Αναζήτηση...'}
         </Text>
       </Pressable>
 
@@ -850,7 +861,7 @@ function ActivityMiniCard({
   const isMobile = Platform.OS !== 'web'; // true σε iOS/Android, false σε web
 
   const rows = [
-    { key: 'authentication', label: 'Πιστοποίηση', icon: 'lock-closed', color: '#8B5CF6', value: counts.authentication },
+    { key: 'authentication', label: Platform.OS === 'web' ? 'Πιστοποίηση' : 'Πιστοπ.', icon: 'lock-closed', color: '#8B5CF6', value: counts.authentication },
     { key: 'orders',         label: 'Παραγγελίες',   icon: 'cart-outline',  color: '#F59E0B', value: counts.orders },
     { key: 'customers',      label: 'Πελάτες',       icon: 'people-outline',color: '#3B82F6', value: counts.customers },
   ];
@@ -861,7 +872,7 @@ function ActivityMiniCard({
       <Pressable style={styles.hminiSearch} onPress={onPressOpenLog}>
         <Ionicons name="search-outline" size={16} color="#6B7280" style={{ marginRight: 6 }} />
         <Text style={styles.hminiSearchText} numberOfLines={1}>
-          Αναζήτηση δραστηριοτήτων...
+          {Platform.OS === 'web' ? 'Αναζήτηση δραστηριοτήτων...' : 'Αναζήτηση δραστ...'}
         </Text>
       </Pressable>
 
@@ -987,7 +998,7 @@ function WarehouseMiniCard({
       <Pressable style={styles.hminiSearch} onPress={onPressOpenWarehouse}>
         <Ionicons name="search-outline" size={16} color="#6B7280" style={{ marginRight: 6 }} />
         <Text style={styles.hminiSearchText} numberOfLines={1}>
-          Αναζήτηση ραφιού, κωδικού ή τεμαχίου...
+         {Platform.OS === 'web' ? 'Αναζήτηση ραφιού, κωδικού ή τεμαχίου...' : 'Αναζήτηση ραφιού'}
         </Text>
       </Pressable>
 
@@ -1166,9 +1177,16 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'stretch',
     width: '100%',
-    marginTop: 30,
-    paddingHorizontal: 20,
-    gap: 12,
+    marginTop: Platform.OS !== 'web' ? 16 : 30,
+    paddingHorizontal: Platform.OS !== 'web' ? 16 : 20,
+    gap: Platform.OS !== 'web' ? 10 : 12,
+    flexWrap: Platform.OS !== 'web' ? 'wrap' : 'nowrap',
+
+    ...(Platform.OS !== 'web'
+      ? {
+          rowGap: 10,
+        }
+      : {}),
   },
 
   statCard: {

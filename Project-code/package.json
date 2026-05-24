@@ -14,6 +14,8 @@
     "lint": "expo lint",
     "web:build": "npx expo export --platform web --output-dir dist",
     "electron": "npx electron ./electron/main.js",
+    "electron:dev": "electron ./electron/main.js",
+    "pack": "npm run web:build && electron-builder --dir",
     "dist": "npm run web:build && electron-builder",
     "build:android:dev": "eas build -p android --profile development",
     "build:ios:dev": "eas build -p ios --profile development",
@@ -102,6 +104,7 @@
     "extraMetadata": {
       "main": "electron/main.js"
     },
+    "protocols": [  { "name": "App Protocol", "schemes": ["app"] }],
     "mac": {
       "target": [
         "dmg"
