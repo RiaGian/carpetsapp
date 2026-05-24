@@ -21,7 +21,6 @@ import { useAuth } from '../state/AuthProvider'
 import { colors } from '../theme/colors'
 
 // <- services/history (load from DB)
-import { database } from '../database/initializeDatabase'
 import {
   listHistoryCustomers,
   listHistoryItems,
@@ -31,7 +30,6 @@ import {
   type HistoryItem,
   type HistoryOrder,
 } from '../services/history'
-import { getOrderById } from '../services/orders'
 
 function StatusChip({ status }: { status?: string }) {
   const s = (status || '').toLowerCase()
@@ -308,74 +306,13 @@ const [dateToInput, setDateToInput] = React.useState('')
   // states for dropdown (customer;s
   const [customerId, setCustomerId] = React.useState<string | null>(null)
   const [customerLabel, setCustomerLabel] = React.useState<string>('Όλοι')
-  const [customerOpts, setCustomerOpts] = React.useState<{ id: string; label: string }[]>([])
+  const [customerOpts, setCustomerOpts] = React.useState<Array<{ id: string; label: string }>>([])
 
   // data states
   const [loading, setLoading] = React.useState(false)
   const [rowsCustomers, setRowsCustomers] = React.useState<HistoryCustomer[]>([])
   const [rowsItems, setRowsItems] = React.useState<HistoryItem[]>([])
   const [rowsOrders, setRowsOrders] = React.useState<HistoryOrder[]>([])
-  
-  // expanded item details
-  const [expandedItemId, setExpandedItemId] = React.useState<string | null>(null)
-  const [itemDetails, setItemDetails] = React.useState<{
-    customerName: string | null
-    pricePerM2: string | null
-    status: string
-  } | null>(null)
-  const [loadingItemDetails, setLoadingItemDetails] = React.useState(false)
-
-  // Function to fetch item details (customer, price per m2, status)
-  const fetchItemDetails = React.useCallback(async (item: HistoryItem) => {
-    setLoadingItemDetails(true)
-    try {
-      let customerName: string | null = null
-      let pricePerM2: string | null = null
-      const status = item.status || '—'
-
-      // Get order item to access price_per_m2
-      const orderItems = database.get('order_items')
-      const orderItem: any = await orderItems.find(item.id)
-      
-      if (orderItem) {
-        pricePerM2 = orderItem.price_per_m2 ? String(orderItem.price_per_m2) : null
-        
-        // Get order to access customer
-        if (item.orderId) {
-          try {
-            const order = await getOrderById(item.orderId)
-            if (order.customerId) {
-              const customers = database.get('customers')
-              const customer: any = await customers.find(order.customerId)
-              if (customer) {
-                const fn = (customer.firstName ?? customer.firstname ?? customer._raw?.first_name ?? '').trim()
-                const ln = (customer.lastName ?? customer.lastname ?? customer._raw?.last_name ?? '').trim()
-                customerName = `${fn} ${ln}`.trim() || null
-                
-                // If price_per_m2 is not in item, try to get from customer
-                if (!pricePerM2 && customer.pricePerSqm) {
-                  pricePerM2 = String(customer.pricePerSqm)
-                }
-              }
-            }
-          } catch (e) {
-            console.error('Error fetching order/customer:', e)
-          }
-        }
-      }
-
-      setItemDetails({
-        customerName,
-        pricePerM2,
-        status,
-      })
-    } catch (e) {
-      console.error('Error fetching item details:', e)
-      setItemDetails(null)
-    } finally {
-      setLoadingItemDetails(false)
-    }
-  }, [])
 
   const [dateRange, setDateRange] = React.useState<{ start: string | null; end: string | null }>({
     start: null,
@@ -1010,7 +947,11 @@ const toExclusiveEndLocal = (t: number) => {
           <TextInput
             value={search}
             onChangeText={setSearch}
-            placeholder="Αναζήτηση σε πελάτες, τεμάχια, παραγγελίες..."
+            placeholder={
+              Platform.OS === 'web'
+                ? 'Αναζήτηση σε πελάτες, τεμάχια, παραγγελίες...'
+                : 'Αναζήτηση σε παραγγελίες, τεμάχια...'
+            }
             placeholderTextColor={colors.muted}
             style={[styles.searchInput, Platform.OS === 'web' && ({ outlineStyle: 'none' } as any)]}
             returnKeyType="search"
@@ -1125,7 +1066,8 @@ const toExclusiveEndLocal = (t: number) => {
           </View>
         </View>
 
-        {/* ==== Metric tiles (πάνω) ==== */}
+        {/* ==== Metric tiles ==== */}
+        {Platform.OS === 'web' ? (
         <View style={styles.tilesRow}>
           <MetricTile
             bgGradient={['#3B82F6', '#2563EB']}
@@ -1153,6 +1095,41 @@ const toExclusiveEndLocal = (t: number) => {
           />
         </View>
 
+        ) : (
+        //  Android/iOS
+        <>
+            <View style={[styles.tilesRow, { justifyContent: 'space-between', marginBottom: 8 }]}>
+              <MetricTile
+                bgGradient={['#3B82F6', '#2563EB']}
+                icon={<Ionicons name="people-outline" size={22} color="#fff" />}
+                title="Πελάτες"
+                value={rowsCustomers.length || 0}
+              />
+              <MetricTile
+                bgGradient={['#10B981', '#059669']}
+                icon={<Ionicons name="cube-outline" size={22} color="#fff" />}
+                title="Τεμάχια"
+                value={rowsItems.length || 0}
+              />
+            </View>
+
+            <View style={[styles.tilesRow, { justifyContent: 'space-between', marginTop: 1 }]}>
+              <MetricTile
+                bgGradient={['#A855F7', '#7C3AED']}
+                icon={<Ionicons name="cart-outline" size={22} color="#fff" />}
+                title="Παραγγελίες"
+                value={rowsOrders.length || 0}
+              />
+              <MetricTile
+                bgGradient={['#F59E0B', '#D97706']}
+                icon={<Ionicons name="cash-outline" size={22} color="#fff" />}
+                title={`Συνολικός\nΤζίρος`} 
+                value={deliveredRevenue}
+              />
+            </View>
+          </>
+        )}
+
         {/* ==== Segmented Tabs: Πελάτες | Τεμάχια | Παραγγελίες ==== */}
         <View style={styles.tabsRow}>
           <Pressable
@@ -1165,7 +1142,12 @@ const toExclusiveEndLocal = (t: number) => {
               color={activeTab === 'customers' ? colors.primary : '#6B7280'}
               style={{ marginRight: 6 }}
             />
-            <Text style={[styles.tabText, activeTab === 'customers' && styles.tabTextActive]}>Πελάτες</Text>
+            <Text style={[
+              styles.tabText, 
+              activeTab === 'customers' && styles.tabTextActive, 
+              Platform.OS !== 'web' && { fontSize: 13 }]}>
+                Πελάτες
+            </Text>
           </Pressable>
 
           <Pressable
@@ -1178,7 +1160,11 @@ const toExclusiveEndLocal = (t: number) => {
               color={activeTab === 'items' ? colors.primary : '#6B7280'}
               style={{ marginRight: 6 }}
             />
-            <Text style={[styles.tabText, activeTab === 'items' && styles.tabTextActive]}>Τεμάχια</Text>
+            <Text style={[styles.tabText, 
+            activeTab === 'items' && styles.tabTextActive, 
+              Platform.OS !== 'web' && { fontSize: 13 }]}>
+                Τεμάχια
+            </Text>
           </Pressable>
 
           <Pressable
@@ -1191,7 +1177,11 @@ const toExclusiveEndLocal = (t: number) => {
               color={activeTab === 'orders' ? colors.primary : '#6B7280'}
               style={{ marginRight: 6 }}
             />
-            <Text style={[styles.tabText, activeTab === 'orders' && styles.tabTextActive]}>Παραγγελίες</Text>
+            <Text style={[styles.tabText, 
+            activeTab === 'orders' && styles.tabTextActive, 
+              Platform.OS !== 'web' && { fontSize: 13 }]}>
+                Παραγγελίες
+            </Text>
           </Pressable>
         </View>
 
@@ -1212,7 +1202,9 @@ const toExclusiveEndLocal = (t: number) => {
                 <FlatList
                   data={customerId ? rowsCustomers.filter(c => c.id === customerId) : rowsCustomers}
                   keyExtractor={(it) => it.id}
+                  scrollEnabled={false} 
                   ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
+                  contentContainerStyle={Platform.OS !== 'web' ? { paddingVertical: 2 } : undefined}
                   renderItem={({ item }) => {
                     const isExpanded = expandedCustomerId === item.id
                     return (
@@ -1249,23 +1241,46 @@ const toExclusiveEndLocal = (t: number) => {
                             const ordersCount = summary?.orders.length ?? 0
                             const itemsCount  = summary?.items.length ?? 0
                             return (
-                              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                                <View style={[styles.pill, { marginRight: 6 }]}>
-                                  <Text style={styles.pillText}>Παραγγελίες {ordersCount}</Text>
+                              Platform.OS === 'web' ? (
+                                
+                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                  <View style={[styles.pill, { marginRight: 6 }]}>
+                                    <Text style={styles.pillText}>Παραγγελίες {ordersCount}</Text>
+                                  </View>
+                                  <View style={[styles.pill, { marginRight: 10 }]}>
+                                    <Text style={styles.pillText}>Τεμάχια {itemsCount}</Text>
+                                  </View>
+                                  <Text style={styles.rowRight}>
+                                    {new Date(item.createdAt).toLocaleDateString('el-GR')}
+                                  </Text>
+                                  <Ionicons
+                                    name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                                    size={18}
+                                    color="#9CA3AF"
+                                    style={{ marginLeft: 6 }}
+                                  />
                                 </View>
-                                <View style={[styles.pill, { marginRight: 10 }]}>
-                                  <Text style={styles.pillText}>Τεμάχια {itemsCount}</Text>
+                              ) : (
+                                 <View style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
+                                  <View style={[styles.pill, { marginBottom: 4 }]}>
+                                    <Text style={styles.pillText}>Παραγγελίες {ordersCount}</Text>
+                                  </View>
+                                  <View style={[styles.pill, { marginBottom: 4 }]}>
+                                    <Text style={styles.pillText}>Τεμάχια {itemsCount}</Text>
+                                  </View>
+                                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                                    <Text style={styles.rowRight}>
+                                      {new Date(item.createdAt).toLocaleDateString('el-GR')}
+                                    </Text>
+                                    <Ionicons
+                                      name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                                      size={18}
+                                      color="#9CA3AF"
+                                      style={{ marginLeft: 6 }}
+                                    />
+                                  </View>
                                 </View>
-                                <Text style={styles.rowRight}>
-                                  {new Date(item.createdAt).toLocaleDateString('el-GR')}
-                                </Text>
-                                <Ionicons
-                                  name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                                  size={18}
-                                  color="#9CA3AF"
-                                  style={{ marginLeft: 6 }}
-                                />
-                              </View>
+                              )
                             )
                           })()}
 
@@ -1365,7 +1380,9 @@ const toExclusiveEndLocal = (t: number) => {
                                                 <StatusChip status={it.status} />
                                                 <StorageChip storage={it.storage_status} />
                                                 <View style={{ flex: 1 }} />
-                                                <Text style={styles.rowTitle}>{it.category || '—'}</Text>
+                                                 {Platform.OS === 'web' && (
+                                                    <Text style={styles.rowTitle}>{it.category || '—'}</Text>
+                                                  )}
                                             </View>
 
                                             {/* Details */}
@@ -1416,73 +1433,22 @@ const toExclusiveEndLocal = (t: number) => {
               <FlatList
                 data={rowsItems}
                 keyExtractor={(it) => it.id}
+                scrollEnabled={false} 
                 ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
-                renderItem={({ item }) => {
-                  const isExpanded = expandedItemId === item.id
-                  return (
-                    <View>
-                      <Pressable
-                        style={styles.cardRow}
-                        onPress={() => {
-                          if (isExpanded) {
-                            setExpandedItemId(null)
-                            setItemDetails(null)
-                          } else {
-                            setExpandedItemId(item.id)
-                            fetchItemDetails(item)
-                          }
-                        }}
-                      >
-                        <View style={styles.squareIcon}>
-                          <Ionicons name="cube-outline" size={18} color={colors.primary} />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.rowTitle}>{item.item_code || `#${item.id.slice(0, 6)}`}</Text>
-                          <Text style={styles.rowSub} numberOfLines={1}>
-                            {item.category || '—'} {item.color ? `• ${item.color}` : ''}
-                          </Text>
-                        </View>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                          <Text style={styles.rowRight}>{item.order_date || '—'}</Text>
-                          <Ionicons
-                            name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                            size={18}
-                            color="#6B7280"
-                          />
-                        </View>
-                      </Pressable>
-                      
-                      {isExpanded && (
-                        <View style={styles.itemDetailsBox}>
-                          {loadingItemDetails ? (
-                            <Text style={styles.detailText}>Φόρτωση...</Text>
-                          ) : itemDetails ? (
-                            <>
-                              <View style={styles.detailRow}>
-                                <Text style={styles.detailLabel}>Πελάτης:</Text>
-                                <Text style={styles.detailValue}>
-                                  {itemDetails.customerName || '—'}
-                                </Text>
-                              </View>
-                              <View style={styles.detailRow}>
-                                <Text style={styles.detailLabel}>Τιμή/τ.μ.:</Text>
-                                <Text style={styles.detailValue}>
-                                  {itemDetails.pricePerM2 ? `${itemDetails.pricePerM2} €` : '—'}
-                                </Text>
-                              </View>
-                              <View style={styles.detailRow}>
-                                <Text style={styles.detailLabel}>Κατάσταση:</Text>
-                                <StatusChip status={itemDetails.status} />
-                              </View>
-                            </>
-                          ) : (
-                            <Text style={styles.detailText}>Δεν βρέθηκαν στοιχεία</Text>
-                          )}
-                        </View>
-                      )}
+                renderItem={({ item }) => (
+                  <View style={styles.cardRow}>
+                    <View style={styles.squareIcon}>
+                      <Ionicons name="cube-outline" size={18} color={colors.primary} />
                     </View>
-                  )
-                }}
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.rowTitle}>{item.item_code || `#${item.id.slice(0, 6)}`}</Text>
+                      <Text style={styles.rowSub} numberOfLines={1}>
+                        {item.category || '—'} {item.color ? `• ${item.color}` : ''}
+                      </Text>
+                    </View>
+                    <Text style={styles.rowRight}>{item.order_date || '—'}</Text>
+                  </View>
+                )}
               />
             )
           ) : rowsOrders.length === 0 ? (
@@ -1493,6 +1459,7 @@ const toExclusiveEndLocal = (t: number) => {
            <FlatList
               data={rowsOrders}
               keyExtractor={(it) => it.id}
+              scrollEnabled={false} 
               ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
               renderItem={({ item }) => (
                 <View style={styles.orderRow}>
@@ -1580,13 +1547,35 @@ pillCodeText: { color: '#fff', fontWeight: '800' },
     paddingHorizontal: 10,
     paddingVertical: 10,
     marginBottom: 14,
+    ...(Platform.OS !== 'web' && {
+    alignSelf: 'center',
+    width: '98%',         
+     paddingVertical: 8,  
+    borderWidth: 1.5,
+    paddingHorizontal: 10,
+  }),
   },
-  searchInput: { flex: 1, fontSize: 15, color: '#111827' },
+  searchInput: { 
+    flex: 1, 
+    fontSize: 15, 
+    color: '#111827',
+     ...(Platform.OS !== 'web' && {
+    fontSize: 13,
+    paddingVertical: 2,  
+    lineHeight: 25,
+  }),
+   },
 
   /* Rows */
   row2: { flexDirection: 'row', gap: 12, marginBottom: 12, overflow: 'visible' },
   row3: { flexDirection: 'row', gap: 12, marginBottom: 14 },
-  inputWrap: { minWidth: 0 },
+  inputWrap: { 
+    minWidth: 0,
+     ...(Platform.OS !== 'web' && {
+      flex: 0,              // σταματά το full stretch
+      width: '48%',         // στενεύει «Από» & «Μέχρι»
+    }), 
+  },
   flex1: { flex: 1 },
 
   labelRowTitle: {
@@ -1608,8 +1597,21 @@ pillCodeText: { color: '#fff', fontWeight: '800' },
     paddingHorizontal: 12,
     minHeight: 44,
     justifyContent: 'center',
+     ...(Platform.OS !== 'web' && {
+    minHeight: 36,         // ↓ από 44
+    paddingVertical: 5,    // ↓ από 10
+    borderWidth: 1.5,      // πιο λεπτό περίγραμμα
+  }),
   },
-  filledInputText: { fontSize: 14, color: '#111827' },
+  filledInputText: { 
+    fontSize: 14, 
+    color: '#111827' ,
+    ...(Platform.OS !== 'web' && {
+    fontSize: 13,
+    lineHeight: 16,
+    paddingVertical: 0,   // εξαφανίζει extra ύψος στο TextInput
+  }),
+  },
   dropdownIcon: { position: 'absolute', right: 10, top: 12 },
 
   /* Dropdown modal */
@@ -1637,6 +1639,12 @@ pillCodeText: { color: '#fff', fontWeight: '800' },
     shadowRadius: 6,
     elevation: 4,
     minHeight: 110,
+    ...(Platform.OS !== 'web' && {
+    padding: 12,       
+    minHeight: 78,     
+    width: '52%',     
+    marginBottom: 4,   
+  }),
   },
   tileContent: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   tileIcon: {
@@ -1647,7 +1655,7 @@ pillCodeText: { color: '#fff', fontWeight: '800' },
     alignItems: 'center',
     justifyContent: 'center',
   },
-  tileValue: { color: '#fff', fontSize: 22, fontWeight: '400' },
+  tileValue: { color: '#fff',  fontWeight: '400', fontSize: Platform.OS === 'web' ? 22 : 16,  },
   tileTitle: { color: '#fff', fontSize: 14, fontWeight: '400', opacity: 0.9 },
 
   /* Segmented tabs */
@@ -1692,38 +1700,6 @@ pillCodeText: { color: '#fff', fontWeight: '800' },
   emptyState: { padding: 18, alignItems: 'center', justifyContent: 'center' },
   emptyTitle: { fontSize: 15, color: '#111827', fontWeight: '700' },
 
-  itemDetailsBox: {
-    backgroundColor: '#F9FAFB',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    borderRadius: 10,
-    padding: 12,
-    marginTop: 8,
-    marginLeft: 0,
-    marginRight: 0,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  detailLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#374151',
-    marginRight: 8,
-    minWidth: 100,
-  },
-  detailValue: {
-    fontSize: 14,
-    color: '#111827',
-    flex: 1,
-  },
-  detailText: {
-    fontSize: 14,
-    color: '#6B7280',
-    fontStyle: 'italic',
-  },
   cardRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1732,7 +1708,9 @@ pillCodeText: { color: '#fff', fontWeight: '800' },
     borderRadius: 12,
     padding: 10,
     backgroundColor: '#fff',
+   ...(Platform.OS !== 'web' && { paddingVertical: 8, paddingHorizontal: 10 }),
   },
+
   avatarBox: {
     width: 40,
     height: 40,
@@ -1741,10 +1719,11 @@ pillCodeText: { color: '#fff', fontWeight: '800' },
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
+    ...(Platform.OS !== 'web' && { width: 28, height: 28, borderRadius: 14, marginRight: 6 }),
   },
   squareIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center', marginRight: 10 },
-  rowTitle: { fontSize: 14, color: '#111827', fontWeight: '700' },
-  rowSub: { fontSize: 12, color: '#6B7280', marginTop: 2 },
+  rowTitle: { fontSize: 14, color: '#111827', fontWeight: '700', ...(Platform.OS !== 'web' && { fontSize: 13 }), },
+  rowSub: { fontSize: 12, color: '#6B7280', marginTop: 2, ...(Platform.OS !== 'web' && { fontSize: 11, marginTop: 1 }), },
   rowRight: { color: '#6B7280', fontSize: 12, marginLeft: 10 },
 
   /* Order row */
@@ -1756,8 +1735,8 @@ pillCodeText: { color: '#fff', fontWeight: '800' },
     backgroundColor: '#fff',
   },
   orderHeader: { flexDirection: 'row', alignItems: 'center' },
-  pill: { backgroundColor: '#DBEAFE', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 9999 },
-  pillText: { color: '#1D4ED8', fontWeight: '800' },
+  pill: { backgroundColor: '#DBEAFE', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 9999,  ...(Platform.OS !== 'web' && { paddingHorizontal: 8, paddingVertical: 3 }), },
+  pillText: { color: '#1D4ED8', fontWeight: '800' , ...(Platform.OS !== 'web' && { fontSize: 12 }),},
   moneyText: { fontWeight: '800', color: '#111827' },
 
   //  inline dropdown box (absolute)

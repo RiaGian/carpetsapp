@@ -562,8 +562,9 @@ const addMonthsStr = (ymStr: string, delta: number) => {
                     addMonth?.();          
                   }}
                   theme={{
-                    textDayFontSize: 14,
-                    textMonthFontSize: 15,
+                    textDayFontSize: Platform.OS !== 'web' ? 12 : 14,
+                    textMonthFontSize: Platform.OS !== 'web' ? 13 : 15,
+          
                     todayTextColor: '#3B82F6',
                     selectedDayBackgroundColor: '#2563EB',
                     monthTextColor: '#111827',
@@ -636,32 +637,52 @@ const addMonthsStr = (ymStr: string, delta: number) => {
 
 
         {/* Summary Cards */}
-        <View style={styles.summaryCards}>
-        <View style={[styles.summaryCard, styles.totalCard]}>
-          <Text style={[styles.summaryNumber, { color: '#8B5CF6' }]}> {/* Μωβ */}
-            {summaryStats.total}
-          </Text>
-          <Text style={styles.summaryLabel}>Σύνολο</Text>
-        </View>
-        <View style={styles.summaryCard}>
-          <Text style={[styles.summaryNumber, { color: '#10B981' }]}> {/* Πράσινο */}
-            {summaryStats.successes}
-          </Text>
-          <Text style={styles.summaryLabel}>Επιτυχίες</Text>
-        </View>
-        <View style={styles.summaryCard}>
-          <Text style={[styles.summaryNumber, { color: '#3B82F6' }]}> {/* Μπλε */}
-            {summaryStats.updates}
-          </Text>
-          <Text style={styles.summaryLabel}>Ενημερώσεις</Text>
-        </View>
-        <View style={styles.summaryCard}>
-          <Text style={[styles.summaryNumber, { color: '#EF4444' }]}> {/* Κόκκινο */}
-            {summaryStats.errors}
-          </Text>
-          <Text style={styles.summaryLabel}>Σφάλματα</Text>
-        </View>
-      </View>
+        {Platform.OS === 'web' ? (
+          <View style={styles.summaryCards}>
+            <View style={[styles.summaryCard, styles.totalCard]}>
+              <Text style={[styles.summaryNumber, { color: '#8B5CF6' }]}>{summaryStats.total}</Text>
+              <Text style={styles.summaryLabel}>Σύνολο</Text>
+            </View>
+            <View style={styles.summaryCard}>
+              <Text style={[styles.summaryNumber, { color: '#10B981' }]}>{summaryStats.successes}</Text>
+              <Text style={styles.summaryLabel}>Επιτυχίες</Text>
+            </View>
+            <View style={styles.summaryCard}>
+              <Text style={[styles.summaryNumber, { color: '#3B82F6' }]}>{summaryStats.updates}</Text>
+              <Text style={styles.summaryLabel}>Ενημερώσεις</Text>
+            </View>
+            <View style={styles.summaryCard}>
+              <Text style={[styles.summaryNumber, { color: '#EF4444' }]}>{summaryStats.errors}</Text>
+              <Text style={styles.summaryLabel}>Σφάλματα</Text>
+            </View>
+          </View>
+        ) : (
+          // Android/iOS
+          <>
+            <View style={[styles.summaryCards, { justifyContent: 'space-between', marginBottom: 4 }]}>
+              <View style={styles.summaryCard}>
+                <Text style={[styles.summaryNumber, { color: '#8B5CF6' }]}>{summaryStats.total}</Text>
+                <Text style={styles.summaryLabel}>Σύνολο</Text>
+              </View>
+              <View style={styles.summaryCard}>
+                <Text style={[styles.summaryNumber, { color: '#10B981' }]}>{summaryStats.successes}</Text>
+                <Text style={styles.summaryLabel}>Επιτυχίες</Text>
+              </View>
+            </View>
+
+            <View style={[styles.summaryCards, { justifyContent: 'space-between', marginTop: 2 }]}>
+              <View style={styles.summaryCard}>
+                <Text style={[styles.summaryNumber, { color: '#3B82F6' }]}>{summaryStats.updates}</Text>
+                <Text style={styles.summaryLabel}>Ενημερώσεις</Text>
+              </View>
+              <View style={styles.summaryCard}>
+                <Text style={[styles.summaryNumber, { color: '#EF4444' }]}>{summaryStats.errors}</Text>
+                <Text style={styles.summaryLabel}>Σφάλματα</Text>
+              </View>
+            </View>
+          </>
+        )}
+
 
         {/* Activity Log Sections */}
         <ScrollView 
@@ -1085,8 +1106,17 @@ statusTagGradient: {
   summaryCards: {
     flexDirection: 'row',
     marginBottom: 24,
+    flexWrap: 'wrap',
     gap: 12,
+      ...(Platform.OS !== 'web' && {
+      marginTop: 10,        
+      marginBottom: 18,     
+      gap: 10,
+      rowGap: 4, 
+      columnGap: 6,
+    }),
   },
+
   summaryCard: {
   flex: 1,
   backgroundColor: '#F9FAFB',
@@ -1101,6 +1131,11 @@ statusTagGradient: {
   elevation: 6,
   borderWidth: 1,
   borderColor: '#E5E7EB',
+  ...(Platform.OS !== 'web' && {
+     width: '50%',        
+    marginBottom: 0,    
+    paddingVertical: 6, 
+  }),
 },
   totalCard: {
     flex: 1.2,
@@ -1319,6 +1354,7 @@ statusTagGradient: {
     ...(Platform.OS !== 'web' && {
     minHeight: 44,      
     paddingVertical: 8,   
+    justifyContent: 'center',
 
 
   }),
@@ -1328,7 +1364,9 @@ statusTagGradient: {
     fontSize: 14,
     color: '#374151',
     fontWeight: '500',
-    textAlign: Platform.OS !== 'web' ? 'center' : 'left',
+    textAlign: Platform.OS !== 'web' ? 'center' : 'left', ...(Platform.OS !== 'web' && {
+    flex: 0,
+     }),
   },
   categoryModalOverlay: {
     flex: 1,
@@ -1438,7 +1476,7 @@ statusTagGradient: {
     minHeight: 44,
     ...(Platform.OS !== 'web' && {
     minHeight: 44,
-    paddingVertical: 8,
+    paddingVertical: 8,justifyContent: 'center',
   }),
   },
   actionDropdownText: {
@@ -1447,6 +1485,10 @@ statusTagGradient: {
     color: '#374151',
     fontWeight: '500',
     textAlign: Platform.OS !== 'web' ? 'center' : 'left',
+    ...(Platform.OS !== 'web' && {
+    flex: 0,                    // ✅ να κάτσει δίπλα στο icon
+    marginHorizontal: 6,
+  }),
   },
   actionModalOverlay: {
     flex: 1,
@@ -1667,6 +1709,16 @@ doubleCalendarRow: {
   shadowRadius: 10,
   elevation: 6,
   width: 540,
+  ...(Platform.OS !== 'web' && {
+    right: 'auto',
+    left: '50%',
+    top: '50%',
+    width: 270,                         
+    padding: 4,                        
+    transform: [{ translateX: -120 }, { translateY: -100 }],
+    borderRadius: 10,
+    shadowOpacity: 0.2,
+  }),
 },
 dateDropdownHeader: {
   flexDirection: 'row',
@@ -1682,6 +1734,10 @@ dateDropdownTitle: {
 dateDropdownCalendars: {
   flexDirection: 'row',
   justifyContent: 'space-between',
+   ...(Platform.OS !== 'web' && {
+    flexDirection: 'column',   // 📱 στοιχίζει κάθετα
+    gap: 8,                    // μικρό κενό μεταξύ τους
+  }),
 },
 dateDropdownButtons: {
   flexDirection: 'row',

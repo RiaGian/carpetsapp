@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons'
 import React, { useState } from 'react'
-import { ScrollView, StyleSheet, Text, View } from 'react-native'
+import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native'
 import AppHeader from '../components/AppHeader'
 import { listAllActiveWarehouseItems, WarehouseListItem } from '../services/warehouseItems'
 
@@ -135,29 +135,66 @@ export default function WarehouseOverviewScreen() {
 
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#F9FAFB' }}>
-      <AppHeader showBack />
+  <View style={{ flex: 1, backgroundColor: '#ffffffff' }}>
+    <ScrollView
+      style={styles.scroller}
+      contentContainerStyle={styles.containerScroll}
+      keyboardShouldPersistTaps="handled"
+      contentInsetAdjustmentBehavior="automatic"
+    >
+      {/*  Header */}
+      <View style={styles.headerWrapper}>
+        <AppHeader showBack />
+      </View>
 
-      <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.title}>Προεπισκόπηση Αποθήκης</Text>
-        <Text style={styles.subtitle}>Σύνοψη όλων των τεμαχίων</Text>
+      <Text style={styles.title}>Προεπισκόπηση Αποθήκης</Text>
+      <Text style={styles.subtitle}>Σύνοψη όλων των τεμαχίων</Text>
 
-        {/*  ΦΥΛΑΞΗ / ΕΠΙΣΤΡΟΦΗ */}
-        <View style={styles.row}>
-          {renderPanel('ΦΥΛΑΞΗ', '#ECFDF5', φυλαξη)}
-          {renderPanel('ΕΠΙΣΤΡΟΦΗ', '#EFF6FF', επιστροφη)}
-        </View>
+      {/* Panels */}
+      <View style={styles.row}>
+        {renderPanel('ΦΥΛΑΞΗ', '#ECFDF5', φυλαξη)}
+        {renderPanel('ΕΠΙΣΤΡΟΦΗ', '#EFF6FF', επιστροφη)}
+      </View>
 
-        {/*  ΠΛΥΜΕΝΑ */}
-        <View style={styles.row}>
-          {renderPanel('ΠΛΥΜΕΝΑ', '#EDE9FE', πλυμενα)}
-        </View>
-      </ScrollView>
-    </View>
-  )
+      <View style={styles.row}>
+        {renderPanel('ΠΛΥΜΕΝΑ', '#EDE9FE', πλυμενα)}
+      </View>
+    </ScrollView>
+  </View>
+)
+
+
+
+
 }
 
 const styles = StyleSheet.create({
+
+scroller: { flex: 1, width: '100%' },
+containerScroll: {
+  alignItems: 'stretch',  
+  justifyContent: 'flex-start',
+  paddingHorizontal: 40,  
+  paddingTop: 12,
+  paddingBottom: 40,
+  width: '100%',
+  maxWidth: 4300,         
+  alignSelf: 'center',  
+  ...(Platform.OS !== 'web' && {
+      paddingHorizontal: 8,
+      paddingTop: 14,
+      paddingBottom: 20,
+    }),   
+},
+headerWrapper: {
+  width: '100%',
+  maxWidth: 3200,   
+  paddingHorizontal: 16,
+  ...(Platform.OS !== 'web' && {
+      marginTop: 40, 
+    }),
+},
+
   container: {
     paddingHorizontal: 16,
     paddingVertical: 20,
@@ -177,6 +214,8 @@ const styles = StyleSheet.create({
   },
   row: {
     flexDirection: 'row',
+  flexWrap: 'wrap',          
+  justifyContent: 'space-between',
     gap: 16,
     fontWeight: '400'
   },

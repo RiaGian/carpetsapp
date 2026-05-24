@@ -2671,51 +2671,145 @@ const isWeb = Platform.OS === 'web';
             
             {/* Pagination Controls */}
             {totalPages > 1 && (
-              <View style={styles.paginationContainer}>
-                <TouchableOpacity
-                  onPress={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                  disabled={currentPage === 1}
-                  style={[
-                    styles.paginationButton,
-                    currentPage === 1 && styles.paginationButtonDisabled
-                  ]}
-                >
-                  <Ionicons name="chevron-back" size={20} color={currentPage === 1 ? '#9CA3AF' : '#1F2A44'} />
-                  <Text style={[
-                    styles.paginationButtonText,
-                    currentPage === 1 && styles.paginationButtonTextDisabled
-                  ]}>
-                    Προηγούμενη
-                  </Text>
-                </TouchableOpacity>
+              <>
+                {/*  ANDROID / iOS */}
+                {Platform.OS !== 'web' && (
+                  <View
+                    style={[
+                      styles.paginationContainer,
+                      {
+                        alignSelf: 'center',
+                        width: '85%',                
+                        justifyContent: 'space-between',
+                      },
+                    ]}
+                  >
+                    <TouchableOpacity
+                      onPress={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                      disabled={currentPage === 1}
+                      style={[
+                        styles.paginationButton,
+                        {
+                          paddingHorizontal: 8,  
+                          paddingVertical: 4,    
+                          borderRadius: 8,       
+                        },
+                        currentPage === 1 && styles.paginationButtonDisabled,
+                      ]}
+                    >
+                      <Ionicons
+                        name="chevron-back"
+                        size={16}                 
+                        color={currentPage === 1 ? '#9CA3AF' : '#1F2A44'}
+                      />
+                      <Text
+                        style={[
+                          styles.paginationButtonText,
+                          {
+                            fontSize: 12,        
+                            fontWeight: '400',   
+                          },
+                          currentPage === 1 && styles.paginationButtonTextDisabled,
+                        ]}
+                      >
+                        Πίσω
+                      </Text>
+                    </TouchableOpacity>
 
-                <View style={styles.paginationInfo}>
-                  <Text style={styles.paginationText}>
-                    Σελίδα {currentPage} από {totalPages}
-                  </Text>
-                  <Text style={styles.paginationSubtext}>
-                    ({results.length} {results.length === 1 ? 'πελάτης' : 'πελάτες'})
-                  </Text>
-                </View>
+                    <View style={styles.paginationInfo}>
+                      <Text style={styles.paginationText}>
+                        Σελίδα {currentPage} από {totalPages}
+                      </Text>
+                      <Text style={styles.paginationSubtext}>
+                        ({results.length} {results.length === 1 ? 'πελάτης' : 'πελάτες'})
+                      </Text>
+                    </View>
 
-                <TouchableOpacity
-                  onPress={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                  disabled={currentPage === totalPages}
-                  style={[
-                    styles.paginationButton,
-                    currentPage === totalPages && styles.paginationButtonDisabled
-                  ]}
-                >
-                  <Text style={[
-                    styles.paginationButtonText,
-                    currentPage === totalPages && styles.paginationButtonTextDisabled
-                  ]}>
-                    Επόμενη
-                  </Text>
-                  <Ionicons name="chevron-forward" size={20} color={currentPage === totalPages ? '#9CA3AF' : '#1F2A44'} />
-                </TouchableOpacity>
-              </View>
+                    <TouchableOpacity
+                      onPress={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                      disabled={currentPage === totalPages}
+                      style={[
+                        styles.paginationButton,
+                        {
+                          paddingHorizontal: 8,
+                          paddingVertical: 4,
+                          borderRadius: 8,
+                        },
+                        currentPage === totalPages && styles.paginationButtonDisabled,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.paginationButtonText,
+                          {
+                            fontSize: 12,
+                            fontWeight: '400',
+                          },
+                          currentPage === totalPages && styles.paginationButtonTextDisabled,
+                        ]}
+                      >
+                        Επόμενη
+                      </Text>
+                      <Ionicons
+                        name="chevron-forward"
+                        size={16}
+                        color={currentPage === totalPages ? '#9CA3AF' : '#1F2A44'}
+                      />
+                    </TouchableOpacity>
+
+                  </View>
+                )}
+
+                {/*  WEB  */}
+                {Platform.OS === 'web' && (
+                  <View style={styles.paginationContainer}>
+                    <TouchableOpacity
+                      onPress={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                      disabled={currentPage === 1}
+                      style={[
+                        styles.paginationButton,
+                        currentPage === 1 && styles.paginationButtonDisabled
+                      ]}
+                    >
+                      <Ionicons name="chevron-back" size={20} color={currentPage === 1 ? '#9CA3AF' : '#1F2A44'} />
+                      <Text style={[
+                        styles.paginationButtonText,
+                        currentPage === 1 && styles.paginationButtonTextDisabled
+                      ]}>
+                        Προηγούμενη
+                      </Text>
+                    </TouchableOpacity>
+
+                    <View style={styles.paginationInfo}>
+                      <Text style={styles.paginationText}>
+                        Σελίδα {currentPage} από {totalPages}
+                      </Text>
+                      <Text style={styles.paginationSubtext}>
+                        ({results.length} {results.length === 1 ? 'πελάτης' : 'πελάτες'})
+                      </Text>
+                    </View>
+
+                    <TouchableOpacity
+                      onPress={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                      disabled={currentPage === totalPages}
+                      style={[
+                        styles.paginationButton,
+                        currentPage === totalPages && styles.paginationButtonDisabled
+                      ]}
+                    >
+                      <Text style={[
+                        styles.paginationButtonText,
+                        currentPage === totalPages && styles.paginationButtonTextDisabled
+                      ]}>
+                        Επόμενη
+                      </Text>
+                      <Ionicons name="chevron-forward" size={20} color={currentPage === totalPages ? '#9CA3AF' : '#1F2A44'} />
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </>
             )}
+
             </>
           )}
         </View>
@@ -3733,7 +3827,22 @@ const isWeb = Platform.OS === 'web';
                   ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
                   contentContainerStyle={{ paddingBottom: 20 }}
                   renderItem={({ item }) => (
-                    <View style={styles.itemRow}>
+                    <TouchableOpacity
+                      style={styles.itemRow}
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        setSelectedItem(item)
+                        setItemEdit({
+                          item_code: item.item_code || '',
+                          category: item.category || '',
+                          color: item.color || '',
+                          price: item.price != null ? String(item.price) : '',
+                          status: item.status || '',
+                          storage_status: item.storage_status || '',
+                          order_date: item.order_date || '',
+                        })
+                      }}
+                    >
                       <View style={styles.itemIconBox}>
                         <Ionicons name="cube-outline" size={20} color={colors.primary} />
                       </View>
@@ -3744,7 +3853,7 @@ const isWeb = Platform.OS === 'web';
                         <Text style={styles.itemDate}>{fmtDate(item.created_at)}</Text>
                       </View>
                       <Text style={styles.itemPrice}>{fmtMoney(item.price)}</Text>
-                    </View>
+                    </TouchableOpacity>
                   )}
                 />
               )}

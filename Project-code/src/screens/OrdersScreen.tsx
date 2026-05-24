@@ -918,7 +918,6 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                     value={depositAmount}
                     onChangeText={setDepositAmount}
                     placeholder="Ποσό προκαταβολής"
-                    placeholderTextColor="#9CA3AF"
                     keyboardType={Platform.select({ ios: 'decimal-pad', android: 'numeric', default: 'numeric' })}
                     inputMode="decimal"
                     style={styles.amountInput}
