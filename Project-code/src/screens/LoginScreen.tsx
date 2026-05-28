@@ -1,14 +1,20 @@
 // src/screens/LoginScreen.tsx
+import { Ionicons } from "@expo/vector-icons"
 import Constants from 'expo-constants'
 import * as Device from 'expo-device'
 import { Link, router } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
 import {
   Alert,
-  Image, Keyboard, Platform, StyleSheet,
+  Image,
+  Keyboard,
+  Platform,
+  Pressable,
+  StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native'
 import { logLoginSuccessConsole } from '../activity/logger'
 import { loginApi } from '../api/auth'
@@ -94,6 +100,81 @@ function TypingText({
     </Text>
   )
 }
+
+type PasswordFieldProps = {
+  value: string
+  onChangeText: (text: string) => void
+  placeholder?: string
+  label?: string
+}
+
+function PasswordField({ value, onChangeText, placeholder, label }: PasswordFieldProps) {
+  const [show, setShow] = useState(false)
+
+  return (
+    <View style={{ width: '100%' }}>
+      {label && (
+        <Text
+          style={{
+            fontSize: 13,
+            color: '#6B7280',
+            marginBottom: 4,
+          }}
+        >
+          {label}
+        </Text>
+      )}
+
+      <View
+        style={[
+          {
+            width: '100%',
+            borderWidth: 1,
+            borderColor: '#D1D5DB',
+            borderRadius: 10,
+            paddingHorizontal: 12,
+            flexDirection: 'row',
+            alignItems: 'center',
+          },
+          Platform.OS !== 'web'
+            ? { height: 48 }          // mobile
+            : { paddingVertical: 8 }, // web
+        ]}
+      >
+        <TextInput
+          value={value}
+          onChangeText={onChangeText}
+          placeholder={placeholder}
+          placeholderTextColor="#9CA3AF"
+          secureTextEntry={!show}
+          autoCapitalize="none"
+          style={[
+            {
+              flex: 1,
+              fontSize: 16,
+              color: '#111827',
+            },
+            Platform.OS === 'web' && {
+              outlineWidth: 0,
+              outlineColor: 'transparent',
+            },
+          ]}
+        />
+
+        <Pressable onPress={() => setShow(prev => !prev)}>
+          <Ionicons
+            name={show ? 'eye-off-outline' : 'eye-outline'}
+            size={22}
+            color="#6B7280"
+          />
+        </Pressable>
+      </View>
+    </View>
+  )
+}
+
+
+
 
 /** LoginScreen */
 export default function LoginScreen() {
@@ -273,14 +354,15 @@ export default function LoginScreen() {
 
         {/* Password */}
         <View style={{ marginTop: 12 }}>
-          <TextField
+          <PasswordField
             label="Κωδικός"
             value={password}
             onChangeText={setPassword}
-            secureTextEntry
-            placeholderText="🔒  Εισάγετε τον κωδικό σας"
+            placeholder="🔒  Εισάγετε τον κωδικό σας"
           />
         </View>
+
+
 
         {/* Error Message */}
         {errorMessage ? (

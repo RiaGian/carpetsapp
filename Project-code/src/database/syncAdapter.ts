@@ -191,15 +191,92 @@ export async function pullChanges(
           .map(record => validateRecord(record, 'updated'))
           .filter(record => record !== null)
         
+        // CRITICAL FIX: Filter out records that already exist locally AND records that are deleted
+        // This prevents WatermelonDB from trying to create records that were created locally
+        // and then synced to server (which then returns them as "created")
+        // ALSO prevents deleted records from being recreated
+        const deletedIds = new Set(tableData.deleted || [])
+        const filteredCreated: any[] = []
+        const filteredUpdated: any[] = []
+        
+        // Check which records already exist locally
+        await database.read(async () => {
+          const collection = database.get(tableName)
+          
+          for (const record of validatedCreated) {
+            // CRITICAL: Skip records that are marked as deleted
+            if (deletedIds.has(record.id)) {
+              console.warn(`[SYNC-DEBUG] ⚠️ Skipping record ${record.id} in ${tableName} - it's marked as deleted`)
+              continue
+            }
+            
+            try {
+              const existing = await collection.find(record.id).catch(() => null)
+              if (!existing) {
+                // Record doesn't exist locally - safe to create
+                filteredCreated.push(record)
+              } else {
+                // Record already exists locally - treat as update instead
+                console.warn(`[SYNC-DEBUG] Record ${record.id} in ${tableName} already exists locally, treating as update instead of create`)
+                filteredUpdated.push(record)
+              }
+            } catch {
+              // If check fails, include it anyway (let WatermelonDB handle it)
+              filteredCreated.push(record)
+            }
+          }
+          
+          for (const record of validatedUpdated) {
+            // CRITICAL: Skip records that are marked as deleted
+            if (deletedIds.has(record.id)) {
+              console.warn(`[SYNC-DEBUG] ⚠️ Skipping record ${record.id} in ${tableName} - it's marked as deleted`)
+              continue
+            }
+            
+            try {
+              const existing = await collection.find(record.id).catch(() => null)
+              if (existing) {
+                // Record exists - safe to update
+                filteredUpdated.push(record)
+              } else {
+                // Record doesn't exist - treat as create instead
+                console.warn(`[SYNC-DEBUG] Record ${record.id} in ${tableName} doesn't exist locally, treating as create instead of update`)
+                filteredCreated.push(record)
+              }
+            } catch {
+              // If check fails, include it anyway
+              filteredUpdated.push(record)
+            }
+          }
+        })
+        
         changes[tableName] = {
-          created: validatedCreated,
-          updated: validatedUpdated,
+          created: filteredCreated,
+          updated: filteredUpdated,
           deleted: tableData.deleted || [],
         }
         
         // Log deletions for debugging
-        if (tableName === 'customers' && tableData.deleted && tableData.deleted.length > 0) {
-          console.log(`[SYNC-DEBUG] 🗑️ Pulled ${tableData.deleted.length} customer deletion(s) from server:`, tableData.deleted)
+        if (tableName === 'customers') {
+          if (tableData.deleted && tableData.deleted.length > 0) {
+            console.log(`[SYNC-DEBUG] 🗑️ Pulled ${tableData.deleted.length} customer deletion(s) from server:`, tableData.deleted)
+          }
+          
+          // Log what server returned
+          console.log(`[SYNC-DEBUG] Server returned for customers:`, {
+            created: validatedCreated.length,
+            updated: validatedUpdated.length,
+            deleted: tableData.deleted?.length || 0,
+            deletedIds: tableData.deleted || [],
+          })
+          
+          // Log if we filtered any records
+          if (validatedCreated.length !== filteredCreated.length) {
+            console.log(`[SYNC-DEBUG] Filtered ${validatedCreated.length - filteredCreated.length} customer record(s) from created (already exist locally or deleted)`)
+          }
+          if (validatedUpdated.length !== filteredUpdated.length) {
+            console.log(`[SYNC-DEBUG] Filtered ${validatedUpdated.length - filteredUpdated.length} customer record(s) from updated (deleted)`)
+          }
         }
       }
     }
@@ -274,6 +351,11 @@ export async function pushChanges(
         deletedIds: changes.customers.deleted || [],
       } : null,
     })
+
+    console.log(
+      '[SYNC-DEBUG] RAW changes for customers:',
+      JSON.stringify(changes.customers, null, 2)
+    )
     
     // Log deletions specifically for debugging
     if (changes.customers?.deleted?.length > 0) {

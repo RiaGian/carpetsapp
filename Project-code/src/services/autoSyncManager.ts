@@ -66,12 +66,23 @@ async function checkNetworkStatus(): Promise<boolean> {
 
     clearTimeout(timeoutId)
     // If we get any response (even 404), we're online
+
+    console.log('[DEBUG] checkNetworkStatus: fetch OK on', Platform.OS)
     return true
-  } catch (error) {
-    // Network error means we're offline
-    return false
-  }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.log('[DEBUG] checkNetworkStatus: fetch ERROR on', Platform.OS, message)
+
+      // ignore bug "Cannot assign to read-only property 'NONE'"
+      if (message.includes("Cannot assign to read-only property 'NONE'")) {
+        console.log('[DEBUG] Ignoring NONE bug in fetch, treating as ONLINE')
+        return true
+      }
+      return false
+    }
 }
+
+
 
 /**
  * Update network status and notify listeners
@@ -184,15 +195,22 @@ async function performSync(): Promise<void> {
  */
 async function hasAuthToken(): Promise<boolean> {
   const token = await storage.getItem('auth:token')
+  console.log('[AUTO-SYNC][DEBUG] hasAuthToken: auth:token =', token)
+
   if (token) return true
 
   // Fallback: check auth:user
   const userStr = await storage.getItem('auth:user')
+  console.log('[AUTO-SYNC][DEBUG] hasAuthToken: auth:user =', userStr)
+
   if (userStr) {
     try {
       const user = JSON.parse(userStr)
-      return !!user.token
-    } catch {
+      const hasUserToken = !!user.token
+      console.log('[AUTO-SYNC][DEBUG] hasAuthToken: user.token exists =', hasUserToken)
+      return hasUserToken
+    } catch (e) {
+      console.log('[AUTO-SYNC][DEBUG] hasAuthToken: error parsing auth:user', String(e))
       return false
     }
   }
@@ -329,6 +347,9 @@ async function hasUnsyncedChanges(): Promise<boolean> {
  * Start watching database changes and auto-syncing
  */
 export async function startAutoSync() {
+
+  await storage.removeItem('sync:pending')
+  
   if (isWatching) {
     console.log('[AUTO-SYNC] Already watching, skipping...')
     return () => {}

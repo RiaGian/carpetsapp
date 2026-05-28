@@ -344,6 +344,8 @@ export async function deleteCustomer(id: string, userIdForLog: string = 'system'
   await database.write(async () => {
     const rec: any = await customers.find(id)
 
+    console.log('[DELETE-DEBUG] Customer BEFORE markAsDeleted:', rec._raw)
+
     if (!rec) {
       throw new Error(`Customer with id ${id} not found`)
     }
@@ -379,6 +381,8 @@ export async function deleteCustomer(id: string, userIdForLog: string = 'system'
     // WatermelonDB will track this deletion and include it in sync
     // When synchronize() is called, it will collect this ID in the 'deleted' array
     await rec.markAsDeleted()
+
+    console.log('[DELETE-DEBUG] Customer AFTER markAsDeleted:', rec._raw)
   })
 
   // Step 2: Trigger sync immediately to push deletion to server
