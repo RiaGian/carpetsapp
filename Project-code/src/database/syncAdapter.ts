@@ -260,17 +260,6 @@ export async function pushChanges(
   }
 
   try {
-    // DEBUG: Log what WatermelonDB is passing
-    console.log('[SYNC-DEBUG] 🔍 pushChanges received:', {
-      tables: Object.keys(changes),
-      customers: changes.customers ? {
-        created: changes.customers.created?.length || 0,
-        updated: changes.customers.updated?.length || 0,
-        deleted: changes.customers.deleted?.length || 0,
-        deletedIds: changes.customers.deleted || [],
-      } : null,
-    })
-    
     // ONLY sync customers table for now - skip all others
     const cleanedChanges: Record<string, { created: any[]; updated: any[]; deleted: string[] }> = {}
     for (const [tableName, tableChanges] of Object.entries(changes)) {
@@ -285,16 +274,6 @@ export async function pushChanges(
         deleted: tableChanges.deleted || [],
       }
     }
-    
-    // DEBUG: Log what we're sending to server
-    console.log('[SYNC-DEBUG] 📤 Sending to server:', {
-      customers: cleanedChanges.customers ? {
-        created: cleanedChanges.customers.created?.length || 0,
-        updated: cleanedChanges.customers.updated?.length || 0,
-        deleted: cleanedChanges.customers.deleted?.length || 0,
-        deletedIds: cleanedChanges.customers.deleted || [],
-      } : null,
-    })
     
     const requestBody = { changes: cleanedChanges }
     const requestBodyString = JSON.stringify(requestBody)
@@ -325,17 +304,6 @@ export async function pushChanges(
     }
 
     const data = await response.json()
-
-    // DEBUG: Log server response
-    console.log('[SYNC-DEBUG] 📥 Server response:', {
-      status: response.status,
-      customers: data.changes?.customers ? {
-        created: data.changes.customers.created?.length || 0,
-        updated: data.changes.customers.updated?.length || 0,
-        deleted: data.changes.customers.deleted?.length || 0,
-        deletedIds: data.changes.customers.deleted || [],
-      } : null,
-    })
 
     // Transform server response
     const serverChanges: Record<string, { created: any[]; updated: any[]; deleted: string[] }> = {}

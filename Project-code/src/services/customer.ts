@@ -366,14 +366,24 @@ export async function deleteCustomer(id: string, userIdForLog: string = 'system'
     // Mark customer as deleted (for sync) - this will be pushed to server
     // WatermelonDB will track this deletion and sync it automatically
     await rec.markAsDeleted()
+    
+    console.log('[CUSTOMER] Customer marked as deleted for sync:', id)
+    console.log('[CUSTOMER] ✅ Deletion tracked - will be synced to server automatically')
   })
+
+  console.log('Customer deleted:', id)
 
   // Trigger sync immediately to push deletion to server
   try {
-    await new Promise(resolve => setTimeout(resolve, 200))
     const { manualSync } = await import('./autoSyncManager')
-    await manualSync()
+    const result = await manualSync()
+    if (result.success) {
+      console.log('[CUSTOMER] ✅ Sync triggered after deletion - deletion pushed to server')
+    } else {
+      console.warn('[CUSTOMER] Sync after deletion failed (will retry automatically):', result.error)
+    }
   } catch (syncError) {
+    console.warn('[CUSTOMER] Failed to trigger sync after deletion (will sync automatically):', syncError)
     // Don't throw - auto-sync will handle it
   }
 
