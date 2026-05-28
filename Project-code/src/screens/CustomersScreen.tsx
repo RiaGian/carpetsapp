@@ -2296,19 +2296,15 @@ async function doDeleteOrderNow(orderId: string) {
   // Confirm deletion
   async function confirmDeleteNow() {
     if (!pendingDeleteId) return
-    
-    // Close modal immediately
-    setConfirmOpen(false)
-    const deletedId = pendingDeleteId
-    setPendingDeleteId(null)
-    
     try {
-      await deleteCustomer(deletedId, userId)
-      console.log('🗑️ Customer deleted:', deletedId)
-      // No alert - just silently delete
+      await deleteCustomer(pendingDeleteId, userId)
+      console.log('🗑️ Customer deleted:', pendingDeleteId)
     } catch (e) {
       console.error('Delete failed:', e)
       Alert.alert('Σφάλμα', 'Η διαγραφή απέτυχε.')
+    } finally {
+      setConfirmOpen(false)
+      setPendingDeleteId(null)
     }
   }
 
