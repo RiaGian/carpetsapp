@@ -219,15 +219,13 @@ type DBCustomer = {
   id: string
   firstName: string
   lastName: string
-  phone: string | null  // First phone for backward compatibility
-  address: string | null  // First address for backward compatibility
-  city?: string  // First city for backward compatibility
+  phone: string | null
+  address: string | null
+  city?: string
   afm: string | null
   notes: string | null
   createdAt: number
   lastModifiedAt: number
-  phones?: string[]  // All phones from customer_phones table
-  addresses?: { address: string; city: string }[]  // All addresses from customer_addresses table
 }
 
 function Highlight({ text, query }: { text: string; query: string }) {
@@ -829,11 +827,6 @@ export default function CustomersScreen() {
     receiptNo: '',
     pricePerSqm: '',
   })
-  
-  // Edit mode: arrays for multiple phones and addresses
-  const [editPhones, setEditPhones] = useState<string[]>([''])
-  const [editAddresses, setEditAddresses] = useState<string[]>([''])
-  const [editCities, setEditCities] = useState<string[]>([''])
 
   const [errors, setErrors] = useState({
     firstName: false,
@@ -1588,25 +1581,18 @@ const [itemEdit, setItemEdit] = useState({
   useFocusEffect(
     useCallback(() => {
       setLoading(true)
-      const sub = observeCustomers(200).subscribe(async (rows: any[]) => {
-        // Enrich customers with phones and addresses from separate tables
-        const { enrichCustomersWithContacts } = await import('../services/customer')
-        const enriched = await enrichCustomersWithContacts(rows)
-        
-        const mapped: DBCustomer[] = enriched.map((r: any) => ({
+      const sub = observeCustomers(200).subscribe((rows: any[]) => {
+        const mapped: DBCustomer[] = rows.map((r: any) => ({
           id: r.id,
           firstName: r.firstName || '',
           lastName: r.lastName || '',
-          phone: r.phone || '', // First phone for backward compatibility
-          address: r.address || '', // First address for backward compatibility
-          city: r.city || '', // First city for backward compatibility
+          phone: r.phone || '',
+          address: r.address || '',
+          city: r.city || '',  
           afm: r.afm || '',
           notes: r.notes || '',
           createdAt: r.createdAt,
           lastModifiedAt: r.lastModifiedAt,
-          // Store full arrays for display
-          phones: r.phones || [],
-          addresses: r.addresses || [],
         }))
         setCustomers(mapped)
         setLoading(false)
@@ -1873,14 +1859,7 @@ const [itemEdit, setItemEdit] = useState({
     if (!q) return customers
 
     if (isAFM(q)) return customers.filter(c => (c.afm ?? '').includes(q))
-    if (isPhone(q)) {
-      return customers.filter(c => {
-        // Search in phones array first, then fallback to phone field
-        const phones = c.phones || []
-        const phoneMatch = phones.some(p => p.includes(q))
-        return phoneMatch || (c.phone ?? '').includes(q)
-      })
-    }
+    if (isPhone(q)) return customers.filter(c => (c.phone ?? '').includes(q))
 
     const nq = normalize(q)
     return customers.filter(c => {
@@ -1924,22 +1903,11 @@ const [itemEdit, setItemEdit] = useState({
 
   // when editing customer's info
   function validateEdit() {
-    // Validate phones: at least one phone required
-    const cleanPhones = editPhones.map(p => p.trim()).filter(Boolean)
-    const hasValidPhone = cleanPhones.length > 0
-    
-    // Validate addresses: at least one address with city required
-    const hasValidAddress = editAddresses.some((addr, idx) => {
-      const addrTrim = addr.trim()
-      const cityTrim = (editCities[idx] || '').trim()
-      return addrTrim && cityTrim
-    })
-    
     const next = {
       firstName: !edit.firstName.trim(),
       lastName:  !edit.lastName.trim(),
-      phone:     !hasValidPhone,
-      pairs:     !hasValidAddress,
+      phone:     !edit.phone.trim(),
+      pairs:     !(pairsCombined.trim() || composePairs(edit.address, edit.city).trim()),
       afm:       false,
     }
     setEditErr(next)
@@ -1952,52 +1920,20 @@ const [itemEdit, setItemEdit] = useState({
   const [pairsCombined, setPairsCombined] = useState('') // "addr, city | addr, city"
 
   // open customer card
-  async function openCustomerCard(customer: DBCustomer) {
+  function openCustomerCard(customer: DBCustomer) {
     const { desc, receiptNo } = parseNotes(customer.notes)
     setSelectedCustomer(customer)
 
-    // Load phones and addresses from separate tables for display
-    try {
-      const { getChildRows } = await import('../services/customer')
-      const { phoneRows, addressRows } = await getChildRows(customer.id)
-      
-      const phones = phoneRows.length > 0 
-        ? phoneRows.map((r: any) => r.phone_number || '').filter(Boolean)
-        : (customer.phones && customer.phones.length > 0 ? customer.phones : [''])
-      setEditPhones(phones.length > 0 ? phones : [''])
-      
-      const addresses = addressRows.length > 0
-        ? addressRows.map((r: any) => {
-            const addr = r.address || ''
-            const city = r.city || ''
-            return { address: addr, city: city }
-          })
-        : (customer.addresses && customer.addresses.length > 0 
-            ? customer.addresses 
-            : [{ address: customer.address || '', city: customer.city || '' }])
-      
-      setEditAddresses(addresses.map((a: any) => a.address))
-      setEditCities(addresses.map((a: any) => a.city))
-      setPairsCombined('') // No longer needed
-    } catch (error) {
-      console.warn('Failed to load phones/addresses for display:', error)
-      // Fallback to customer data
-      setEditPhones(customer.phones && customer.phones.length > 0 ? customer.phones : [''])
-      setEditAddresses(customer.addresses && customer.addresses.length > 0 
-        ? customer.addresses.map((a: any) => a.address) 
-        : [customer.address || ''])
-      setEditCities(customer.addresses && customer.addresses.length > 0
-        ? customer.addresses.map((a: any) => a.city)
-        : [customer.city || ''])
-      setPairsCombined('')
-    }
+    const addressPipe = customer.address || ''
+    const cityPipe    = customer.city    || ''
+    setPairsCombined(composePairs(addressPipe, cityPipe))   // <<— για το ενιαίο input
 
     setEdit({
       firstName: customer.firstName || '',
       lastName:  customer.lastName  || '',
-      phone:     '', // Removed from customers table
-      address:   '', // Removed from customers table
-      city:      '', // Removed from customers table
+      phone:     customer.phone     || '',
+      address:   addressPipe,   // raw pipes
+      city:      cityPipe,      // raw pipes
       afm:       customer.afm   || '',
       notesBase: desc || '',
       receiptNo: receiptNo || '',
@@ -2010,92 +1946,29 @@ const [itemEdit, setItemEdit] = useState({
     setDetailsOpen(true)
   }
 
-  async function startEdit() { 
+  function startEdit() { 
     console.log('[CUSTOMER] Starting edit mode')
     setIsSaving(false) // Reset saving state when starting edit
-    
-    if (!selectedCustomer) return
-    
-    // Load existing phones and addresses from database
-    try {
-      const { getChildRows } = await import('../services/customer')
-      const { phoneRows, addressRows } = await getChildRows(selectedCustomer.id)
-      
-      // Extract phone numbers
-      const phones = phoneRows.length > 0 
-        ? phoneRows.map((r: any) => r.phone_number || '').filter(Boolean)
-        : (selectedCustomer.phones && selectedCustomer.phones.length > 0 
-            ? selectedCustomer.phones 
-            : [selectedCustomer.phone || ''].filter(Boolean))
-      setEditPhones(phones.length > 0 ? phones : [''])
-      
-      // Extract addresses - city is now a separate column in customer_addresses table
-      const addresses = addressRows.length > 0
-        ? addressRows.map((r: any) => {
-            const addr = r.address || ''
-            const city = r.city || ''  // Read city directly from the city column
-            return { address: addr, city: city }
-          })
-        : (selectedCustomer.addresses && selectedCustomer.addresses.length > 0
-            ? selectedCustomer.addresses
-            : [{ address: selectedCustomer.address || '', city: selectedCustomer.city || '' }])
-      
-      setEditAddresses(addresses.map((a: any) => a.address))
-      setEditCities(addresses.map((a: any) => a.city))
-    } catch (error) {
-      console.warn('Failed to load phones/addresses:', error)
-      // Fallback to empty
-      setEditPhones([''])
-      setEditAddresses([''])
-      setEditCities([''])
-    }
-    
     setEditMode(true) 
   }
 
-  async function cancelEdit() {
+  function cancelEdit() {
     if (!selectedCustomer) return
     const { desc, receiptNo, pricePerSqm } = parseNotes(selectedCustomer.notes)
-    
-    // Reload phones and addresses from database
-    try {
-      const { getChildRows } = await import('../services/customer')
-      const { phoneRows, addressRows } = await getChildRows(selectedCustomer.id)
-      
-      const phones = phoneRows.length > 0 
-        ? phoneRows.map((r: any) => r.phone_number || '').filter(Boolean)
-        : ['']
-      setEditPhones(phones.length > 0 ? phones : [''])
-      
-      const addresses = addressRows.length > 0
-        ? addressRows.map((r: any) => {
-            const addr = r.address || ''
-            const city = r.city || ''
-            return { address: addr, city: city }
-          })
-        : [{ address: '', city: '' }]
-      
-      setEditAddresses(addresses.map((a: any) => a.address))
-      setEditCities(addresses.map((a: any) => a.city))
-    } catch (error) {
-      console.warn('Failed to load phones/addresses:', error)
-      setEditPhones([''])
-      setEditAddresses([''])
-      setEditCities([''])
-    }
-    
     setEdit({
       firstName: selectedCustomer.firstName || '',
       lastName:  selectedCustomer.lastName  || '',
-      phone:     '', // Removed from customers table
-      address:   '', // Removed from customers table
-      city:      '', // Removed from customers table
+      phone:     selectedCustomer.phone     || '',
+      address:   selectedCustomer.address   || '',
+      city:      selectedCustomer.city      || '',
       afm:       selectedCustomer.afm       || '',
       notesBase: desc || '',
       receiptNo: receiptNo || '',
       pricePerSqm: pricePerSqm || '',
     })
-    setPairsCombined('')
+    setPairsCombined(
+      composePairs(selectedCustomer.address || '', selectedCustomer.city || '')
+    )
     setEditMode(false)
   }
 
@@ -2172,23 +2045,20 @@ async function doDeleteOrderNow(orderId: string) {
       setAfmEditError('')
       
       const newNotes = composeNotes(edit.notesBase, edit.receiptNo, edit.pricePerSqm)
+      const combinedSource = (pairsCombined && pairsCombined.trim())
+        ? pairsCombined
+        : composePairs(edit.address, edit.city)
 
-      // Prepare phone and address arrays for sync
-      const cleanPhones = editPhones.map(p => p.trim()).filter(Boolean)
-      const cleanAddresses = editAddresses.map((addr, idx) => {
-        const city = editCities[idx] || ''
-        const addrTrim = addr.trim()
-        const cityTrim = city.trim()
-        return cityTrim ? `${addrTrim}, ${cityTrim}` : addrTrim
-      }).filter(Boolean)
-      
-      // Update customer record WITHOUT phones/addresses (they go to separate tables)
+      const parsed = parsePairs(combinedSource)
+      const addressPipe = parsed.addressPipe.trim()  
+      const cityPipe    = parsed.cityPipe.trim()
+
       const updateData = {
         firstName: edit.firstName.trim(),
         lastName:  edit.lastName.trim(),
-        phone:     '',  // Empty - phones go to customer_phones table
-        address:   '',  // Empty - addresses go to customer_addresses table
-        city:      '',  // Empty - cities go to customer_addresses table
+        phone:     edit.phone.trim(),
+        address:   addressPipe,
+        city:      cityPipe,
         afm:       edit.afm.trim(),
         notes:     newNotes,
       }
@@ -2198,16 +2068,6 @@ async function doDeleteOrderNow(orderId: string) {
         updateData,
         actorId
       )
-      
-      // Sync phones and addresses as individual rows using index-based sync
-      try {
-        const { syncPhonesWithIndexLogs, syncAddressesWithIndexLogs } = await import('../services/customer')
-        await syncPhonesWithIndexLogs(actorId, selectedCustomer.id, cleanPhones)
-        await syncAddressesWithIndexLogs(actorId, selectedCustomer.id, cleanAddresses)
-      } catch (syncError) {
-        console.warn('Failed to sync phones/addresses:', syncError)
-        throw syncError // Re-throw to show error to user
-      }
 
       setPriceByCustomer(prev => {
         const next = { ...prev }
@@ -2221,15 +2081,15 @@ async function doDeleteOrderNow(orderId: string) {
         ...prev,
         firstName: edit.firstName.trim(),
         lastName:  edit.lastName.trim(),
-        phone:     '',  // Empty - phones are in customer_phones table
-        address:   '',  // Empty - addresses are in customer_addresses table
-        city:      '',  // Empty - cities are in customer_addresses table
+        phone:     edit.phone.trim(),
+        address:   addressPipe,
+        city:      cityPipe,
         afm:       edit.afm.trim(),
         notes:     newNotes,
         lastModifiedAt: Date.now(),
       } : prev)
 
-      setPairsCombined('') // No longer needed since addresses are in separate table
+      setPairsCombined(composePairs(addressPipe, cityPipe))
       setEditMode(false)
       setIsSaving(false)
 
@@ -2242,130 +2102,57 @@ async function doDeleteOrderNow(orderId: string) {
         if (updatedCustomer) {
           const customer: any = updatedCustomer
           const { desc, receiptNo } = parseNotes(customer.notes || '')
-          
-          // Reload phones and addresses from database
-          const { getChildRows } = await import('../services/customer')
-          const { phoneRows, addressRows } = await getChildRows(customer.id)
-          const phones = phoneRows.length > 0 
-            ? phoneRows.map((r: any) => r.phone_number || '').filter(Boolean)
-            : [customer.phone || ''].filter(Boolean)
-          // Read city directly from the city column in customer_addresses table
-          const addresses = addressRows.length > 0
-            ? addressRows.map((r: any) => {
-                const addr = r.address || ''
-                const city = r.city || ''  // Read city directly from the city column
-                return { address: addr, city: city }
-              })
-            : [{ address: customer.address || '', city: customer.city || '' }]
+          const addressPipe = customer.address || ''
+          const cityPipe = customer.city || ''
           
           setSelectedCustomer({
             id: customer.id,
             firstName: customer.firstName || '',
             lastName: customer.lastName || '',
-            phone: '', // Removed from customers table
-            address: '', // Removed from customers table
-            city: '', // Removed from customers table
+            phone: customer.phone || '',
+            address: addressPipe,
+            city: cityPipe,
             afm: customer.afm || '',
             notes: customer.notes || '',
             createdAt: customer.createdAt || Date.now(),
             lastModifiedAt: customer.lastModifiedAt || Date.now(),
           })
           
-          setPairsCombined('')
-          setEditPhones(phones.length > 0 ? phones : [''])
-          setEditAddresses(addresses.map((a: any) => a.address))
-          setEditCities(addresses.map((a: any) => a.city))
+          setPairsCombined(composePairs(addressPipe, cityPipe))
           setEdit({
             firstName: customer.firstName || '',
             lastName: customer.lastName || '',
-            phone: '', // Removed from customers table
-            address: '', // Removed from customers table
-            city: '', // Removed from customers table
+            phone: customer.phone || '',
+            address: addressPipe,
+            city: cityPipe,
             afm: customer.afm || '',
             notesBase: desc || '',
             receiptNo: receiptNo || '',
             pricePerSqm: priceByCustomer[customer.id] || '',
           })
         }
-      } catch {
+      } catch (refreshError) {
         // Continue anyway
       }
       
-      // Update customer in the list with enriched phones/addresses
-      try {
-        const { enrichCustomerWithContacts } = await import('../services/customer')
-        const { database } = await import('../database/initializeDatabase')
-        const customers = database.get('customers')
-        const updatedCustomerRecord = await customers.find(selectedCustomer.id)
-        
-        if (updatedCustomerRecord) {
-          const enriched = await enrichCustomerWithContacts(updatedCustomerRecord)
-          
-          setCustomers(prevCustomers => {
-            return prevCustomers.map(c => {
-              if (c.id === selectedCustomer.id) {
-                return {
-                  ...c,
-                  firstName: updateData.firstName,
-                  lastName: updateData.lastName,
-                  phone: enriched.phone || '', // First phone from customer_phones table
-                  address: enriched.address || '', // First address from customer_addresses table
-                  city: enriched.city || '', // First city from customer_addresses table
-                  afm: updateData.afm,
-                  notes: updateData.notes,
-                  createdAt: enriched.createdAt || c.createdAt, // Preserve createdAt
-                  lastModifiedAt: enriched.lastModifiedAt || Date.now(),
-                  phones: enriched.phones || [], // All phones
-                  addresses: enriched.addresses || [], // All addresses
-                }
-              }
-              return c
-            })
-          })
-        } else {
-          // Fallback: update without enrichment (observable will pick it up)
-          setCustomers(prevCustomers => {
-            return prevCustomers.map(c => {
-              if (c.id === selectedCustomer.id) {
-                return {
-                  ...c,
-                  firstName: updateData.firstName,
-                  lastName: updateData.lastName,
-                  phone: '',
-                  address: '',
-                  city: '',
-                  afm: updateData.afm,
-                  notes: updateData.notes,
-                  createdAt: c.createdAt, // Preserve createdAt
-                  lastModifiedAt: Date.now(),
-                }
-              }
-              return c
-            })
-          })
-        }
-      } catch (enrichError) {
-        console.warn('Failed to enrich customer in list update:', enrichError)
-        // Fallback: update without enrichment
-        setCustomers(prevCustomers => {
-          return prevCustomers.map(c => {
-            if (c.id === selectedCustomer.id) {
-              return {
-                ...c,
-                firstName: updateData.firstName,
-                lastName: updateData.lastName,
-                phone: '',
-                address: '',
-                city: '',
-                afm: updateData.afm,
-                notes: updateData.notes,
-                lastModifiedAt: Date.now(),
-              }
+      setCustomers(prevCustomers => {
+        return prevCustomers.map(c => {
+          if (c.id === selectedCustomer.id) {
+            return {
+              ...c,
+              firstName: updateData.firstName,
+              lastName: updateData.lastName,
+              phone: updateData.phone,
+              address: updateData.address,
+              city: updateData.city,
+              afm: updateData.afm,
+              notes: updateData.notes,
+              lastModifiedAt: Date.now(),
             }
-            return c
-          })
+          }
+          return c
         })
-      }
+      })
       } catch (err: any) {
         const msg = (err?.message ?? String(err)).toString()
         
@@ -2386,7 +2173,7 @@ async function doDeleteOrderNow(orderId: string) {
     router.push({ pathname: '/editorder', params: { orderId: o.id } })
   }
 
-  // Multi-input helpers (for create form)
+  // Multi-input helpers
   const addAddress = () => {
     setAddresses([...addresses, ''])
     setCities([...cities, ''])
@@ -2407,29 +2194,6 @@ async function doDeleteOrderNow(orderId: string) {
   }
 
   const removePhone = (idx: number) => setPhones(prev => prev.filter((_, i) => i !== idx))
-  
-  // Edit mode: Multi-input helpers for phones and addresses
-  const addEditPhone = () => setEditPhones(prev => [...prev, ''])
-  const addEditAddress = () => {
-    setEditAddresses(prev => [...prev, ''])
-    setEditCities(prev => [...prev, ''])
-  }
-  
-  const updateEditPhone = (idx: number, val: string) =>
-    setEditPhones(prev => prev.map((p, i) => (i === idx ? val : p)))
-  
-  const updateEditAddress = (idx: number, val: string) =>
-    setEditAddresses(prev => prev.map((a, i) => (i === idx ? val : a)))
-  
-  const updateEditCity = (idx: number, val: string) =>
-    setEditCities(prev => prev.map((c, i) => (i === idx ? val : c)))
-  
-  const removeEditPhone = (idx: number) => setEditPhones(prev => prev.filter((_, i) => i !== idx))
-  
-  const removeEditAddress = (index: number) => {
-    setEditAddresses(prev => prev.filter((_, i) => i !== index))
-    setEditCities(prev => prev.filter((_, i) => i !== index))
-  }
 
   // INSERT new customer (as-is)
   async function handleSaveCustomer() {
@@ -2461,68 +2225,21 @@ async function doDeleteOrderNow(orderId: string) {
     }
     setAfmError('') // Clear error if valid
 
-    // Prepare pipe-separated strings for createCustomer (it will split them and create individual rows)
     const phone = cleanPhones.join(' | ')
     const address = cleanAddresses.join(' | ')
-    const city = cleanCities.join(' | ')
     const notesBlock = (description?.trim() || '')
+    const city    = cleanCities.join(' | ')  
 
     try {
-      // createCustomer will split phone/address/city and create individual rows in customer_phones/customer_addresses
-      // The customer record itself will have empty phone/address/city fields
       const rec = await createCustomer({
         firstName: firstName.trim(),
         lastName: lastName.trim(),
-        phone,    // Pipe-separated - will be split and stored as individual rows
-        address,  // Pipe-separated - will be split and stored as individual rows
-        city,      // Pipe-separated - will be split and stored as individual rows
+        phone,
+        address,
+        city,
         afm: cleanAfm || undefined,
         notes: notesBlock || undefined,
       }, userId)
-      
-      // Immediately enrich the new customer with phones/addresses so it displays correctly
-      // Small delay to ensure phones/addresses are written to database
-      if (rec?.id) {
-        setTimeout(async () => {
-          try {
-            const { enrichCustomerWithContacts } = await import('../services/customer')
-            const enriched = await enrichCustomerWithContacts(rec)
-            
-            // Update the customers list immediately with enriched data
-            setCustomers(prev => {
-              // Check if customer already exists (from observable)
-              const existingIndex = prev.findIndex(c => c.id === enriched.id)
-              const enrichedCustomer: DBCustomer = {
-                id: enriched.id,
-                firstName: enriched.firstName || '',
-                lastName: enriched.lastName || '',
-                phone: enriched.phone || '',
-                address: enriched.address || '',
-                city: enriched.city || '',
-                afm: enriched.afm || '',
-                notes: enriched.notes || '',
-                createdAt: enriched.createdAt,
-                lastModifiedAt: enriched.lastModifiedAt,
-                phones: enriched.phones || [],
-                addresses: enriched.addresses || [],
-              }
-              
-              if (existingIndex >= 0) {
-                // Update existing customer with enriched data
-                const updated = [...prev]
-                updated[existingIndex] = enrichedCustomer
-                return updated
-              } else {
-                // Add new customer at the beginning
-                return [enrichedCustomer, ...prev]
-              }
-            })
-          } catch (enrichError) {
-            console.warn('Failed to enrich new customer immediately:', enrichError)
-            // Continue anyway - observable will pick it up eventually
-          }
-        }, 100) // Small delay to ensure database writes complete
-      }
 
       if (rec?.id && pricePerSqm.trim()) {
         setPriceByCustomer(prev => ({
@@ -2579,19 +2296,15 @@ async function doDeleteOrderNow(orderId: string) {
   // Confirm deletion
   async function confirmDeleteNow() {
     if (!pendingDeleteId) return
-    
-    // Close modal immediately
-    setConfirmOpen(false)
-    const deletedId = pendingDeleteId
-    setPendingDeleteId(null)
-    
     try {
-      await deleteCustomer(deletedId, userId)
-      console.log('🗑️ Customer deleted:', deletedId)
-      // No alert - just silently delete
+      await deleteCustomer(pendingDeleteId, userId)
+      console.log('🗑️ Customer deleted:', pendingDeleteId)
     } catch (e) {
       console.error('Delete failed:', e)
       Alert.alert('Σφάλμα', 'Η διαγραφή απέτυχε.')
+    } finally {
+      setConfirmOpen(false)
+      setPendingDeleteId(null)
     }
   }
 
@@ -3048,16 +2761,18 @@ const isWeb = Platform.OS === 'web';
                 showsVerticalScrollIndicator
                 renderItem={({ item }) => {
                 const fullName = `${item.firstName ?? ''} ${item.lastName ?? ''}`.trim()
-                
-                // Get all phones from phones array (from customer_phones table) - show comma-separated
-                const allPhones = (item.phones && item.phones.length > 0) 
-                  ? item.phones.join(', ')
-                  : (item.phone || '')
+                const firstPhone = (item.phone || '')
+                .split('|')
+                .map((s: string) => s.trim())
+                .filter(Boolean)[0] || ''
 
-                // Get all addresses from addresses array (from customer_addresses table)
-                const allAddresses = (item.addresses && item.addresses.length > 0)
-                  ? item.addresses
-                  : (item.address ? [{ address: item.address || '', city: item.city || '' }] : [])
+                const addrListItem = (item.address || '').split('|').map((s: string) => s.trim()).filter(Boolean)
+                const cityListItem = (item.city || '').split('|').map((s: string) => s.trim())
+                const firstAddr = addrListItem[0] || ''
+                const firstCity = cityListItem[0] || ''
+                const firstAddrLine = firstAddr
+                  ? (firstCity ? `${firstAddr}, ${firstCity}` : firstAddr)
+                  : '—'
 
 
                 return (
@@ -3073,34 +2788,10 @@ const isWeb = Platform.OS === 'web';
                         <Highlight text={fullName || '—'} query={debounced} />
                       </Text>
                       <View style={styles.detailsColumn}>
-                        {/* Show all phones comma-separated */}
-                        <Text style={styles.detailText}>
-                          {allPhones ? `☎ ${allPhones}` : '☎ —'}
+                        <Text style={styles.detailText}>{firstPhone ? `☎ ${firstPhone}` : '☎ —'}</Text>
+                        <Text style={styles.detailText} numberOfLines={1} ellipsizeMode="tail">
+                          {`📍 ${firstAddrLine}`}
                         </Text>
-                        {/* Show multiple location pins for multiple addresses */}
-                        {allAddresses.length > 0 ? (
-                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' }}>
-                            {allAddresses.map((addr: { address: string; city: string }, idx: number) => {
-                              const addrLine = addr.address
-                                ? (addr.city ? `${addr.address}, ${addr.city}` : addr.address)
-                                : '—'
-                              return (
-                                <Text 
-                                  key={`addr-${idx}`} 
-                                  style={[styles.detailText, { marginRight: idx < allAddresses.length - 1 ? 8 : 0 }]} 
-                                  numberOfLines={1} 
-                                  ellipsizeMode="tail"
-                                >
-                                  📍 {addrLine}
-                                </Text>
-                              )
-                            })}
-                          </View>
-                        ) : (
-                          <Text style={styles.detailText} numberOfLines={1} ellipsizeMode="tail">
-                            📍 —
-                          </Text>
-                        )}
                       </View>
                     </View>
 
@@ -3730,150 +3421,43 @@ const isWeb = Platform.OS === 'web';
                     <View style={styles.hairline} />
 
                     {/*  Επικοινωνία */}
-                    {editMode ? (
-                      <>
-                        {/* Multiple Phones in Edit Mode */}
-                        <View style={{ marginBottom: 16 }}>
-                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                            <Text style={styles.label}>Τηλέφωνα *</Text>
-                            <TouchableOpacity onPress={addEditPhone} style={styles.linkBtn}>
-                              <Text style={styles.linkBtnText}>+ Προσθήκη</Text>
-                            </TouchableOpacity>
-                          </View>
-                          
-                          {editPhones.map((phone, idx) => (
-                            <View key={`edit-phone-${idx}`} style={[styles.addRow, { marginBottom: 8 }]}>
-                              <TextInput
-                                value={phone}
-                                onChangeText={(v) => {
-                                  const formatted = formatGreekPhone(v)
-                                  updateEditPhone(idx, formatted)
-                                  if (editErr.phone && formatted.trim()) setEditErr(s => ({ ...s, phone: false }))
-                                }}
-                                style={[
-                                  styles.input,
-                                  { flex: 1 },
-                                  editErr.phone && idx === 0 && styles.inputError,
-                                ]}
-                                keyboardType="phone-pad"
-                                inputMode="numeric"
-                                placeholder="π.χ. 6912345678"
-                                placeholderTextColor={colors.muted}
-                              />
-                              {editPhones.length > 1 && (
-                                <TouchableOpacity onPress={() => removeEditPhone(idx)} style={styles.removeBtn}>
-                                  <Text style={styles.removeBtnText}>✕</Text>
-                                </TouchableOpacity>
-                              )}
-                            </View>
-                          ))}
-                          {editErr.phone && (
-                            <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>
-                              Το τηλέφωνο είναι υποχρεωτικό.
-                            </Text>
-                          )}
-                        </View>
+                    <FieldRow
+                      label="Τηλέφωνο"
+                      value={edit.phone}
+                      editable={editMode}
+                      keyboardType="phone-pad"
+                      inputMode="numeric"
+                      onChangeText={(v) => {
+                        const formatted = formatGreekPhone(v)
+                        setEdit(s => ({ ...s, phone: formatted }))
+                        if (editErr.phone && formatted.trim()) setEditErr(s => ({ ...s, phone: false }))
+                      }}
+                    />
+                    {editMode && editErr.phone && (
+                      <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>
+                        Το τηλέφωνο είναι υποχρεωτικό.
+                      </Text>
+                    )}
 
-                        {/* Multiple Addresses in Edit Mode */}
-                        <View style={{ marginBottom: 16 }}>
-                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                            <Text style={styles.label}>Διεύθυνση, Πόλη *</Text>
-                            <TouchableOpacity onPress={addEditAddress} style={styles.linkBtn}>
-                              <Text style={styles.linkBtnText}>+ Προσθήκη</Text>
-                            </TouchableOpacity>
-                          </View>
-                          
-                          {editAddresses.map((addr, idx) => (
-                            <View key={`edit-addr-${idx}`} style={[styles.addRow, { gap: 8, marginBottom: 8 }]}>
-                              <TextInput
-                                value={addr}
-                                onChangeText={(v) => {
-                                  updateEditAddress(idx, v)
-                                  if (editErr.pairs && v.trim()) setEditErr(s => ({ ...s, pairs: false }))
-                                }}
-                                style={[
-                                  styles.input,
-                                  { flex: 1 },
-                                  editErr.pairs && idx === 0 && styles.inputError,
-                                ]}
-                                placeholder="Διεύθυνση"
-                                placeholderTextColor={colors.muted}
-                                autoCapitalize="words"
-                              />
-                              <TextInput
-                                value={editCities[idx] || ''}
-                                onChangeText={(v) => {
-                                  updateEditCity(idx, v)
-                                  if (editErr.pairs && v.trim()) setEditErr(s => ({ ...s, pairs: false }))
-                                }}
-                                style={[
-                                  styles.input,
-                                  { flex: 0.8 },
-                                  editErr.pairs && idx === 0 && styles.inputError,
-                                ]}
-                                placeholder="Πόλη"
-                                placeholderTextColor={colors.muted}
-                                autoCapitalize="words"
-                              />
-                              {editAddresses.length > 1 && (
-                                <TouchableOpacity onPress={() => removeEditAddress(idx)} style={styles.removeBtn}>
-                                  <Text style={styles.removeBtnText}>✕</Text>
-                                </TouchableOpacity>
-                              )}
-                            </View>
-                          ))}
-                          {editErr.pairs && (
-                            <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>
-                              Πρέπει να προσθέσεις τουλάχιστον μία διεύθυνση και πόλη.
-                            </Text>
-                          )}
-                        </View>
-                      </>
-                    ) : (
-                      <>
-                        {/* Display Mode: Show phones and addresses as separate rows */}
-                        {editPhones.filter(p => p.trim()).length > 0 ? (
-                          editPhones.filter(p => p.trim()).map((phone, idx) => (
-                            <FieldRow
-                              key={`display-phone-${idx}`}
-                              label={idx === 0 ? "Τηλέφωνο" : ""}
-                              value={phone}
-                              editable={false}
-                            />
-                          ))
-                        ) : (
-                          <FieldRow
-                            label="Τηλέφωνο"
-                            value={edit.phone || '—'}
-                            editable={false}
-                          />
-                        )}
-                        
-                        {editAddresses.filter((addr, idx) => {
-                          const city = editCities[idx] || ''
-                          return addr.trim() || city.trim()
-                        }).length > 0 ? (
-                          editAddresses.map((addr, idx) => {
-                            const city = editCities[idx] || ''
-                            const hasValue = addr.trim() || city.trim()
-                            if (!hasValue) return null
-                            return (
-                              <FieldRow
-                                key={`display-addr-${idx}`}
-                                label={idx === 0 ? "Διεύθυνση, Πόλη" : ""}
-                                value={city.trim() ? `${addr}, ${city}` : addr}
-                                editable={false}
-                              />
-                            )
-                          }).filter(Boolean)
-                        ) : (
-                          <FieldRow
-                            label="Διεύθυνση, Πόλη"
-                            value={pairsCombined || '—'}
-                            editable={false}
-                          />
-                        )}
-                      </>
+                    <FieldRow
+                      label="Διεύθυνση, Πόλη"
+                      value={pairsCombined}
+                      editable={editMode}
+                      onChangeText={(v) => {
+                        setPairsCombined(v)
+                        if (editErr.pairs && v.trim()) setEditErr(s => ({ ...s, pairs: false }))
+                      }}
+                      onBlur={() => {
+                        const { addressPipe, cityPipe } = parsePairs(pairsCombined)
+                        setEdit(s => ({ ...s, address: addressPipe, city: cityPipe }))
+                      }}
+                    />
+
+                    {/* when editing */}
+                    {editMode && (
+                      <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>
+                        Π.χ: Οδός1, Πόλη1 | Οδός2, Πόλη2
+                      </Text>
                     )}
 
                     <View style={styles.hairline} />
@@ -4075,158 +3659,31 @@ const isWeb = Platform.OS === 'web';
 
                     {/* ΣΕΙΡΑ 2: Τηλέφωνο | Διεύθυνση, Πόλη */}
                     <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
-                      {/* Phones and Addresses - Mobile */}
-                      {editMode ? (
-                        <>
-                          {/* Multiple Phones */}
-                          <View style={{ marginBottom: 16 }}>
-                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                              <Text style={styles.label}>Τηλέφωνα *</Text>
-                              <TouchableOpacity onPress={addEditPhone} style={styles.linkBtn}>
-                                <Text style={styles.linkBtnText}>+ Προσθήκη</Text>
-                              </TouchableOpacity>
-                            </View>
-                            
-                            {editPhones.map((phone, idx) => (
-                              <View key={`edit-phone-mobile-${idx}`} style={[styles.addRow, { marginBottom: 8 }]}>
-                                <TextInput
-                                  value={phone}
-                                  onChangeText={(v) => {
-                                    const formatted = formatGreekPhone(v)
-                                    updateEditPhone(idx, formatted)
-                                    if (editErr.phone && formatted.trim()) setEditErr(s => ({ ...s, phone: false }))
-                                  }}
-                                  style={[
-                                    styles.input,
-                                    { flex: 1 },
-                                    editErr.phone && idx === 0 && styles.inputError,
-                                  ]}
-                                  keyboardType="phone-pad"
-                                  inputMode="numeric"
-                                  placeholder="π.χ. 6912345678"
-                                  placeholderTextColor={colors.muted}
-                                />
-                                {editPhones.length > 1 && (
-                                  <TouchableOpacity onPress={() => removeEditPhone(idx)} style={styles.removeBtn}>
-                                    <Text style={styles.removeBtnText}>✕</Text>
-                                  </TouchableOpacity>
-                                )}
-                              </View>
-                            ))}
-                            {editErr.phone && (
-                              <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>
-                                Το τηλέφωνο είναι υποχρεωτικό.
-                              </Text>
-                            )}
-                          </View>
-
-                          {/* Multiple Addresses */}
-                          <View style={{ marginBottom: 16 }}>
-                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                              <Text style={styles.label}>Διεύθυνση, Πόλη *</Text>
-                              <TouchableOpacity onPress={addEditAddress} style={styles.linkBtn}>
-                                <Text style={styles.linkBtnText}>+ Προσθήκη</Text>
-                              </TouchableOpacity>
-                            </View>
-                            
-                            {editAddresses.map((addr, idx) => (
-                              <View key={`edit-addr-mobile-${idx}`} style={[styles.addRow, { gap: 8, marginBottom: 8 }]}>
-                                <TextInput
-                                  value={addr}
-                                  onChangeText={(v) => {
-                                    updateEditAddress(idx, v)
-                                    if (editErr.pairs && v.trim()) setEditErr(s => ({ ...s, pairs: false }))
-                                  }}
-                                  style={[
-                                    styles.input,
-                                    { flex: 1 },
-                                    editErr.pairs && idx === 0 && styles.inputError,
-                                  ]}
-                                  placeholder="Διεύθυνση"
-                                  placeholderTextColor={colors.muted}
-                                  autoCapitalize="words"
-                                />
-                                <TextInput
-                                  value={editCities[idx] || ''}
-                                  onChangeText={(v) => {
-                                    updateEditCity(idx, v)
-                                    if (editErr.pairs && v.trim()) setEditErr(s => ({ ...s, pairs: false }))
-                                  }}
-                                  style={[
-                                    styles.input,
-                                    { flex: 0.8 },
-                                    editErr.pairs && idx === 0 && styles.inputError,
-                                  ]}
-                                  placeholder="Πόλη"
-                                  placeholderTextColor={colors.muted}
-                                  autoCapitalize="words"
-                                />
-                                {editAddresses.length > 1 && (
-                                  <TouchableOpacity onPress={() => removeEditAddress(idx)} style={styles.removeBtn}>
-                                    <Text style={styles.removeBtnText}>✕</Text>
-                                  </TouchableOpacity>
-                                )}
-                              </View>
-                            ))}
-                            {editErr.pairs && (
-                              <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>
-                                Πρέπει να προσθέσεις τουλάχιστον μία διεύθυνση και πόλη.
-                              </Text>
-                            )}
-                          </View>
-                        </>
-                      ) : (
-                        <>
-                          {/* Display Mode: Show phones and addresses as separate rows */}
-                          {editPhones.filter(p => p.trim()).length > 0 ? (
-                            editPhones.filter(p => p.trim()).map((phone, idx) => (
-                              <View key={`display-phone-mobile-${idx}`} style={{ flex: 1, marginBottom: idx === 0 ? 0 : 8 }}>
-                                <FieldRow
-                                  label={idx === 0 ? "Τηλέφωνο" : ""}
-                                  value={phone}
-                                  editable={false}
-                                />
-                              </View>
-                            ))
-                          ) : (
-                            <View style={{ flex: 1 }}>
-                              <FieldRow
-                                label="Τηλέφωνο"
-                                value={edit.phone || '—'}
-                                editable={false}
-                              />
-                            </View>
-                          )}
-                          
-                          {editAddresses.filter((addr, idx) => {
-                            const city = editCities[idx] || ''
-                            return addr.trim() || city.trim()
-                          }).length > 0 ? (
-                            editAddresses.map((addr, idx) => {
-                              const city = editCities[idx] || ''
-                              const hasValue = addr.trim() || city.trim()
-                              if (!hasValue) return null
-                              return (
-                                <View key={`display-addr-mobile-${idx}`} style={{ flex: 1, marginBottom: idx === 0 ? 0 : 8 }}>
-                                  <FieldRow
-                                    label={idx === 0 ? "Διεύθυνση, Πόλη" : ""}
-                                    value={city.trim() ? `${addr}, ${city}` : addr}
-                                    editable={false}
-                                  />
-                                </View>
-                              )
-                            }).filter(Boolean)
-                          ) : (
-                            <View style={{ flex: 1 }}>
-                              <FieldRow
-                                label="Διεύθυνση, Πόλη"
-                                value={pairsCombined || '—'}
-                                editable={false}
-                              />
-                            </View>
-                          )}
-                        </>
-                      )}
+                      <View style={{ flex: 1 }}>
+                        <FieldRow
+                          label="Τηλέφωνο"
+                          value={edit.phone}
+                          editable={editMode}
+                          keyboardType="phone-pad"
+                          inputMode="numeric"
+                          onChangeText={(v)=>{ 
+                            const formatted = formatGreekPhone(v)
+                            setEdit(s=>({...s, phone:formatted})); 
+                            if (editErr.phone && formatted.trim()) setEditErr(s=>({...s, phone:false})); 
+                          }}
+                        />
+                        {editMode && editErr.phone && <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>Το τηλέφωνο είναι υποχρεωτικό.</Text>}
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <FieldRow
+                          label="Διεύθυνση, Πόλη"
+                          value={pairsCombined}
+                          editable={editMode}
+                          onChangeText={(v)=>{ setPairsCombined(v); if (editErr.pairs && v.trim()) setEditErr(s=>({...s, pairs:false})); }}
+                          onBlur={()=>{ const { addressPipe, cityPipe } = parsePairs(pairsCombined); setEdit(s=>({ ...s, address: addressPipe, city: cityPipe })); }}
+                        />
+                        {editMode && <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>Π.χ: Οδός1, Πόλη1 | Οδός2, Πόλη2</Text>}
+                      </View>
                     </View>
 
                     {/* ΣΕΙΡΑ 3: ΑΦΜ | Τιμή/τ.μ. */}

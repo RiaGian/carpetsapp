@@ -191,11 +191,9 @@ export async function pullChanges(
           .map(record => validateRecord(record, 'updated'))
           .filter(record => record !== null)
         
-        // CRITICAL FIX: Filter out records that already exist locally AND records that are deleted
+        // CRITICAL FIX: Filter out records that already exist locally
         // This prevents WatermelonDB from trying to create records that were created locally
         // and then synced to server (which then returns them as "created")
-        // ALSO prevents deleted records from being recreated
-        const deletedIds = new Set(tableData.deleted || [])
         const filteredCreated: any[] = []
         const filteredUpdated: any[] = []
         
@@ -204,69 +202,36 @@ export async function pullChanges(
           const collection = database.get(tableName)
           
           for (const record of validatedCreated) {
-            // CRITICAL: Skip records that are marked as deleted by server
-            if (deletedIds.has(record.id)) {
-              console.warn(`[SYNC-DEBUG] ⚠️ Skipping record ${record.id} in ${tableName} - it's in server's deleted array`)
-              continue
-            }
-            
             try {
               const existing = await collection.find(record.id).catch(() => null)
               if (!existing) {
                 // Record doesn't exist locally - safe to create
                 filteredCreated.push(record)
               } else {
-                // Check if record is marked as deleted locally
-                const raw = (existing as any)?._raw
-                const localStatus = raw?._status
-                
-                if (localStatus === 'deleted') {
-                  // Record is marked as deleted locally - skip it completely
-                  console.warn(`[SYNC-DEBUG] ⚠️ Skipping record ${record.id} in ${tableName} - it's marked as deleted locally`)
-                  continue
-                }
-                
                 // Record already exists locally - treat as update instead
                 console.warn(`[SYNC-DEBUG] Record ${record.id} in ${tableName} already exists locally, treating as update instead of create`)
                 filteredUpdated.push(record)
               }
             } catch {
-              // If check fails, skip it to be safe
-              console.warn(`[SYNC-DEBUG] ⚠️ Error checking record ${record.id} in ${tableName}, skipping`)
+              // If check fails, include it anyway (let WatermelonDB handle it)
+              filteredCreated.push(record)
             }
           }
           
           for (const record of validatedUpdated) {
-            // CRITICAL: Skip records that are marked as deleted by server
-            if (deletedIds.has(record.id)) {
-              console.warn(`[SYNC-DEBUG] ⚠️ Skipping record ${record.id} in ${tableName} - it's in server's deleted array`)
-              continue
-            }
-            
             try {
               const existing = await collection.find(record.id).catch(() => null)
-              if (!existing) {
-                // Check if we should create it or skip it
-                // If server says updated but record doesn't exist, it might have been deleted
-                console.warn(`[SYNC-DEBUG] Record ${record.id} in ${tableName} doesn't exist locally (was deleted?), skipping update`)
-                continue
+              if (existing) {
+                // Record exists - safe to update
+                filteredUpdated.push(record)
+              } else {
+                // Record doesn't exist - treat as create instead
+                console.warn(`[SYNC-DEBUG] Record ${record.id} in ${tableName} doesn't exist locally, treating as create instead of update`)
+                filteredCreated.push(record)
               }
-              
-              // Check if record is marked as deleted locally
-              const raw = (existing as any)?._raw
-              const localStatus = raw?._status
-              
-              if (localStatus === 'deleted') {
-                // Record is marked as deleted locally - skip it completely
-                console.warn(`[SYNC-DEBUG] ⚠️ Skipping record ${record.id} in ${tableName} - it's marked as deleted locally`)
-                continue
-              }
-              
-              // Record exists - safe to update
-              filteredUpdated.push(record)
             } catch {
-              // If check fails, skip it to be safe
-              console.warn(`[SYNC-DEBUG] ⚠️ Error checking record ${record.id} in ${tableName}, skipping`)
+              // If check fails, include it anyway
+              filteredUpdated.push(record)
             }
           }
         })
@@ -277,27 +242,15 @@ export async function pullChanges(
           deleted: tableData.deleted || [],
         }
         
-        // Log deletions for debugging (for enabled sync tables)
-        const SYNC_ENABLED_TABLES_PULL = ['customers', 'customer_phones', 'customer_addresses']
-        if (SYNC_ENABLED_TABLES_PULL.includes(tableName)) {
-          if (tableData.deleted && tableData.deleted.length > 0) {
-            console.log(`[SYNC-DEBUG] 🗑️ Pulled ${tableData.deleted.length} ${tableName} deletion(s) from server:`, tableData.deleted)
-          }
-          
-          // Log what server returned
-          console.log(`[SYNC-DEBUG] Server returned for ${tableName}:`, {
-            created: validatedCreated.length,
-            updated: validatedUpdated.length,
-            deleted: tableData.deleted?.length || 0,
-            deletedIds: tableData.deleted || [],
-          })
-          
-          // Log if we filtered any records
+        // Log deletions for debugging
+        if (tableName === 'customers' && tableData.deleted && tableData.deleted.length > 0) {
+          console.log(`[SYNC-DEBUG] 🗑️ Pulled ${tableData.deleted.length} customer deletion(s) from server:`, tableData.deleted)
+        }
+        
+        // Log if we filtered any records
+        if (tableName === 'customers') {
           if (validatedCreated.length !== filteredCreated.length) {
-            console.log(`[SYNC-DEBUG] Filtered ${validatedCreated.length - filteredCreated.length} ${tableName} record(s) from created (already exist locally or deleted)`)
-          }
-          if (validatedUpdated.length !== filteredUpdated.length) {
-            console.log(`[SYNC-DEBUG] Filtered ${validatedUpdated.length - filteredUpdated.length} ${tableName} record(s) from updated (deleted)`)
+            console.log(`[SYNC-DEBUG] Filtered ${validatedCreated.length - filteredCreated.length} customer record(s) from created (already exist locally)`)
           }
         }
       }
@@ -363,39 +316,32 @@ export async function pushChanges(
   }
 
   try {
-    // DEBUG: Log what WatermelonDB is passing (for enabled tables)
-    const SYNC_ENABLED_TABLES_DEBUG = ['customers', 'customer_phones', 'customer_addresses']
-    const debugSummary: any = { tables: Object.keys(changes) }
-    for (const tableName of SYNC_ENABLED_TABLES_DEBUG) {
-      if (changes[tableName]) {
-        debugSummary[tableName] = {
-          created: changes[tableName].created?.length || 0,
-          updated: changes[tableName].updated?.length || 0,
-          deleted: changes[tableName].deleted?.length || 0,
-          deletedIds: changes[tableName].deleted || [],
-        }
-        
-        // Log deletions specifically
-        if (changes[tableName].deleted?.length > 0) {
-          console.log(`[SYNC-DEBUG] 🗑️ Found ${changes[tableName].deleted.length} ${tableName} deletion(s) to sync:`, changes[tableName].deleted)
-        }
-      }
+    // DEBUG: Log what WatermelonDB is passing
+    console.log('[SYNC-DEBUG] 🔍 pushChanges received:', {
+      tables: Object.keys(changes),
+      customers: changes.customers ? {
+        created: changes.customers.created?.length || 0,
+        updated: changes.customers.updated?.length || 0,
+        deleted: changes.customers.deleted?.length || 0,
+        deletedIds: changes.customers.deleted || [],
+      } : null,
+    })
+
+    console.log(
+      '[SYNC-DEBUG] RAW changes for customers:',
+      JSON.stringify(changes.customers, null, 2)
+    )
+    
+    // Log deletions specifically for debugging
+    if (changes.customers?.deleted?.length > 0) {
+      console.log(`[SYNC-DEBUG] 🗑️ Found ${changes.customers.deleted.length} customer deletion(s) to sync:`, changes.customers.deleted)
     }
-    console.log('[SYNC-DEBUG] 🔍 pushChanges received:', debugSummary)
     
-    // Sync only specific tables for now (step by step approach)
-    // TODO: Add more tables as needed: orders, order_items, payments, etc.
-    const SYNC_ENABLED_TABLES = [
-      'customers',
-      'customer_phones',
-      'customer_addresses',
-    ]
-    
+    // ONLY sync customers table for now - skip all others
     const cleanedChanges: Record<string, { created: any[]; updated: any[]; deleted: string[] }> = {}
     for (const [tableName, tableChanges] of Object.entries(changes)) {
-      // Only process tables that are enabled for sync
-      if (!SYNC_ENABLED_TABLES.includes(tableName)) {
-        console.log(`[SYNC-DEBUG] Skipping ${tableName} - not enabled for sync yet`)
+      // ONLY process customers table
+      if (tableName !== 'customers') {
         continue
       }
       
@@ -407,18 +353,14 @@ export async function pushChanges(
     }
     
     // DEBUG: Log what we're sending to server
-    const syncSummary: any = {}
-    for (const tableName of SYNC_ENABLED_TABLES) {
-      if (cleanedChanges[tableName]) {
-        syncSummary[tableName] = {
-          created: cleanedChanges[tableName].created?.length || 0,
-          updated: cleanedChanges[tableName].updated?.length || 0,
-          deleted: cleanedChanges[tableName].deleted?.length || 0,
-          deletedIds: cleanedChanges[tableName].deleted || [],
-        }
-      }
-    }
-    console.log('[SYNC-DEBUG] 📤 Sending to server:', syncSummary)
+    console.log('[SYNC-DEBUG] 📤 Sending to server:', {
+      customers: cleanedChanges.customers ? {
+        created: cleanedChanges.customers.created?.length || 0,
+        updated: cleanedChanges.customers.updated?.length || 0,
+        deleted: cleanedChanges.customers.deleted?.length || 0,
+        deletedIds: cleanedChanges.customers.deleted || [],
+      } : null,
+    })
     
     const requestBody = { changes: cleanedChanges }
     const requestBodyString = JSON.stringify(requestBody)
@@ -444,10 +386,6 @@ export async function pushChanges(
       } catch {
         // Not JSON, use as-is
       }
-      
-      console.error('[SYNC-DEBUG] ❌ Push failed with status:', response.status)
-      console.error('[SYNC-DEBUG] ❌ Error response:', errorText)
-      console.error('[SYNC-DEBUG] ❌ Error JSON:', errorJson)
       
       throw new Error(`Push failed (${response.status}): ${errorJson?.message || errorJson?.error || errorText}`)
     }

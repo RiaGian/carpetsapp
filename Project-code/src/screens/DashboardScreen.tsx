@@ -21,7 +21,7 @@ import { logLogout } from '../services/activitylog';
 
 import { useFocusEffect } from '@react-navigation/native';
 import { Calendar } from 'react-native-calendars';
-import { observeCustomers } from '../services/customer';
+import { listCustomers, observeCustomers } from '../services/customer';
 import { observeActiveOrders, observeReadyForDeliveryOrders } from '../services/orders';
 import { createPickup, observePickups } from '../services/pickups';
 import { useAuth } from '../state/AuthProvider';
@@ -297,16 +297,11 @@ export default function DashboardScreen() {
     return 'system';
   };
   //  live observe of customer on dashboard
-  // Live observe customers for preview (updates automatically when customers are edited)
   useFocusEffect(
     useCallback(() => {
-      const sub = observeCustomers(500).subscribe(async (rows: any[]) => {
-        // Enrich customers with phones and addresses for accurate display
-        const { enrichCustomersWithContacts } = await import('../services/customer')
-        const enriched = await enrichCustomersWithContacts(rows)
-        
-        const count = enriched.length;
-        const names = enriched.map((r: any) => {
+      const sub = observeCustomers(500).subscribe((rows: any[]) => {
+        const count = rows.length;
+        const names = rows.map((r: any) => {
           const first = r.firstName ?? r._raw?.first_name ?? '';
           const last = r.lastName ?? r._raw?.last_name ?? '';
           return `${first} ${last}`.trim() || '—';
@@ -353,23 +348,20 @@ export default function DashboardScreen() {
   const isAFM = (q: string) => /^\d{9}$/.test(q);
   const isPhone = (q: string) => /^\d{7,}$/.test(q);
 
-  // Load customers for pickup modal using reactive observable (updates automatically)
+  // Load customers for pickup modal and handle return from customer creation
   useFocusEffect(
     useCallback(() => {
-      const sub = observeCustomers(1000).subscribe(async (rows: any[]) => {
+      const loadCustomers = async () => {
         try {
-          // Enrich customers with phones and addresses from separate tables
-          const { enrichCustomersWithContacts } = await import('../services/customer')
-          const enriched = await enrichCustomersWithContacts(rows)
-          
-          const options = enriched.map((c: any) => ({
+          const customers = await listCustomers(1000);
+          const options = customers.map((c: any) => ({
             id: c.id,
             label: `${c.firstName || ''} ${c.lastName || ''}`.trim() || '—',
             firstName: c.firstName || '',
             lastName: c.lastName || '',
-            phone: c.phone || '', // First phone for display
+            phone: c.phone || '',
             afm: c.afm || '',
-            address: c.address || '', // First address for display
+            address: c.address || '',
           }));
           
           // Check if we're returning from customer creation
@@ -404,14 +396,12 @@ export default function DashboardScreen() {
         } catch (e) {
           console.error('Failed to load customers:', e);
         }
-      });
+      };
       
-      return () => sub.unsubscribe();
+      // Always load customers when screen gets focus
+      loadCustomers();
     }, [])
   );
-  
-  // Note: Customers are now loaded reactively via observeCustomers above
-  // This ensures automatic updates when customers are edited
 
   // Reset search and pagination when modal closes
   React.useEffect(() => {

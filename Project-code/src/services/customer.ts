@@ -30,7 +30,7 @@ const pairAddressCity = (addresses: string[], cities: string[]) =>
     return city ? `${addr}, ${city}` : addr
   })
 
-export async function getChildRows(customerId: string) {
+async function getChildRows(customerId: string) {
   const phonesCollection = database.get('customer_phones')
   const addressesCollection = database.get('customer_addresses')
 
@@ -40,68 +40,6 @@ export async function getChildRows(customerId: string) {
   ])
 
   return { phoneRows, addressRows }
-}
-
-// Enrich customer data with phones and addresses from separate tables
-// firstName, lastName, afm, notes, etc. come from the customer table
-// phones come from customer_phones table
-// addresses come from customer_addresses table
-export async function enrichCustomerWithContacts(customer: any) {
-  try {
-    const { phoneRows, addressRows } = await getChildRows(customer.id)
-    
-    // Get all phone numbers from customer_phones table
-    const phones = phoneRows.map((r: any) => r.phone_number || '').filter(Boolean)
-    
-    // Get all addresses with cities from customer_addresses table
-    const addresses = addressRows.map((r: any) => {
-      const addr = r.address || ''
-      const city = r.city || ''
-      return { address: addr, city: city }
-    })
-    
-    // Return customer data with enriched phones/addresses
-    // All customer fields (firstName, lastName, afm, notes, etc.) are preserved from customer table
-    return {
-      // Customer table fields (preserved)
-      id: customer.id,
-      firstName: customer.firstName || '',
-      lastName: customer.lastName || '',
-      afm: customer.afm || '',
-      notes: customer.notes || '',
-      createdAt: customer.createdAt,
-      lastModifiedAt: customer.lastModifiedAt,
-      // Enriched from customer_phones table
-      phones: phones,
-      phone: phones[0] || '', // First phone for backward compatibility
-      // Enriched from customer_addresses table
-      addresses: addresses,
-      address: addresses[0]?.address || '', // First address for backward compatibility
-      city: addresses[0]?.city || '', // First city for backward compatibility
-    }
-  } catch (error) {
-    console.warn('Failed to enrich customer with contacts:', error)
-    // Return customer data without enrichment if fetch fails
-    return {
-      id: customer.id,
-      firstName: customer.firstName || '',
-      lastName: customer.lastName || '',
-      afm: customer.afm || '',
-      notes: customer.notes || '',
-      createdAt: customer.createdAt,
-      lastModifiedAt: customer.lastModifiedAt,
-      phones: [],
-      addresses: [],
-      phone: '',
-      address: '',
-      city: '',
-    }
-  }
-}
-
-// Enrich multiple customers with their contacts
-export async function enrichCustomersWithContacts(customers: any[]) {
-  return Promise.all(customers.map(c => enrichCustomerWithContacts(c)))
 }
 
 // --- SINGLE-ROW per customer helpers ---
@@ -214,7 +152,7 @@ async function upsertAddressRow(
 
 
 // index-based sync -> UPDATE logs ...
-export async function syncPhonesWithIndexLogs(userId: string, customerId: string, nextPhones: string[]) {
+async function syncPhonesWithIndexLogs(userId: string, customerId: string, nextPhones: string[]) {
   const phonesCollection = database.get('customer_phones')
   const { phoneRows } = await getChildRows(customerId)
 
@@ -256,73 +194,44 @@ export async function syncPhonesWithIndexLogs(userId: string, customerId: string
   }
 }
 
-export async function syncAddressesWithIndexLogs(userId: string, customerId: string, nextAddresses: string[]) {
+async function syncAddressesWithIndexLogs(userId: string, customerId: string, nextAddresses: string[]) {
   const addressesCollection = database.get('customer_addresses')
   const { addressRows } = await getChildRows(customerId)
 
-  // Parse addresses: format is "Address, City" or just "Address"
-  const parseAddress = (addrStr: string) => {
-    if (addrStr.includes(',')) {
-      const parts = addrStr.split(',').map(s => s.trim())
-      return { address: parts[0] || '', city: parts[1] || '' }
-    }
-    return { address: addrStr, city: '' }
-  }
-
-  const prev = addressRows.map((r: any) => ({ 
-    id: r.id, 
-    address: r.address || '', 
-    city: r.city || '',
-    // For comparison, combine as "Address, City"
-    value: r.city ? `${r.address || ''}, ${r.city}` : (r.address || '')
-  }))
-  
-  const curr = nextAddresses.map(parseAddress)
+  const prev = addressRows.map((r: any) => ({ id: r.id, value: r.address }))
+  const curr = nextAddresses
 
   const maxLen = Math.max(prev.length, curr.length)
 
   for (let i = 0; i < maxLen; i++) {
-    const prevItem = prev[i]
-    const prevId  = prevItem?.id
-    const nextItem = curr[i]
+    const prevVal = prev[i]?.value
+    const prevId  = prev[i]?.id
+    const nextVal = curr[i]
 
-    if (prevItem && nextItem) {
-      // Check if address or city changed
-      const prevCombined = prevItem.city ? `${prevItem.address}, ${prevItem.city}` : prevItem.address
-      const nextCombined = nextItem.city ? `${nextItem.address}, ${nextItem.city}` : nextItem.address
-      
-      if (norm(prevCombined) !== norm(nextCombined)) {
+    if (prevVal && nextVal) {
+      if (norm(prevVal) !== norm(nextVal)) {
         await database.write(async () => {
           const rec: any = await addressesCollection.find(prevId)
-          await rec.update((r: any) => { 
-            r.address = nextItem.address
-            r.city = nextItem.city
-            r.last_modified_at = Date.now()
-          })
+          await rec.update((r: any) => { r.address = nextVal })
         })
-        await logUpdateCustomerAddress(userId, customerId, prevCombined, nextCombined)
+        await logUpdateCustomerAddress(userId, customerId, prevVal, nextVal)
       }
-    } else if (!prevItem && nextItem) {
+    } else if (!prevVal && nextVal) {
       const parent = await database.get('customers').find(customerId)
       await database.write(async () => {
         await addressesCollection.create((rec: any) => {
           rec.customer.set(parent)        
-          rec.address = nextItem.address
-          rec.city = nextItem.city
-          rec.created_at = Date.now()
-          rec.last_modified_at = Date.now()
+          rec.address = nextVal
         })
       })
 
-      const nextCombined = nextItem.city ? `${nextItem.address}, ${nextItem.city}` : nextItem.address
-      await logAddCustomerAddress(userId, customerId, nextCombined)
-    } else if (prevItem && !nextItem) {
+      await logAddCustomerAddress(userId, customerId, nextVal)
+    } else if (prevVal && !nextVal) {
       await database.write(async () => {
         const rec: any = await addressesCollection.find(prevId)
         await rec.destroyPermanently()
       })
-      const prevCombined = prevItem.city ? `${prevItem.address}, ${prevItem.city}` : prevItem.address
-      await logDeleteCustomerAddress(userId, customerId, prevCombined)
+      await logDeleteCustomerAddress(userId, customerId, prevVal)
     }
   }
 }
@@ -355,8 +264,9 @@ export async function createCustomer(data: NewCustomer, userIdForLog: string = '
     newRecord = await customers.create((rec: any) => {
       rec.firstName       = data.firstName.trim()
       rec.lastName        = data.lastName.trim()
-      // Don't store phones/addresses in main customer record - they go to separate tables
-      // phone, address, city removed from customers table - they're in separate tables
+      rec.phone           = data.phone ?? ''
+      rec.address         = data.address ?? '' 
+      rec.city            = data.city ?? ''  
       rec.afm             = data.afm ?? ''
       rec.notes           = data.notes ?? ''
       const now           = Date.now()
@@ -373,26 +283,19 @@ export async function createCustomer(data: NewCustomer, userIdForLog: string = '
     createdAt: newRecord.createdAt,
   })
 
-  // Add phones/addresses as individual rows in separate tables
-  // Note: data.phone/data.address/data.city may contain pipe-separated values for backward compatibility
-  // We split them and create individual rows
+  // add phones/addresses as single-row per customer
   try {
-    const phonesList    = splitPipeList(data.phone ?? '').filter(Boolean)
-    const addressesList = splitPipeList(data.address ?? '').filter(Boolean)
-    const citiesList    = splitPipeList(data.city ?? '').filter(Boolean)
-    
-    // Use index-based sync to create individual rows (one row per phone/address)
-    if (phonesList.length > 0) {
-      await syncPhonesWithIndexLogs(userIdForLog, newRecord.id, phonesList)
-    }
-    
-    if (addressesList.length > 0 || citiesList.length > 0) {
-      const normalizedEntries = pairAddressCity(addressesList, citiesList)
-      await syncAddressesWithIndexLogs(userIdForLog, newRecord.id, normalizedEntries.filter(Boolean))
-    }
+    const phonesList    = splitPipeList(newRecord.phone)
+    const addressesList = splitPipeList(newRecord.address)
+    const citiesList    = splitPipeList(newRecord.city)     
+
+    await upsertPhoneRow(userIdForLog, newRecord.id, phonesList)
+
+    const normalizedEntries = pairAddressCity(addressesList, citiesList)
+    await upsertAddressRow(userIdForLog, newRecord.id, normalizedEntries)
 
   } catch (err) {
-    console.warn('createCustomer: contacts sync failed:', err)
+    console.warn('createCustomer: contacts upsert failed:', err)
   }
 
   // Activity log: CREATE (best-effort)
@@ -451,8 +354,8 @@ export async function deleteCustomer(id: string, userIdForLog: string = 'system'
     deletedData = {
       firstName: rec.firstName,
       lastName:  rec.lastName,
-      phone:     '', // Removed from customers table
-      address:   '', // Removed from customers table
+      phone:     rec.phone,
+      address:   rec.address,
       afm:       rec.afm,
       notes:     rec.notes,
       createdAt: rec.createdAt,
@@ -561,9 +464,9 @@ export async function updateCustomer(id: string, data: UpdateCustomer, userIdFor
       oldValues = {
         firstName: rec.firstName,
         lastName:  rec.lastName,
-        phone:     '', // Removed from customers table
-        address:   '', // Removed from customers table
-        city:      '', // Removed from customers table
+        phone:     rec.phone,
+        address:   rec.address,
+        city:      rec.city,
         afm:       rec.afm,
         notes:     rec.notes,
       }
@@ -575,9 +478,15 @@ export async function updateCustomer(id: string, data: UpdateCustomer, userIdFor
         if (typeof data.lastName  !== 'undefined') {
           r.lastName  = data.lastName.trim()
         }
-        // Don't store phones/addresses in main customer record - they go to separate tables
-        // Clear them if they were set
-        // phone, address, city removed from customers table - they're in separate tables
+        if (typeof data.phone     !== 'undefined') {
+          r.phone     = data.phone ?? ''
+        }
+        if (typeof data.address   !== 'undefined') {
+          r.address   = data.address ?? ''
+        }
+        if (typeof data.city      !== 'undefined') {
+          r.city      = data.city ?? ''
+        }
         if (typeof data.afm       !== 'undefined') {
           r.afm       = data.afm ?? ''
         }
@@ -591,9 +500,9 @@ export async function updateCustomer(id: string, data: UpdateCustomer, userIdFor
       newValues = {
         firstName: rec.firstName,
         lastName:  rec.lastName,
-        phone:     '', // Removed from customers table
-        address:   '', // Removed from customers table
-        city:      '', // Removed from customers table
+        phone:     rec.phone,
+        address:   rec.address,
+        city:      rec.city,
         afm:       rec.afm,
         notes:     rec.notes,
       }
@@ -609,8 +518,18 @@ export async function updateCustomer(id: string, data: UpdateCustomer, userIdFor
     console.warn('logUpdateCustomer failed:', err)
   }
 
-  // Note: Phones and addresses are handled separately via syncPhonesWithIndexLogs/syncAddressesWithIndexLogs
-  // This function should NOT be called with phone/address data - those should be handled separately
+  // Sync child single-row
+  try {
+    const newPhones     = splitPipeList(newValues.phone)
+    const addressesList = splitPipeList(newValues.address)
+    const citiesList    = splitPipeList(newValues.city)
+    const normalizedUpd = pairAddressCity(addressesList, citiesList)
+
+    await upsertPhoneRow(userIdForLog, id, newPhones)
+    await upsertAddressRow(userIdForLog, id, normalizedUpd)
+  } catch (err) {
+    console.warn('updateCustomer: contacts upsert failed:', err)
+  }
 }
 
 
