@@ -6,4 +6,7 @@ export default class CustomerAddress extends Model {
 
   @relation('customers', 'customer_id') customer!: any
   @field('address') address!: string
+  @field('city') city!: string
+  @field('created_at') createdAt!: number
+  @field('last_modified_at') lastModifiedAt!: number
 }

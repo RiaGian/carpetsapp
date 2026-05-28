@@ -1,3 +1,4 @@
+
 // app/_layout.tsx
 import { DatabaseProvider } from '@nozbe/watermelondb/react'
 import { Stack } from 'expo-router'
