@@ -346,6 +346,7 @@ export default function EditOrderScreen() {
 
     
     if (out.length === 10) {
+      setHasUserMadeChanges(true)
       setPieces(prev =>
         prev.map(p => {
           if (!p.orderDate || p.orderDate.length !== 10) {
@@ -401,6 +402,7 @@ export default function EditOrderScreen() {
     // οrder status
   const [orderStatusOpen, setOrderStatusOpen] = useState(false);
   const [orderStatus, setOrderStatus] = useState<string | null>(null);
+  const [originalOrderStatusForModal, setOriginalOrderStatusForModal] = useState<string | null>(null); // Store original status before changing to delivered (for modal)
   const [deliveryDate, setDeliveryDate] = useState<string | null>(null); // ISO datetime string
   const [deliveryDateOpen, setDeliveryDateOpen] = useState(false);
   const [deliveryTimeStart, setDeliveryTimeStart] = useState<string>(''); // HH:mm format (start time)
@@ -413,6 +415,15 @@ export default function EditOrderScreen() {
   const [partialPaymentAmount, setPartialPaymentAmount] = useState<string>('') // amount paid (partial)
   const [returnsPromptOpen, setReturnsPromptOpen] = useState(false)
   const [unsavedChangesModalOpen, setUnsavedChangesModalOpen] = useState(false) // unsaved changes warning
+  const [hasUserMadeChanges, setHasUserMadeChanges] = useState(false) // Track if user has made actual changes (not from initial load)
+  
+  // Store original values to compare for unsaved changes
+  const [originalOrderStatusForSave, setOriginalOrderStatusForSave] = useState<string | null>(null)
+  const [originalPaymentMethod, setOriginalPaymentMethod] = useState<string | null>(null)
+  const [originalDepositAmount, setOriginalDepositAmount] = useState<string>('')
+  const [originalDepositEnabled, setOriginalDepositEnabled] = useState(false)
+  const [originalNotes, setOriginalNotes] = useState<string>('')
+  const [originalOrderDate, setOriginalOrderDate] = useState<string>('')
 
   const toNum = (s?: string) => parseFloat((s || '').replace(',', '.')) || 0;
   const fix2 = (n: number) => n.toFixed(2);
@@ -498,10 +509,19 @@ const clearReturnsPending = (customerId: string, orderId: string) => {
         setNotes(order.notes || '')
         setHasDebt(typeof order.hasDebt === 'boolean' ? order.hasDebt : false)
 
+        // Store original values for comparison
+        setOriginalPaymentMethod(order.paymentMethod || null)
+        setOriginalDepositAmount(order.deposit?.toString() ?? '')
+        setOriginalDepositEnabled(!!order.deposit && order.deposit > 0)
+        setOriginalNotes(order.notes || '')
+
         if (order.orderStatus) {
-          setOrderStatus(ORDER_STATUS_LABEL_TO_KEY[order.orderStatus] ?? 'new')
+          const statusKey = ORDER_STATUS_LABEL_TO_KEY[order.orderStatus] ?? 'new'
+          setOrderStatus(statusKey)
+          setOriginalOrderStatusForSave(statusKey)
         } else {
-          setOrderStatus('new') 
+          setOrderStatus('new')
+          setOriginalOrderStatusForSave('new')
         }
         
         // Load delivery date if exists
@@ -529,12 +549,14 @@ const clearReturnsPending = (customerId: string, orderId: string) => {
           setDeliveryTimeStart('')
           setDeliveryTimeEnd('')
         } 
+        const orderDateStr = order.orderDate || ''
         setOrders([{
           ...makeEmptyOrder(),
           qty: '',   
-          date: order.orderDate || '',
+          date: orderDateStr,
           
         }])
+        setOriginalOrderDate(orderDateStr)
 
         // Fetch shelf information for all items
         const itemIds = items.map((it: any) => it.id)
@@ -592,7 +614,15 @@ const clearReturnsPending = (customerId: string, orderId: string) => {
         if (!cancelled) {
           setPieces(mapped)
           setPiecesVisible(true)
-          setRemovedItemIds([]) 
+          setRemovedItemIds([])
+          setHasUserMadeChanges(false) // Reset flag after loading
+          // Reset original values after loading (use the values we just set)
+          setOriginalOrderStatusForSave(orderStatus)
+          setOriginalPaymentMethod(paymentMethod)
+          setOriginalDepositAmount(depositAmount)
+          setOriginalDepositEnabled(depositEnabled)
+          setOriginalNotes(notes)
+          setOriginalOrderDate(orderDateStr)
         }
       } catch (err) {
         console.error(' loadData error:', err)
@@ -616,6 +646,7 @@ const clearReturnsPending = (customerId: string, orderId: string) => {
       setDepositEnabled(false)
       setNotes('')
       setOrders([makeEmptyOrder()])
+      setHasUserMadeChanges(false) // Reset flag when leaving
     }
   }, [orderId])
 
@@ -709,6 +740,7 @@ const clearReturnsPending = (customerId: string, orderId: string) => {
   }, [pieceDimensions])
 
   const onChangeDeposit = (t: string) => {
+    setHasUserMadeChanges(true)
     const cleaned = t.replace(/[^\d.,]/g, '')
     let dep = parseFloat(cleaned.replace(',', '.')) || 0
     const tot = parseFloat(totalCost) || 0
@@ -750,6 +782,7 @@ const clearReturnsPending = (customerId: string, orderId: string) => {
     
   /** pieces helpers*/
   const stepPieceCost = (index: number, delta: number) => {
+    setHasUserMadeChanges(true)
     setPieces(prev =>
       prev.map((p, i) => {
         if (i !== index) return p
@@ -761,10 +794,12 @@ const clearReturnsPending = (customerId: string, orderId: string) => {
   }
 
   const updatePiece = (index: number, patch: Partial<PieceItem>) => {
+    setHasUserMadeChanges(true)
     setPieces(prev => prev.map((p, i) => (i === index ? { ...p, ...patch, dirty: true } : p)))
   }
 
   const removePiece = (index: number) => {
+    setHasUserMadeChanges(true)
     setPieces(prev => {
         const copy = [...prev]
         const toRemove = copy[index]
@@ -869,6 +904,7 @@ async function generateSequentialCodes(prefix: string, startNum: number, count: 
       dirty: true,
     }))
 
+    setHasUserMadeChanges(true)
     setPieces(prev => [...prev, ...newOnes])
     setPiecesVisible(true)
 
@@ -1249,6 +1285,7 @@ const savePieceModal = () => {
         setRemovedItemIds([])
         // Clear all dirty flags after successful save
         setPieces(prev => prev.map(p => ({ ...p, dirty: false })))
+        setHasUserMadeChanges(false) // Reset flag after successful save
 
        if (Platform.OS === 'web') {
         //  web 
@@ -1268,11 +1305,27 @@ const savePieceModal = () => {
   }
 
   // Check if there are unsaved changes (must be before any conditional returns)
+  // Only consider changes as "unsaved" if the user has actually made changes (not from initial load)
   const hasUnsavedChanges = useMemo(() => {
+    if (!hasUserMadeChanges) return false // No changes if user hasn't interacted yet
+    
+    // Check pieces changes
     const hasDirtyPieces = pieces.some(p => p.dirty)
     const hasRemovedItems = removedItemIds.length > 0
-    return hasDirtyPieces || hasRemovedItems
-  }, [pieces, removedItemIds])
+    
+    // Check order header changes
+    const orderStatusChanged = orderStatus !== originalOrderStatusForSave
+    const paymentMethodChanged = paymentMethod !== originalPaymentMethod
+    const depositAmountChanged = depositAmount !== originalDepositAmount
+    const depositEnabledChanged = depositEnabled !== originalDepositEnabled
+    const notesChanged = notes !== originalNotes
+    const orderDateChanged = (orders[0]?.date || '') !== originalOrderDate
+    
+    return hasDirtyPieces || hasRemovedItems || orderStatusChanged || paymentMethodChanged || 
+           depositAmountChanged || depositEnabledChanged || notesChanged || orderDateChanged
+  }, [pieces, removedItemIds, hasUserMadeChanges, orderStatus, originalOrderStatusForSave, 
+      paymentMethod, originalPaymentMethod, depositAmount, originalDepositAmount,
+      depositEnabled, originalDepositEnabled, notes, originalNotes, orders, originalOrderDate])
 
   if (loading) {
     return (
@@ -1286,6 +1339,7 @@ const savePieceModal = () => {
   }
 
   const toggleDeposit = () => {
+    setHasUserMadeChanges(true)
     setDepositEnabled(prev => {
       const next = !prev
       if (!next) setDepositAmount('')
@@ -1926,7 +1980,7 @@ const savePieceModal = () => {
                   <View key={opt}>
                       {i > 0 && <View style={styles.dropdownDivider} />}
                       <Pressable
-                      onPress={() => { setPaymentMethod(opt); setPaymentOpen(false) }}
+                      onPress={() => { setHasUserMadeChanges(true); setPaymentMethod(opt); setPaymentOpen(false) }}
                       style={styles.dropdownItem}
                       >
                       <Text style={styles.dropdownItemText}>{paymentLabels[opt]}</Text>
@@ -1979,6 +2033,7 @@ const savePieceModal = () => {
                             setConfirmReadyOpen(true)   //  modal
                           } else {
                             clearPendingIfLeavingDelivered() 
+                            setHasUserMadeChanges(true)
                             setOrderStatus('ready')     // όλα πλυμένα -> ορισμός κανονικά
                             setOrderStatusOpen(false)
                           }
@@ -1992,6 +2047,7 @@ const savePieceModal = () => {
                         style={styles.dropdownItem}
                         onPress={() => {
                           clearPendingIfLeavingDelivered()
+                          setHasUserMadeChanges(true)
                           setOrderStatus('readyForDelivery')
                           setOrderStatusOpen(false)
                           // If no delivery date set, set default to tomorrow
@@ -2015,11 +2071,13 @@ const savePieceModal = () => {
                         onPress={() => {
                           if (key === 'delivered') {
                             // ordered --> payed or not
+                            setOriginalOrderStatusForModal(orderStatus) // Save original status before changing
                             setOrderStatusOpen(false)
                             setConfirmDeliveredOpen(true)
                           } else {
                             // else hasDept false
                             clearPendingIfLeavingDelivered()
+                            setHasUserMadeChanges(true)
                             setOrderStatus(key as typeof key)
                             setHasDebt(false)
                             setOrderStatusOpen(false)
@@ -2230,7 +2288,7 @@ const savePieceModal = () => {
           <View style={styles.notesWrap}>
             <TextInput
               value={notes}
-              onChangeText={setNotes}
+              onChangeText={(text) => { setHasUserMadeChanges(true); setNotes(text) }}
               placeholder="Πληκτρολογήστε σημειώσεις..."
               multiline
               style={styles.notesInput}
@@ -2682,25 +2740,59 @@ const savePieceModal = () => {
         visible={confirmDeliveredOpen}
         transparent
         animationType="fade"
-        onRequestClose={() => setConfirmDeliveredOpen(false)}
+        onRequestClose={() => {
+          // Restore original status when closing
+          if (originalOrderStatusForModal !== null) {
+            setOrderStatus(originalOrderStatusForModal)
+          }
+          setConfirmDeliveredOpen(false)
+        }}
       >
-        <View style={{
-          flex: 1,
-          backgroundColor: 'rgba(0,0,0,0.4)',
-          justifyContent: 'center',
-          alignItems: 'center',
-          padding: 24,
-        }}>
-          <View style={{
-            backgroundColor: '#fff',
-            borderRadius: 12,
+        <Pressable 
+          style={{
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.4)',
+            justifyContent: 'center',
+            alignItems: 'center',
             padding: 24,
-            width: '90%',
-            maxWidth: 360,
-          }}>
-            <Text style={{ fontSize: 18, fontWeight: '600', marginBottom: 12, textAlign: 'center' }}>
-              Παραδόθηκε
-            </Text>
+          }}
+          onPress={() => {
+            // Restore original status when closing
+            if (originalOrderStatusForModal !== null) {
+              setOrderStatus(originalOrderStatusForModal)
+            }
+            setConfirmDeliveredOpen(false)
+          }}
+        >
+          <Pressable 
+            style={{
+              backgroundColor: '#fff',
+              borderRadius: 12,
+              padding: 24,
+              width: '90%',
+              maxWidth: 360,
+            }}
+            onPress={(e) => e.stopPropagation()}
+          >
+            {/* Header with close button */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <Text style={{ fontSize: 18, fontWeight: '600', flex: 1, textAlign: 'center' }}>
+                Παραδόθηκε
+              </Text>
+              <Pressable 
+                onPress={() => {
+                  // Restore original status when closing
+                  if (originalOrderStatusForModal !== null) {
+                    setOrderStatus(originalOrderStatusForModal)
+                  }
+                  setConfirmDeliveredOpen(false)
+                }}
+                style={{ padding: 4 }}
+                hitSlop={8}
+              >
+                <Ionicons name="close" size={24} color="#6B7280" />
+              </Pressable>
+            </View>
             <Text style={{ fontSize: 16, textAlign: 'center', marginBottom: 24 }}>
               Πλήρωσε;
             </Text>
@@ -2709,6 +2801,7 @@ const savePieceModal = () => {
               {/* Ναι = πλήρωσε → hasDebt: false */}
               <Pressable
                 onPress={() => {
+                  setHasUserMadeChanges(true)
                   setOrderStatus('delivered')
                   setHasDebt(false)
                   setConfirmDeliveredOpen(false)
@@ -2733,6 +2826,7 @@ const savePieceModal = () => {
               {/* Όχι = δεν πλήρωσε → hasDebt: true */}
               <Pressable
                 onPress={() => {
+                  setHasUserMadeChanges(true)
                   setOrderStatus('delivered')
                   setHasDebt(true)
                   setConfirmDeliveredOpen(false)
@@ -2743,9 +2837,8 @@ const savePieceModal = () => {
                 <Text style={{ color: '#374151', fontWeight: '600' }}>Όχι</Text>
               </Pressable>
             </View>
-
-          </View>
-        </View>
+          </Pressable>
+        </Pressable>
       </Modal>
 
       {/* Partial Payment Modal */}
@@ -2852,6 +2945,7 @@ const savePieceModal = () => {
                   }
 
                   // Set order status and hasDebt
+                  setHasUserMadeChanges(true)
                   setOrderStatus('delivered')
                   setHasDebt(true)
                   
@@ -2881,9 +2975,15 @@ const savePieceModal = () => {
         visible={returnsPromptOpen}
         transparent
         animationType="fade"
-        onRequestClose={() => setReturnsPromptOpen(false)}
+        onRequestClose={() => {
+          // Restore original status when closing
+          if (originalOrderStatusForModal !== null) {
+            setOrderStatus(originalOrderStatusForModal)
+          }
+          setReturnsPromptOpen(false)
+        }}
       >
-        <View
+        <Pressable
           style={{
             flex: 1,
             backgroundColor: 'rgba(0,0,0,0.4)',
@@ -2891,8 +2991,15 @@ const savePieceModal = () => {
             alignItems: 'center',
             padding: 24,
           }}
+          onPress={() => {
+            // Restore original status when closing
+            if (originalOrderStatusForModal !== null) {
+              setOrderStatus(originalOrderStatusForModal)
+            }
+            setReturnsPromptOpen(false)
+          }}
         >
-          <View
+          <Pressable
             style={{
               backgroundColor: '#fff',
               borderRadius: 12,
@@ -2900,17 +3007,46 @@ const savePieceModal = () => {
               width: '90%',
               maxWidth: 360,
             }}
+            onPress={(e) => e.stopPropagation()}
           >
-            <Text
-              style={{
-                fontSize: 18,
-                fontWeight: '600',
-                marginBottom: 12,
-                textAlign: 'center',
-              }}
-            >
-              Υπολείπονται κομμάτια για επιστροφή;
-            </Text>
+            {/* Header with back and close buttons */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              {/* Back button */}
+              <Pressable 
+                onPress={() => {
+                  // Go back to first modal
+                  setReturnsPromptOpen(false)
+                  setConfirmDeliveredOpen(true)
+                }}
+                style={{ padding: 4 }}
+                hitSlop={8}
+              >
+                <Ionicons name="arrow-back" size={24} color="#6B7280" />
+              </Pressable>
+              <Text
+                style={{
+                  fontSize: 18,
+                  fontWeight: '600',
+                  flex: 1,
+                  textAlign: 'center',
+                }}
+              >
+                Υπολείπονται κομμάτια για επιστροφή;
+              </Text>
+              <Pressable 
+                onPress={() => {
+                  // Restore original status when closing
+                  if (originalOrderStatusForModal !== null) {
+                    setOrderStatus(originalOrderStatusForModal)
+                  }
+                  setReturnsPromptOpen(false)
+                }}
+                style={{ padding: 4 }}
+                hitSlop={8}
+              >
+                <Ionicons name="close" size={24} color="#6B7280" />
+              </Pressable>
+            </View>
             <Text
               style={{
                 fontSize: 15,
@@ -2968,8 +3104,8 @@ const savePieceModal = () => {
               </Pressable>
 
             </View>
-          </View>
-        </View>
+          </Pressable>
+        </Pressable>
       </Modal>
 
       
