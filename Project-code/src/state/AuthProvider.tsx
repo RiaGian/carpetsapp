@@ -1,17 +1,17 @@
 // src/state/AuthProvider.tsx
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, {
-    createContext,
-    useCallback,
-    useContext,
-    useEffect,
-    useMemo,
-    useState,
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
 } from 'react';
 import { Platform } from 'react-native';
 
 /** Public shape of the authenticated user */
-export type AuthUser = { id: string; email: string; name: string } | null
+export type AuthUser = { id: string; email: string; name: string; token?: string } | null
 
 type AuthContextType = {
   user: AuthUser
@@ -69,7 +69,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         const raw = await storage.getItem(STORAGE_KEY)
         if (raw) {
-          setUser(JSON.parse(raw))
+          const user = JSON.parse(raw)
+          setUser(user)
+          
+          // Restore token for sync if user has one
+          if (user?.token) {
+            const { setAuthToken } = await import('../database/syncAdapter')
+            await setAuthToken(user.token)
+          }
         }
       } finally {
         setLoading(false)
@@ -87,6 +94,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut = useCallback(async () => {
     setUser(null)
     await storage.removeItem(STORAGE_KEY)
+    
+    // Also clear sync token
+    try {
+      const { setAuthToken } = await import('../database/syncAdapter')
+      // Clear token by setting empty string (or you could add a clearToken function)
+      await storage.removeItem('auth:token')
+    } catch (err) {
+      console.warn('Error clearing sync token:', err)
+    }
   }, [])
 
   // memoize the context value to prevent unnecessary re-renders 

@@ -37,6 +37,7 @@ export const schema = appSchema({
         { name: 'customer_id', type: 'string', isIndexed: true },
         { name: 'phone_number', type: 'string' },
         { name: 'created_at', type: 'number' },
+        { name: "last_modified_at", type: "number" },
       ],
     }),
 
@@ -46,6 +47,8 @@ export const schema = appSchema({
       columns: [
         { name: 'customer_id', type: 'string', isIndexed: true },
         { name: 'address', type: 'string' },
+        { name: "created_at", type: "number" },
+        { name: "last_modified_at", type: "number" },
       ],
     }),
 
@@ -86,6 +89,7 @@ export const schema = appSchema({
         { name: 'area_m2', type: 'string', isOptional: true },
         { name: 'price_per_m2', type: 'string', isOptional: true },
         { name: 'created_at', type: 'number' },
+        { name: "last_modified_at", type: "number" },
       ],
     }),
 
@@ -100,6 +104,7 @@ export const schema = appSchema({
         { name: 'notes', type: 'string', isOptional: true },
         { name: 'item_count', type: 'number' },
         { name: 'created_at', type: 'number' },
+        { name: "last_modified_at", type: "number" },
       ],
     }),
 
@@ -112,6 +117,8 @@ export const schema = appSchema({
         { name: 'placed_at', type: 'number' },
         { name: 'removed_at', type: 'number', isOptional: true },
         { name: 'is_active', type: 'boolean' },
+        { name: "created_at", type: "number" },
+        { name: "last_modified_at", type: "number" },
       ],
     }),
 
@@ -155,6 +162,7 @@ export const schema = appSchema({
         { name: 'notes', type: 'string', isOptional: true }, // Optional notes about the payment
         { name: 'created_by', type: 'string', isIndexed: true }, // -> users.id
         { name: 'created_at', type: 'number' },
+        { name: "last_modified_at", type: "number" },
       ],
     }),
   ],

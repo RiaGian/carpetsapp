@@ -9,6 +9,7 @@ import { Q } from '@nozbe/watermelondb';
 import { LinearGradient } from 'expo-linear-gradient';
 import AppHeader from '../components/AppHeader';
 import Page from '../components/Page';
+import WatermelonSyncButton from '../components/WatermelonSyncButton';
 import ActivityLog from '../database/models/ActivityLog';
 import { listHistoryItems, listHistoryOrders, type HistoryItem, type HistoryOrder } from '../services/history';
 import { colors } from '../theme/colors';
@@ -1160,6 +1161,11 @@ export default function DashboardScreen() {
                 </View>
               );
             })()}
+            
+            {/* Sync Button */}
+            <View style={{ marginTop: 16, marginBottom: 8 }}>
+              <WatermelonSyncButton />
+            </View>
           </View>
       </View>
 

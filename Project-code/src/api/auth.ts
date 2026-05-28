@@ -1,10 +1,13 @@
-import { BASE_URL } from './config'
+import { API_URL } from '../../config/api'
+// import { BASE_URL } from './config'
 
 export async function loginApi(email: string, password: string) {
   console.log('Προσπάθεια login με:', email)
 
   try {
-    const url = `${BASE_URL}/login`
+    // const url = `${BASE_URL}/login`
+    // Use the sync API URL for login (http://150.140.143.190:4001)
+    const url = `${API_URL}/auth/login`
     console.log(`Σύνδεση με API στο: ${url}`) 
 
     const res = await fetch(url, {

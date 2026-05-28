@@ -4,6 +4,7 @@ import { Stack } from 'expo-router'
 import { useEffect, useState } from 'react'
 import { ActivityIndicator, View } from 'react-native'
 import { database, initializeDatabase } from '../src/database/initializeDatabase'
+import { startAutoSync } from '../src/services/autoSyncManager'
 import { seedUsers } from '../src/services/users'
 import { AuthProvider } from '../src/state/AuthProvider'
 import { PreviewProvider } from '../src/state/PreviewProvider'
@@ -13,6 +14,8 @@ export default function RootLayout() {
 
   useEffect(() => {
     let cancelled = false
+    let stopAutoSync: (() => void) | null = null
+
     ;(async () => {
       try {
         // Initialize the local database
@@ -22,6 +25,12 @@ export default function RootLayout() {
 
         // Seed initial users ("system" + "admin@example.com") if not exist
         await seedUsers()
+
+        if (cancelled) return
+
+        // Start auto-sync manager (watches DB changes and syncs automatically)
+        console.log('[APP] Starting auto-sync manager...')
+        stopAutoSync = await startAutoSync()
       } catch (err) {
         console.error('Boot error:', err)
       } finally {
@@ -32,6 +41,9 @@ export default function RootLayout() {
 
     return () => {
       cancelled = true
+      if (stopAutoSync) {
+        stopAutoSync()
+      }
     }
   }, [])
 

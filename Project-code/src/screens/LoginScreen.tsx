@@ -11,6 +11,7 @@ import {
   View
 } from 'react-native'
 import { logLoginSuccessConsole } from '../activity/logger'
+import { loginApi } from '../api/auth'
 import Divider from '../components/Divider'
 import TextField from '../components/TextField'
 import { logLoginFailure, logLoginSuccess, printActivityLogs } from '../services/activitylog'
@@ -107,9 +108,31 @@ export default function LoginScreen() {
       setLoading(true)
       setErrorMessage('')
 
-      // από WatermelonDB 
-      const user = await signInPlain(email, password)
-      await signIn(user) // save user -- > storage + context 
+      // Login via API to get token
+      const apiResponse = await loginApi(email, password)
+      
+      // Store the token for sync
+      const { setAuthToken } = await import('../database/syncAdapter')
+      await setAuthToken(apiResponse.token)
+
+      // Also verify/login locally in WatermelonDB (for offline access)
+      let localUser
+      try {
+        localUser = await signInPlain(email, password)
+      } catch (localErr) {
+        // If local login fails, use API user data
+        console.warn('Local login failed, using API user data:', localErr)
+      }
+
+      // Use API user data (with token) or local user
+      const user = localUser || {
+        id: String(apiResponse.user.id),
+        email: apiResponse.user.email,
+        name: apiResponse.user.name,
+      }
+
+      // Store user with token in auth context
+      await signIn({ ...user, token: apiResponse.token })
 
       Keyboard.dismiss()
       if (Platform.OS === 'web') {
@@ -118,6 +141,7 @@ export default function LoginScreen() {
       }
 
       console.log(`Επιτυχής σύνδεση: ${user.name} (${user.email}) [id=${user.id}]`)
+      console.log('Token stored for sync')
 
       // success login log
       await logLoginSuccess(
@@ -145,7 +169,7 @@ export default function LoginScreen() {
       // loging failure log
       await logLoginFailure(
         email,
-        err?.message === 'Ο χρήστης δεν βρέθηκε' || err?.message === 'Λάθος κωδικός'
+        err?.message === 'Ο χρήστης δεν βρέθηκε' || err?.message === 'Λάθος κωδικός' || err?.message?.includes('401')
           ? 'Invalid credentials'
           : 'Network error',
         Device.modelName || 'Unknown Device',
@@ -154,7 +178,7 @@ export default function LoginScreen() {
       )
 
       setErrorMessage(
-        err?.message === 'Ο χρήστης δεν βρέθηκε' || err?.message === 'Λάθος κωδικός'
+        err?.message === 'Ο χρήστης δεν βρέθηκε' || err?.message === 'Λάθος κωδικός' || err?.message?.includes('401')
           ? 'Λάθος email ή κωδικός πρόσβασης'
           : 'Αποτυχία σύνδεσης με τον server. Ελέγξτε τη σύνδεσή σας.'
       )
