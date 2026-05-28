@@ -197,10 +197,6 @@ export async function pullChanges(
           deleted: tableData.deleted || [],
         }
         
-        // Log deletions for debugging
-        if (tableName === 'customers' && tableData.deleted && tableData.deleted.length > 0) {
-          console.log(`[SYNC-DEBUG] 🗑️ Pulled ${tableData.deleted.length} customer deletion(s) from server:`, tableData.deleted)
-        }
       }
     }
 
@@ -279,11 +275,6 @@ export async function pushChanges(
       '[SYNC-DEBUG] RAW changes for customers:',
       JSON.stringify(changes.customers, null, 2)
     )
-    
-    // Log deletions specifically for debugging
-    if (changes.customers?.deleted?.length > 0) {
-      console.log(`[SYNC-DEBUG] 🗑️ Found ${changes.customers.deleted.length} customer deletion(s) to sync:`, changes.customers.deleted)
-    }
     
     // ONLY sync customers table for now - skip all others
     const cleanedChanges: Record<string, { created: any[]; updated: any[]; deleted: string[] }> = {}
