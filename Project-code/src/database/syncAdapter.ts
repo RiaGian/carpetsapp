@@ -133,6 +133,22 @@ export async function pullChanges(
 
     const data = await response.json()
 
+    // DEBUG: Log pull results to diagnose sync issues
+    if (data.changes?.customers) {
+      const customers = data.changes.customers
+      const totalChanges = (customers.created?.length || 0) + (customers.updated?.length || 0) + (customers.deleted?.length || 0)
+      if (totalChanges > 0) {
+        console.log('[SYNC] 📥 Pulled changes from server:', {
+          lastPulledAt: lastPulledTimestamp,
+          customers: {
+            created: customers.created?.length || 0,
+            updated: customers.updated?.length || 0,
+            deleted: customers.deleted?.length || 0,
+          },
+        })
+      }
+    }
+
     // Transform server response to WatermelonDB format
     const changes: Record<string, { created: any[]; updated: any[]; deleted: string[] }> = {}
     

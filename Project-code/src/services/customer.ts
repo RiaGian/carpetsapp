@@ -318,11 +318,11 @@ export async function createCustomer(data: NewCustomer, userIdForLog: string = '
 }
 
 
-// live observe - sort by last_modified_at so updates trigger observable
+// live observe
 export function observeCustomers(limit = 200) {
   const customers = database.get('customers')
   return customers
-    .query(Q.sortBy('last_modified_at', Q.desc), Q.take(limit))
+    .query(Q.sortBy('created_at', Q.desc), Q.take(limit))
     .observe()
 }
 
