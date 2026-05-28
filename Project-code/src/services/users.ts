@@ -8,7 +8,7 @@ export async function seedUsers() {
     // 1) ensure "system" (fixed id)
     try {
       await users.find('system')
-      console.log(' User "system" υπάρχει ήδη')
+      // console.log(' User "system" υπάρχει ήδη')
     } catch {
       await users.create((u: any) => {
         u._raw.id = 'system'
@@ -17,7 +17,7 @@ export async function seedUsers() {
         u.name = 'System User'
         u.created_at = Date.now()
       })
-      console.log(' Δημιουργήθηκε ο user "system"')
+      // console.log(' Δημιουργήθηκε ο user "system"')
     }
 
     // 2) ensure admin by email
@@ -29,7 +29,7 @@ export async function seedUsers() {
         u.name = 'Admin'
         u.created_at = Date.now()
       })
-      console.log('Δημιουργήθηκε ο admin user')
+      // console.log('Δημιουργήθηκε ο admin user')
     } else {
       console.log(' Admin user υπάρχει ήδη')
     }

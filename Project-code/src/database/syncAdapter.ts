@@ -80,10 +80,6 @@ export async function pullChanges(
   // 2. Local DB is empty
   // 3. lastPulledAt is null (first sync)
   const lastPulledTimestamp = isForceFullSync || shouldForceFullSync || !lastPulledAt ? 0 : lastPulledAt
-  
-  if (lastPulledTimestamp === 0) {
-    console.log('[SYNC] 🔄 Full sync mode: pulling ALL records from server')
-  }
 
   const url = `${API_URL}/sync/pull`
   
@@ -101,12 +97,6 @@ export async function pullChanges(
     const requestBody = {
       lastPulledAt: lastPulledTimestamp,
     }
-    
-    console.log('[SYNC] Pulling changes from server:', {
-      lastPulledAt: lastPulledTimestamp,
-      isFullSync: lastPulledTimestamp === 0,
-      url,
-    })
     
     const response = await fetch(url, {
       method: 'POST',
@@ -147,28 +137,6 @@ export async function pullChanges(
     const changes: Record<string, { created: any[]; updated: any[]; deleted: string[] }> = {}
     
     if (data.changes) {
-      // Log summary of what we received
-      const summary: Record<string, { created: number; updated: number; deleted: number }> = {}
-      for (const [tableName, tableChanges] of Object.entries(data.changes)) {
-        if (Array.isArray(tableChanges)) {
-          summary[tableName] = { created: tableChanges.length, updated: 0, deleted: 0 }
-        } else {
-          const tableData = tableChanges as { created?: any[]; updated?: any[]; deleted?: string[] }
-          summary[tableName] = {
-            created: tableData.created?.length || 0,
-            updated: tableData.updated?.length || 0,
-            deleted: tableData.deleted?.length || 0,
-          }
-        }
-      }
-      console.log('[SYNC] 📥 Server response summary:', summary)
-      
-      // Highlight deletions if any
-      for (const [tableName, counts] of Object.entries(summary)) {
-        if (counts.deleted > 0) {
-          console.log(`[SYNC] 🗑️ Server has ${counts.deleted} deletion(s) for ${tableName}`)
-        }
-      }
       for (const [tableName, tableChanges] of Object.entries(data.changes)) {
         // Handle two possible server response formats:
         // 1. Array format: { "customers": [...] } - treat all as "created"
@@ -192,11 +160,9 @@ export async function pullChanges(
         // Also converts string numbers to actual numbers (server might return strings)
         const validateRecord = (record: any, recordType: 'created' | 'updated'): any => {
           if (!record || typeof record !== 'object') {
-            console.warn(`[SYNC] Invalid ${recordType} record in ${tableName}:`, record)
             return null
           }
           if (!record.id) {
-            console.error(`[SYNC] ❌ Record missing 'id' field in ${tableName}:`, record)
             return null
           }
           
@@ -232,25 +198,10 @@ export async function pullChanges(
         }
         
       }
-    } else {
-      console.warn('[SYNC] No changes object in server response!')
     }
 
     const timestamp = data.timestamp || Date.now()
-
-    // Store last pulled timestamp
     await storage.setItem(LAST_PULLED_AT_KEY, String(timestamp))
-    
-    // Log final summary
-    const totalRecords = Object.values(changes).reduce(
-      (sum, table) => sum + (table.created?.length || 0) + (table.updated?.length || 0) + (table.deleted?.length || 0),
-      0
-    )
-    console.log(`[SYNC] ✅ Pull complete: ${totalRecords} total records (${Object.keys(changes).length} tables), timestamp: ${timestamp}`)
-    
-    if (lastPulledTimestamp === 0) {
-      console.log('[SYNC] ✅ Full sync completed - all server data pulled')
-    }
 
     return {
       changes,
@@ -264,11 +215,12 @@ export async function pullChanges(
 
 /**
  * Clean WatermelonDB internal fields from data before sending to server
+ * WatermelonDB already passes snake_case field names (because of @field decorators)
  * Server expects BIGINT (numbers) for created_at and last_modified_at, not ISO strings
  */
-function cleanWatermelonFields(obj: any): any {
+function cleanWatermelonFields(obj: any, tableName: string = ''): any {
   if (Array.isArray(obj)) {
-    return obj.map(cleanWatermelonFields)
+    return obj.map(item => cleanWatermelonFields(item, tableName))
   }
   if (obj && typeof obj === 'object') {
     const cleaned: any = {}
@@ -278,7 +230,8 @@ function cleanWatermelonFields(obj: any): any {
         continue
       }
       // Keep timestamps as numbers (BIGINT) - server expects numbers, not ISO strings
-      cleaned[key] = cleanWatermelonFields(value)
+      // WatermelonDB already uses snake_case field names (from @field decorators)
+      cleaned[key] = cleanWatermelonFields(value, tableName)
     }
     return cleaned
   }
@@ -307,6 +260,17 @@ export async function pushChanges(
   }
 
   try {
+    // DEBUG: Log what WatermelonDB is passing
+    console.log('[SYNC-DEBUG] 🔍 pushChanges received:', {
+      tables: Object.keys(changes),
+      customers: changes.customers ? {
+        created: changes.customers.created?.length || 0,
+        updated: changes.customers.updated?.length || 0,
+        deleted: changes.customers.deleted?.length || 0,
+        deletedIds: changes.customers.deleted || [],
+      } : null,
+    })
+    
     // ONLY sync customers table for now - skip all others
     const cleanedChanges: Record<string, { created: any[]; updated: any[]; deleted: string[] }> = {}
     for (const [tableName, tableChanges] of Object.entries(changes)) {
@@ -316,33 +280,23 @@ export async function pushChanges(
       }
       
       cleanedChanges[tableName] = {
-        created: cleanWatermelonFields(tableChanges.created || []),
-        updated: cleanWatermelonFields(tableChanges.updated || []),
+        created: cleanWatermelonFields(tableChanges.created || [], tableName),
+        updated: cleanWatermelonFields(tableChanges.updated || [], tableName),
         deleted: tableChanges.deleted || [],
       }
     }
     
+    // DEBUG: Log what we're sending to server
+    console.log('[SYNC-DEBUG] 📤 Sending to server:', {
+      customers: cleanedChanges.customers ? {
+        created: cleanedChanges.customers.created?.length || 0,
+        updated: cleanedChanges.customers.updated?.length || 0,
+        deleted: cleanedChanges.customers.deleted?.length || 0,
+        deletedIds: cleanedChanges.customers.deleted || [],
+      } : null,
+    })
+    
     const requestBody = { changes: cleanedChanges }
-    
-    // Log what we're sending
-    const totalCreated = cleanedChanges.customers?.created?.length || 0
-    const totalUpdated = cleanedChanges.customers?.updated?.length || 0
-    const totalDeleted = cleanedChanges.customers?.deleted?.length || 0
-    
-    if (totalCreated > 0 || totalUpdated > 0 || totalDeleted > 0) {
-      console.log('[SYNC] 📤 Pushing local changes:', {
-        created: totalCreated,
-        updated: totalUpdated,
-        deleted: totalDeleted,
-      })
-      
-      if (totalDeleted > 0) {
-        console.log('[SYNC] 🗑️ Pushing deletions:', cleanedChanges.customers.deleted)
-      }
-    } else {
-      console.log('[SYNC] No local changes to push')
-    }
-    
     const requestBodyString = JSON.stringify(requestBody)
     
     const response = await fetch(url, {
@@ -367,22 +321,21 @@ export async function pushChanges(
         // Not JSON, use as-is
       }
       
-      console.error('[SYNC] Push error details:', {
-        status: response.status,
-        statusText: response.statusText,
-        error: errorText,
-        errorJson: errorJson,
-        url,
-        headers: Object.keys(headers),
-      })
-      
-      // Log the full request body for debugging
-      console.error('[SYNC] Failed request body:', requestBodyString)
-      
       throw new Error(`Push failed (${response.status}): ${errorJson?.message || errorJson?.error || errorText}`)
     }
 
     const data = await response.json()
+
+    // DEBUG: Log server response
+    console.log('[SYNC-DEBUG] 📥 Server response:', {
+      status: response.status,
+      customers: data.changes?.customers ? {
+        created: data.changes.customers.created?.length || 0,
+        updated: data.changes.customers.updated?.length || 0,
+        deleted: data.changes.customers.deleted?.length || 0,
+        deletedIds: data.changes.customers.deleted || [],
+      } : null,
+    })
 
     // Transform server response
     const serverChanges: Record<string, { created: any[]; updated: any[]; deleted: string[] }> = {}
@@ -399,11 +352,6 @@ export async function pushChanges(
     }
 
     const timestamp = data.timestamp || Date.now()
-
-    console.log('[SYNC] Push successful:', {
-      tables: Object.keys(serverChanges),
-      timestamp,
-    })
 
     return {
       experimentalRejectedIds: undefined,

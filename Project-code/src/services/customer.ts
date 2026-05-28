@@ -318,11 +318,11 @@ export async function createCustomer(data: NewCustomer, userIdForLog: string = '
 }
 
 
-// live observe
+// live observe - sort by last_modified_at so updates trigger observable
 export function observeCustomers(limit = 200) {
   const customers = database.get('customers')
   return customers
-    .query(Q.sortBy('created_at', Q.desc), Q.take(limit))
+    .query(Q.sortBy('last_modified_at', Q.desc), Q.take(limit))
     .observe()
 }
 
@@ -359,13 +359,23 @@ export async function deleteCustomer(id: string, userIdForLog: string = 'system'
     phoneRows = await phonesCollection.query(Q.where('customer_id', id)).fetch()
     addressRows = await addressesCollection.query(Q.where('customer_id', id)).fetch()
 
-    for (const r of phoneRows) await r.destroyPermanently()
-    for (const r of addressRows) await r.destroyPermanently()
+    // Mark related records as deleted (for sync)
+    for (const r of phoneRows) await r.markAsDeleted()
+    for (const r of addressRows) await r.markAsDeleted()
 
-    await rec.destroyPermanently()
+    // Mark customer as deleted (for sync) - this will be pushed to server
+    // WatermelonDB will track this deletion and sync it automatically
+    await rec.markAsDeleted()
   })
 
-  console.log('Customer deleted:', id)
+  // Trigger sync immediately to push deletion to server
+  try {
+    await new Promise(resolve => setTimeout(resolve, 200))
+    const { manualSync } = await import('./autoSyncManager')
+    await manualSync()
+  } catch (syncError) {
+    // Don't throw - auto-sync will handle it
+  }
 
   // Logs
   try {
@@ -399,7 +409,15 @@ export async function updateCustomer(id: string, data: UpdateCustomer, userIdFor
   const customers = database.get('customers')
 
   // ⬇️ ΦΕΡΝΟΥΜΕ ΤΟΝ RECORD ΕΞΩ ΑΠΟ ΤΟ write
-  const rec: any = await customers.find(id)
+  let rec: any
+  try {
+    rec = await customers.find(id)
+    if (!rec) {
+      throw new Error(`Customer with id ${id} not found`)
+    }
+  } catch (err) {
+    throw new Error(`Failed to find customer: ${err instanceof Error ? err.message : String(err)}`)
+  }
 
   // ⬇️ ΕΛΕΓΧΟΣ ΔΙΠΛΟΥ ΑΦΜ ΕΞΩ ΑΠΟ ΤΟ write (για να περάσει σωστά το throw στο UI)
   if (typeof data.afm !== 'undefined') {
@@ -409,7 +427,6 @@ export async function updateCustomer(id: string, data: UpdateCustomer, userIdFor
     if (nextAfm && nextAfm !== prevAfm) {
       const dup = await findCustomerByAfm(nextAfm)
       if (dup && dup.id !== id) {
-        // κράτα το μήνυμα όπως το θες να “πιάσει” το UI
         throw new Error(`το ΑΦΜ ${nextAfm} υπάρχει ήδη.`)
       }
     }
@@ -418,42 +435,81 @@ export async function updateCustomer(id: string, data: UpdateCustomer, userIdFor
   let oldValues: any = null
   let newValues: any = null
 
-  await database.write(async () => {
-    // snapshot before
-    oldValues = {
-      firstName: rec.firstName,
-      lastName:  rec.lastName,
-      phone:     rec.phone,
-      address:   rec.address,
-      city:      rec.city,
-      afm:       rec.afm,
-      notes:     rec.notes,
-    }
+  try {
+    await database.write(async () => {
+      // snapshot before
+      oldValues = {
+        firstName: rec.firstName,
+        lastName:  rec.lastName,
+        phone:     rec.phone,
+        address:   rec.address,
+        city:      rec.city,
+        afm:       rec.afm,
+        notes:     rec.notes,
+      }
+      
+      await rec.update((r: any) => {
+        if (typeof data.firstName !== 'undefined') {
+          r.firstName = data.firstName.trim()
+        }
+        if (typeof data.lastName  !== 'undefined') {
+          r.lastName  = data.lastName.trim()
+        }
+        if (typeof data.phone     !== 'undefined') {
+          r.phone     = data.phone ?? ''
+        }
+        if (typeof data.address   !== 'undefined') {
+          r.address   = data.address ?? ''
+        }
+        if (typeof data.city      !== 'undefined') {
+          r.city      = data.city ?? ''
+        }
+        if (typeof data.afm       !== 'undefined') {
+          r.afm       = data.afm ?? ''
+        }
+        if (typeof data.notes     !== 'undefined') {
+          r.notes     = data.notes ?? ''
+        }
+        r.lastModifiedAt = Date.now()
+      })
 
-    await rec.update((r: any) => {
-      if (typeof data.firstName !== 'undefined') r.firstName = data.firstName.trim()
-      if (typeof data.lastName  !== 'undefined') r.lastName  = data.lastName.trim()
-      if (typeof data.phone     !== 'undefined') r.phone     = data.phone ?? ''
-      if (typeof data.address   !== 'undefined') r.address   = data.address ?? ''
-      if (typeof data.city      !== 'undefined') r.city      = data.city ?? ''
-      if (typeof data.afm       !== 'undefined') r.afm       = data.afm ?? ''
-      if (typeof data.notes     !== 'undefined') r.notes     = data.notes ?? ''
-      r.lastModifiedAt = Date.now()
+      // snapshot after
+      newValues = {
+        firstName: rec.firstName,
+        lastName:  rec.lastName,
+        phone:     rec.phone,
+        address:   rec.address,
+        city:      rec.city,
+        afm:       rec.afm,
+        notes:     rec.notes,
+      }
     })
-
-    // snapshot after
-    newValues = {
-      firstName: rec.firstName,
-      lastName:  rec.lastName,
-      phone:     rec.phone,
-      address:   rec.address,
-      city:      rec.city,
-      afm:       rec.afm,
-      notes:     rec.notes,
+    
+    // Ensure record is marked for sync (force if needed)
+    const customers = database.get('customers')
+    const updatedRec = await customers.find(id)
+    const rawFinal = (updatedRec as any)._raw
+    
+    if (rawFinal?._status !== 'updated') {
+      await database.write(async () => {
+        const recToForce = await customers.find(id)
+        await recToForce.update((r: any) => {
+          r.lastModifiedAt = Date.now()
+        })
+      })
     }
-  })
+         } catch (dbError) {
+           throw new Error(`Failed to update customer in database: ${dbError instanceof Error ? dbError.message : String(dbError)}`)
+         }
 
-  console.log('Customer updated:', id, data)
+  // Trigger sync immediately to push changes to server
+  try {
+    await new Promise(resolve => setTimeout(resolve, 200))
+    const { manualSync } = await import('./autoSyncManager')
+    await manualSync()
+  } catch (syncError) {
+    // Don't throw - auto-sync will handle it
+  }
 
   // Activity log
   try {

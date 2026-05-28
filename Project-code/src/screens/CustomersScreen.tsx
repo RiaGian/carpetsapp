@@ -6,6 +6,7 @@ import { router } from 'expo-router'
 import * as Sharing from 'expo-sharing'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
   Image,
@@ -803,6 +804,7 @@ export default function CustomersScreen() {
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'details' | 'orders' | 'history'>('details')
   const [editMode, setEditMode] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
   const [orders, setOrders] = React.useState<any[]>([]) // Active orders (non-delivered) for Orders tab
   const [allOrdersForDebt, setAllOrdersForDebt] = React.useState<any[]>([]) // All orders (including delivered) for debt calculation
   const [ordersLoading, setOrdersLoading] = React.useState(false)
@@ -1575,7 +1577,7 @@ const [itemEdit, setItemEdit] = useState({
   order_date: '',
 })
 
-  // Load from DB
+  // Load from DB - reactive observable that updates automatically when DB changes
   useFocusEffect(
     useCallback(() => {
       setLoading(true)
@@ -1601,9 +1603,21 @@ const [itemEdit, setItemEdit] = useState({
         setCustomersPreview({ count, names })
       })
 
-      return () => sub.unsubscribe()
+      return () => {
+        sub.unsubscribe()
+      }
     }, [setCustomersPreview])
   )
+
+  // Refresh customer list when modal closes to ensure latest data is shown
+  React.useEffect(() => {
+    if (!detailsOpen) {
+      // Modal just closed - the observable should automatically update, but we can force a refresh
+      // console.log('[CUSTOMER-LIST] Modal closed, observable should auto-refresh customer list')
+      // The observeCustomers subscription will automatically pick up changes
+      // But we can also manually trigger a refresh by re-subscribing if needed
+    }
+  }, [detailsOpen])
 
   // Debounce search
   React.useEffect(() => {
@@ -1927,11 +1941,16 @@ const [itemEdit, setItemEdit] = useState({
     })
     setActiveTab('details')
     setEditMode(false)
+    setIsSaving(false) // Reset saving state when opening card
     setExpandedOrderId(null)
     setDetailsOpen(true)
   }
 
-  function startEdit() { setEditMode(true) }
+  function startEdit() { 
+    console.log('[CUSTOMER] Starting edit mode')
+    setIsSaving(false) // Reset saving state when starting edit
+    setEditMode(true) 
+  }
 
   function cancelEdit() {
     if (!selectedCustomer) return
@@ -1990,20 +2009,41 @@ async function doDeleteOrderNow(orderId: string) {
 
   // update customer
   async function saveEdit() {
-    if (!selectedCustomer) return
-
-    if (!validateEdit()) return
-
-    // Validate phone number if provided
-    if (edit.phone && edit.phone.trim() && !isValidGreekPhone(edit.phone.trim())) {
-      Alert.alert('Προσοχή', 'Παρακαλώ εισάγετε έγκυρο ελληνικό τηλέφωνο (π.χ. 6912345678).')
+    if (isSaving) {
       return
     }
 
+    if (!selectedCustomer) {
+      Alert.alert('Σφάλμα', 'Δεν έχει επιλεγεί πελάτης')
+      return
+    }
+
+    const validationResult = validateEdit()
+    if (!validationResult) {
+      setIsSaving(false)
+      return
+    }
+
+    // Validate phone number if provided (non-blocking - just warn, don't prevent save)
+    if (edit.phone && edit.phone.trim()) {
+      const phoneValid = isValidGreekPhone(edit.phone.trim())
+      if (!phoneValid) {
+        setTimeout(() => {
+          Alert.alert(
+            'Προσοχή', 
+            'Το τηλέφωνο δεν είναι σε έγκυρη ελληνική μορφή (π.χ. 6912345678). Η αποθήκευση θα συνεχίσει.',
+            [{ text: 'OK' }]
+          )
+        }, 100)
+      }
+    }
+
+    setIsSaving(true)
     const actorId = String(user?.id ?? (user as any)?.uid ?? (user as any)?._id ?? 'system')
 
     try {
       setAfmEditError('')
+      
       const newNotes = composeNotes(edit.notesBase, edit.receiptNo, edit.pricePerSqm)
       const combinedSource = (pairsCombined && pairsCombined.trim())
         ? pairsCombined
@@ -2011,19 +2051,21 @@ async function doDeleteOrderNow(orderId: string) {
 
       const parsed = parsePairs(combinedSource)
       const addressPipe = parsed.addressPipe.trim()  
-      const cityPipe    = parsed.cityPipe.trim()     
+      const cityPipe    = parsed.cityPipe.trim()
+
+      const updateData = {
+        firstName: edit.firstName.trim(),
+        lastName:  edit.lastName.trim(),
+        phone:     edit.phone.trim(),
+        address:   addressPipe,
+        city:      cityPipe,
+        afm:       edit.afm.trim(),
+        notes:     newNotes,
+      }
 
       await updateCustomer(
         selectedCustomer.id,
-        {
-          firstName: edit.firstName.trim(),
-          lastName:  edit.lastName.trim(),
-          phone:     edit.phone.trim(),
-          address:   addressPipe,
-          city:      cityPipe,
-          afm:       edit.afm.trim(),
-          notes:     newNotes,
-        },
+        updateData,
         actorId
       )
 
@@ -2048,19 +2090,80 @@ async function doDeleteOrderNow(orderId: string) {
       } : prev)
 
       setPairsCombined(composePairs(addressPipe, cityPipe))
-
       setEditMode(false)
+      setIsSaving(false)
 
-      setDetailsOpen(false)
-      router.replace('/customers')
-      Alert.alert('OK', 'Τα στοιχεία πελάτη ενημερώθηκαν.')
+      // Refresh customer data from database
+      try {
+        const { database } = await import('../database/initializeDatabase')
+        const customers = database.get('customers')
+        const updatedCustomer = await customers.find(selectedCustomer.id)
+        
+        if (updatedCustomer) {
+          const customer: any = updatedCustomer
+          const { desc, receiptNo } = parseNotes(customer.notes || '')
+          const addressPipe = customer.address || ''
+          const cityPipe = customer.city || ''
+          
+          setSelectedCustomer({
+            id: customer.id,
+            firstName: customer.firstName || '',
+            lastName: customer.lastName || '',
+            phone: customer.phone || '',
+            address: addressPipe,
+            city: cityPipe,
+            afm: customer.afm || '',
+            notes: customer.notes || '',
+            createdAt: customer.createdAt || Date.now(),
+            lastModifiedAt: customer.lastModifiedAt || Date.now(),
+          })
+          
+          setPairsCombined(composePairs(addressPipe, cityPipe))
+          setEdit({
+            firstName: customer.firstName || '',
+            lastName: customer.lastName || '',
+            phone: customer.phone || '',
+            address: addressPipe,
+            city: cityPipe,
+            afm: customer.afm || '',
+            notesBase: desc || '',
+            receiptNo: receiptNo || '',
+            pricePerSqm: priceByCustomer[customer.id] || '',
+          })
+        }
+      } catch (refreshError) {
+        // Continue anyway
+      }
+      
+      setCustomers(prevCustomers => {
+        return prevCustomers.map(c => {
+          if (c.id === selectedCustomer.id) {
+            return {
+              ...c,
+              firstName: updateData.firstName,
+              lastName: updateData.lastName,
+              phone: updateData.phone,
+              address: updateData.address,
+              city: updateData.city,
+              afm: updateData.afm,
+              notes: updateData.notes,
+              lastModifiedAt: Date.now(),
+            }
+          }
+          return c
+        })
+      })
       } catch (err: any) {
         const msg = (err?.message ?? String(err)).toString()
+        
         if (msg.toLowerCase().includes('αφμ')) {
-          setAfmEditError(msg)   
+          setAfmEditError(msg)
+          setIsSaving(false)
           return
         }
-        Alert.alert('Σφάλμα', 'Η αποθήκευση απέτυχε.')
+        Alert.alert('Σφάλμα', `Η αποθήκευση απέτυχε: ${msg}`)
+      } finally {
+        setIsSaving(false)
       }
   }
 
@@ -3251,8 +3354,22 @@ const isWeb = Platform.OS === 'web';
                         <TouchableOpacity style={styles.cancelBtnInside} onPress={cancelEdit}>
                           <Text style={styles.cancelBtnInsideText}>Ακύρωση</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity style={styles.saveBtnInside} onPress={saveEdit}>
-                          <Text style={styles.saveBtnInsideText}>Αποθήκευση</Text>
+                        <TouchableOpacity 
+                          style={[styles.saveBtnInside, isSaving && { opacity: 0.6 }]} 
+                          onPress={() => {
+                            console.log('[CUSTOMER] 🔘 Save button clicked!')
+                            saveEdit().catch(err => {
+                              console.error('[CUSTOMER] Unhandled error in saveEdit:', err)
+                              Alert.alert('Σφάλμα', `Απρόσμενο σφάλμα: ${err.message || String(err)}`)
+                            })
+                          }}
+                          disabled={isSaving}
+                        >
+                          {isSaving ? (
+                            <ActivityIndicator color="#fff" size="small" />
+                          ) : (
+                            <Text style={styles.saveBtnInsideText}>Αποθήκευση</Text>
+                          )}
                         </TouchableOpacity>
                       </>
                     )}
