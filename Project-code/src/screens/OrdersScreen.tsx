@@ -793,7 +793,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
               <Ionicons name="chevron-down" size={18} color="#666" />
             </Pressable>
 
-            {/* ✅ Κόκκινο μηνυματάκι κάτω από το input */}
+            {/*  Κόκκινο μηνυματάκι κάτω από το input */}
             {fieldErrors[0]?.customer === 'required' && (
               <Text style={styles.helperError}>Απαιτείται.</Text>
             )}
@@ -812,7 +812,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
               onPress={() => setPaymentOpen(v => !v)}
               style={[
                 styles.fakeInput,
-                fieldErrors[0]?.paymentMethod && styles.inputError, // ✅ κόκκινο περίγραμμα αν λάθος
+                fieldErrors[0]?.paymentMethod && styles.inputError, // κόκκινο περίγραμμα αν λάθος
               ]}
             >
               <Text
@@ -841,7 +841,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                       style={styles.dropdownItem}
                       onPress={() => {
                         setPaymentMethod(key);
-                        clearFieldErr(0, 'paymentMethod'); // ✅ καθάρισε το error μόλις επιλεγεί
+                        clearFieldErr(0, 'paymentMethod'); //  καθάρισε το error μόλις επιλεγεί
                         setPaymentOpen(false);
                       }}
                     >
@@ -852,7 +852,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
               </View>
             )}
 
-            {/* ✅ Κόκκινο μηνυματάκι */}
+            {/*  Κόκκινο μηνυματάκι */}
             {fieldErrors[0]?.paymentMethod === 'required' && (
               <Text style={styles.helperError}>Απαιτείται.</Text>
             )}
@@ -918,6 +918,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                     value={depositAmount}
                     onChangeText={setDepositAmount}
                     placeholder="Ποσό προκαταβολής"
+                    placeholderTextColor="#9CA3AF"
                     keyboardType={Platform.select({ ios: 'decimal-pad', android: 'numeric', default: 'numeric' })}
                     inputMode="decimal"
                     style={styles.amountInput}
@@ -1460,7 +1461,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
           <View style={styles.modalOverlay}>
             <Pressable style={StyleSheet.absoluteFill} onPress={() => setModalOpen(false)} />
 
-            {/* (1) Υπολογισμοί ύψους/σελιδοποίησης (μέσα στο render για σαφήνεια) */}
+            {/* Υπολογισμοί ύψους/σελιδοποίησης (μέσα στο render για σαφήνεια) */}
             {(() => {
               const ROW_HEIGHT = 47;               // ύψος κάθε γραμμής
               const PAGE_ROWS = PAGE_SIZE;         // π.χ. 20
@@ -1476,7 +1477,24 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
               const TABLE_CARD_HEIGHT = HEADER_H + LIST_HEIGHT + (SHOW_PAGINATION ? PAGINATION_H : 0);
 
               return (
-                <View style={[styles.modalCard, { height: 855 }]}>
+                <View 
+                 style={[
+                    styles.modalCard,
+                    Platform.OS === 'web'
+                      ? { height: 855 }
+                      : {
+                          width: '100%',      // γεμίζει οριζόντια
+                          maxWidth: '100%',
+                          height: '90%',      // σχεδόν full-screen
+                          maxHeight: '90%',
+                          alignSelf: 'center',
+                          margin: 0,
+                          paddingHorizontal: 12,  // μικρότερο padding για περισσότερο ωφέλιμο χώρο
+                          paddingVertical: 12,
+                          borderRadius: 14,
+                        },
+                  ]}
+                >
                   {/* Νέος Πελάτης  */}
                   <Pressable
                     onPress={() => {
@@ -1496,26 +1514,71 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                   </Text>
 
                   {/*  Search bar + customers */}
-                  <View style={{ marginBottom: 6, width: '90%', alignSelf: 'center' }}>
-                    <View style={[styles.amountInputWrap, { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8 }]}>
+                  <View
+                    style={{
+                      marginBottom: 6,
+                      width: '90%',
+                      alignSelf: 'center',
+                      ...(Platform.OS === 'web' && { marginTop: 20 }), 
+                    }}
+                  >
+                    <View
+                      style={[
+                        styles.amountInputWrap,
+                        {
+                          paddingVertical: Platform.OS === 'web' ? 16 : 6,
+
+                          paddingHorizontal: 12,
+                          borderRadius: 10,
+                          marginTop: Platform.OS !== 'web' ? 20 : 0,
+                          
+                        },
+                      ]}
+                    >
                       <Ionicons name="search" size={14} color="#6B7280" style={{ marginRight: 6 }} />
                       <TextInput
                         value={searchValue}
                         onChangeText={setSearchValue}
-                        placeholder="Αναζήτηση με Όνομα, ΑΦΜ, Διεύθυνση ή Κινητό"
-                        style={[styles.amountInput, { fontSize: 13, paddingVertical: 0 }]}
+                        placeholder={
+                          Platform.OS !== 'web'
+                            ? 'Αναζήτηση με Όνομα, ΑΦΜ, Διεύθυνση...'
+                            : 'Αναζήτηση με Όνομα, ΑΦΜ, Διεύθυνση ή Κινητό'
+                        }
+                        style={[
+                          styles.amountInput,
+                          {
+                            fontSize: Platform.OS === 'web' ? 15 : 13,
+                            paddingVertical: 0,
+                          },
+                        ]}
+
                         inputMode="text"
                         autoCorrect={false}
                       />
                     </View>
-                    <Text style={[styles.requiredNote, { fontSize: 12 }]}>
+                    <Text
+                      style={[
+                        styles.requiredNote,
+                        { fontSize: 12 },
+                        Platform.OS !== 'web' ? { marginTop: 25 } : { marginTop: 20 } 
+                      ]}
+                    >
                       Εμφανίζονται {(filteredCustomers.length === 0) ? 0 : (startIdx + 1)}–
                       {Math.min(filteredCustomers.length, startIdx + PAGE_SIZE)} από {filteredCustomers.length} πελάτες
                     </Text>
                   </View>
 
                   {/*  Πλαίσιο πίνακα */}
-                  <View style={[styles.tableCard, { height: TABLE_CARD_HEIGHT }]}>
+                 <View
+                    style={[
+                      styles.tableCard,
+                      {
+                        ...(Platform.OS === 'web'
+                          ? { height: TABLE_CARD_HEIGHT }
+                          : { height: 'auto', marginTop: 1 }),
+                      },
+                    ]}
+                  >
                     {/* Κεφαλίδα */}
                     <View style={styles.tableHeader}>
                       <Text style={[styles.th, styles.colName]}>Ονοματεπώνυμο</Text>
@@ -1529,7 +1592,13 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                     </View>
 
                     {/* Λίστα (not scrolling )*/}
-                    <View style={{ height: LIST_HEIGHT, overflow: 'hidden' }}>
+                    <View
+                      style={
+                        Platform.OS === 'web'
+                          ? { height: LIST_HEIGHT, overflow: 'hidden' }
+                          : { overflow: 'visible' } 
+                      }
+                    >
                       {pageItems.map((c, idx) => {
                         const globalIndex = startIdx + idx;
                         const zebra = globalIndex % 2 === 1;
@@ -1580,7 +1649,12 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                           disabled={page <= 1}
                           style={[styles.pageBtn, page <= 1 && styles.pageBtnDisabled]}
                         >
-                          <Ionicons name="chevron-back" size={18} color={page <= 1 ? '#9CA3AF' : '#1F2A44'} />
+                         <Ionicons
+                            name="chevron-back"
+                            size={Platform.OS === 'web' ? 18 : 14}
+                            color={page <= 1 ? '#9CA3AF' : '#1F2A44'}
+                          />
+
                         </Pressable>
 
                         <Text style={styles.pageText}>Σελίδα {page} από {totalPages}</Text>
@@ -1590,7 +1664,11 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                           disabled={page >= totalPages}
                           style={[styles.pageBtn, page >= totalPages && styles.pageBtnDisabled]}
                         >
-                          <Ionicons name="chevron-forward" size={18} color={page >= totalPages ? '#9CA3AF' : '#1F2A44'} />
+                          <Ionicons
+                            name="chevron-forward"
+                            size={Platform.OS === 'web' ? 18 : 14}
+                            color={page >= totalPages ? '#9CA3AF' : '#1F2A44'}
+                          />
                         </Pressable>
                       </View>
                     )}
@@ -1632,7 +1710,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                 styles.modalCard,
                 Platform.OS === 'web'
                   ? {
-                      // 🔒 Web: ίδιο όπως πριν
+                      //  Web
                       paddingVertical: 106,
                       paddingHorizontal: 30,
                       justifyContent: 'flex-start',
@@ -1641,7 +1719,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                       height: 300,
                     }
                   : {
-                      // 📱 Μόνο mobile
+                      //  Μόνο mobile
                       width: '92%',
                       maxWidth: 460,
                       paddingVertical: 24,
@@ -1688,6 +1766,7 @@ const styles = StyleSheet.create({
   justifyContent: 'center',
   marginTop: 8,
   gap: 12,
+  ...(Platform.OS !== 'web' && { gap: 6 }),
 },
 pageBtn: {
   backgroundColor: '#F3F4F6',
@@ -1697,6 +1776,12 @@ pageBtn: {
   justifyContent: 'center',
   width: 36,
   height: 36,
+  ...(Platform.OS !== 'web' && {
+    width: 25,     // 👈 μικρότερο κουμπί
+    height: 25,
+    padding: 4,
+    borderRadius: 6,
+  }),
 },
 pageBtnDisabled: { opacity: 0.5 },
 pageText: { fontSize: 14, color: '#1F2A44' },
@@ -1743,6 +1828,7 @@ pageText: { fontSize: 14, color: '#1F2A44' },
     android: { elevation: 3 },
     web: { boxShadow: '0 4px 10px rgba(0,0,0,0.08)' } as any,
   }) as object),
+  ...(Platform.OS !== 'web' && { paddingBottom: 6 }),
 },
 
 
@@ -2135,6 +2221,7 @@ modalActionsBottom: {
       android: { elevation: 8 },
       web: { boxShadow: '0 12px 28px rgba(0,0,0,0.22)' } as any,
     }) as object),
+    
   },
 
   addPieceSmallBtn: {
@@ -2181,6 +2268,9 @@ modalActionsBottom: {
     height: 18,
     backgroundColor: '#E0E0E0',
     marginHorizontal: 10,
+    ...(Platform.OS !== 'web' && {
+    marginHorizontal: 4,    
+  }),
   },
 
   hDivider: {
@@ -2195,6 +2285,10 @@ modalActionsBottom: {
     paddingVertical: 12,
     paddingHorizontal: 12,
     borderRadius: 8,
+    ...(Platform.OS !== 'web' && {
+    paddingVertical: 4,    
+    paddingHorizontal: 6,  
+  }),
   },
 
   rowItemPressed: {
@@ -2209,6 +2303,10 @@ modalActionsBottom: {
   rowText: {
     fontSize: 15,
     color: '#333',
+     ...(Platform.OS !== 'web' && {
+    fontSize: 12,
+    lineHeight: 16,
+  }),
   },
 
   modalActions: {

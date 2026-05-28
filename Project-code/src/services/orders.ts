@@ -42,7 +42,27 @@ export async function createOrder(data: NewOrder, userIdForLog: string = data.cr
 
   await database.write(async () => {
     const customerModel = await customers.find(data.customerId)
-    const userModel     = await users.find(data.createdBy)
+    
+    // Try to find the user, fallback to 'system' if not found
+    let userModel: any
+    try {
+      userModel = await users.find(data.createdBy)
+    } catch (err) {
+      console.warn(`User ${data.createdBy} not found, falling back to 'system' user`)
+      try {
+        userModel = await users.find('system')
+      } catch (systemErr) {
+        // If system user doesn't exist, create it
+        console.warn('System user not found, creating it...')
+        userModel = await users.create((u: any) => {
+          u._raw.id = 'system'
+          u.email = 'system@example.com'
+          u.password_hash = '1234'
+          u.name = 'System User'
+          u.created_at = Date.now()
+        })
+      }
+    }
 
     newRecord = await orders.create((rec: any) => {
       // Relations

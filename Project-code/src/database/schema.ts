@@ -1,7 +1,7 @@
 import { appSchema, tableSchema } from '@nozbe/watermelondb'
 
 export const schema = appSchema({
-  version: 1, 
+  version: 2, 
   tables: [
     // ===================== USERS =====================
     tableSchema({
@@ -125,6 +125,21 @@ export const schema = appSchema({
         { name: 'category', type: 'string', isIndexed: true },
         { name: 'status', type: 'string', isIndexed: true },
         { name: 'timestamp', type: 'string', isIndexed: true },
+      ],
+    }),
+
+    // ===================== PICKUPS =====================
+    tableSchema({
+      name: 'pickups',
+      columns: [
+        { name: 'customer_id', type: 'string', isIndexed: true }, // -> customers.id
+        { name: 'pickup_date', type: 'string', isIndexed: true }, // ISO datetime string for pickup scheduling
+        { name: 'pickup_time_start', type: 'string', isOptional: true }, // HH:mm format (start time)
+        { name: 'pickup_time_end', type: 'string', isOptional: true }, // HH:mm format (end time)
+        { name: 'notes', type: 'string', isOptional: true },
+        { name: 'created_by', type: 'string', isIndexed: true }, // -> users.id
+        { name: 'created_at', type: 'number' },
+        { name: 'last_modified_at', type: 'number' },
       ],
     }),
   ],

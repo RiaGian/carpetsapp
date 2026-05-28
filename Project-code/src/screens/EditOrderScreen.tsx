@@ -1,9 +1,11 @@
 import { Ionicons } from '@expo/vector-icons'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { router, useLocalSearchParams } from 'expo-router'
-import { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import {
   Alert,
+  Dimensions,
+  FlatList,
   Image,
   Modal,
   Platform,
@@ -12,7 +14,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  View,
+  View
 } from 'react-native'
 import { Calendar } from 'react-native-calendars'
 import AppHeader from '../components/AppHeader'
@@ -126,6 +128,187 @@ const ddmmyyyyToISO = (s: string) => {
   return `${yyyy}-${mm}-${dd}`;
 };
 
+// Generate time slots from 05:00 to 23:00 in 15-minute intervals
+const generateTimeSlots = (): string[] => {
+  const slots: string[] = [];
+  for (let hour = 5; hour <= 23; hour++) {
+    for (let minute = 0; minute < 60; minute += 15) {
+      const timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+      slots.push(timeStr);
+    }
+  }
+  return slots;
+};
+
+// Compare two time strings (HH:mm format)
+const compareTimes = (time1: string, time2: string): number => {
+  const [h1, m1] = time1.split(':').map(Number);
+  const [h2, m2] = time2.split(':').map(Number);
+  const total1 = h1 * 60 + m1;
+  const total2 = h2 * 60 + m2;
+  return total1 - total2;
+};
+
+// Simple Dropdown Component - Inline dropdown positioned below button
+function SimpleDropdown({
+  value,
+  placeholder,
+  options,
+  onChange,
+  width = '100%',
+}: {
+  value: string
+  placeholder?: string
+  options: string[]
+  onChange: (v: string) => void
+  width?: number | `${number}%` | 'auto'
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [anchor, setAnchor] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+
+  const anchorRef = React.useRef<View>(null)
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return options
+    return options.filter((o) => o.toLowerCase().includes(q))
+  }, [query, options])
+
+  // When opening, measure the anchor position
+  const toggleOpen = React.useCallback(() => {
+    if (!open) {
+      // open -> measure first
+      requestAnimationFrame(() => {
+        anchorRef.current?.measureInWindow((x, y, w, h) => {
+          setAnchor({ x, y, w, h })
+          setOpen(true)
+        })
+      })
+    } else {
+      setOpen(false)
+    }
+  }, [open])
+
+  return (
+    <>
+      {/* Anchor (button) */}
+      <View ref={anchorRef} style={{ width }}>
+        <Pressable onPress={toggleOpen} style={[styles.dropdownWrap, { width }]}>
+          <Text style={[styles.filledInputText, { paddingRight: 28, opacity: value ? 1 : 0.6 }]} numberOfLines={1}>
+            {value?.trim() || (placeholder || 'Επιλέξτε…')}
+          </Text>
+          <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={18} color="#9CA3AF" style={[
+            styles.dropdownIcon,
+              Platform.OS !== 'web' && { marginTop: 10 }, 
+            ]} />
+        </Pressable>
+      </View>
+
+      {/* Modal with absolutely positioned dropdown list */}
+      <Modal
+        visible={open}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setOpen(false)}
+        statusBarTranslucent
+      >
+        {/* Backdrop for click-outside */}
+        <Pressable style={StyleSheet.absoluteFill} onPress={() => setOpen(false)} />
+
+        {/* Dropdown list, absolutely positioned below anchor */}
+        {anchor && (
+          <View
+            style={[
+              styles.dropdownList,
+              {
+                position: 'absolute',
+                left: Math.max(8, anchor.x),
+                bottom: Dimensions.get('window').height - anchor.y - 30,
+
+
+                width: anchor.w,
+                maxHeight: 260,
+                zIndex: 99999, 
+              },
+            ]}
+          >
+
+            {/* Search box */}
+            <View style={styles.ddSearchBox}>
+              <Ionicons name="search-outline" size={18} color="#6B7280" />
+              <TextInput
+                value={query}
+                onChangeText={setQuery}
+                placeholder="Αναζήτηση…"
+                placeholderTextColor="#9CA3AF"
+                style={[
+                  styles.ddSearchInput,
+                  Platform.OS !== 'web' && {
+                    paddingVertical: 6,
+                  },
+                  Platform.OS === 'web' && {
+                    paddingVertical: 10,
+                  },
+
+                  Platform.OS === 'web' && ({ outlineStyle: 'none' } as any),
+                ]}
+                autoFocus
+              />
+
+              {query ? (
+                <Pressable onPress={() => setQuery('')}>
+                  <Ionicons name="close" size={16} color="#9CA3AF" />
+                </Pressable>
+              ) : null}
+            </View>
+
+            {/* Options */}
+            <ScrollView>
+              {filtered.length === 0 ? (
+                <View style={styles.ddEmpty}>
+                  <Text style={styles.ddEmptyText}>Δεν βρέθηκαν επιλογές</Text>
+                </View>
+              ) : (
+                filtered.map((opt, idx) => {
+                  const selected = value?.trim().toLowerCase() === opt.toLowerCase()
+                  return (
+                    <Pressable
+                      key={`${opt}-${idx}`}
+                      onPress={() => {
+                        onChange(opt)
+                        setOpen(false)
+                        setQuery('')
+                      }}
+                      style={[styles.ddOption, idx % 2 === 1 && styles.ddOptionAlt]}
+                    >
+                      <Text
+                        style={[styles.ddOptionText, selected && styles.ddOptionTextSelected]}
+                        numberOfLines={1}
+                      >
+                        {opt}
+                      </Text>
+                      {selected && <Ionicons name="checkmark" size={18} color="#3B82F6" />}
+                    </Pressable>
+                  )
+                })
+              )}
+            </ScrollView>
+          </View>
+        )}
+      </Modal>
+    </>
+  )
+}
+
+const ORDER_STATUS_LABEL_TO_KEY: Record<string, 'new'|'processing'|'ready'|'readyForDelivery'|'delivered'> = {
+  'Νέα': 'new',
+  'Σε επεξεργασία': 'processing',
+  'Έτοιμη': 'ready',
+  'Προς παράδοση': 'readyForDelivery',
+  'Παραδόθηκε': 'delivered',
+};
+
 export default function EditOrderScreen() {
   const { user } = useAuth();      
   const userId = (user?.id ? String(user.id) : 'system');
@@ -220,11 +403,14 @@ export default function EditOrderScreen() {
   const [orderStatus, setOrderStatus] = useState<string | null>(null);
   const [deliveryDate, setDeliveryDate] = useState<string | null>(null); // ISO datetime string
   const [deliveryDateOpen, setDeliveryDateOpen] = useState(false);
-  const [deliveryTime, setDeliveryTime] = useState<string>(''); // HH:mm format (start time)
-  const [deliveryTimeFrame, setDeliveryTimeFrame] = useState<string>(''); // e.g., "10:00-12:00"
+  const [deliveryTimeStart, setDeliveryTimeStart] = useState<string>(''); // HH:mm format (start time)
+  const [deliveryTimeEnd, setDeliveryTimeEnd] = useState<string>(''); // HH:mm format (end time)
+  const [timeError, setTimeError] = useState<string>(''); // Error message for time validation
 
   const [hasDebt, setHasDebt] = useState<boolean | null>(null) // hasDept
   const [confirmDeliveredOpen, setConfirmDeliveredOpen] = useState(false) //payed/not
+  const [partialPaymentModalOpen, setPartialPaymentModalOpen] = useState(false) // partial payment input
+  const [partialPaymentAmount, setPartialPaymentAmount] = useState<string>('') // amount paid (partial)
   const [returnsPromptOpen, setReturnsPromptOpen] = useState(false)
   const [unsavedChangesModalOpen, setUnsavedChangesModalOpen] = useState(false) // unsaved changes warning
 
@@ -292,15 +478,6 @@ const clearReturnsPending = (customerId: string, orderId: string) => {
     delivered: 'Παραδόθηκε',
   };
 
-  const ORDER_STATUS_LABEL_TO_KEY: Record<string, 'new'|'processing'|'ready'|'readyForDelivery'|'delivered'> = {
-    'Νέα': 'new',
-    'Σε επεξεργασία': 'processing',
-    'Έτοιμη': 'ready',
-    'Προς παράδοση': 'readyForDelivery',
-    'Παραδόθηκε': 'delivered',
-  };
-
-
   const orderStatusDisplay = orderStatus
     ? orderStatusLabels[orderStatus]
     : 'Επιλέξτε κατάσταση..';
@@ -333,28 +510,24 @@ const clearReturnsPending = (customerId: string, orderId: string) => {
           setDeliveryDate((order as any).deliveryDate)
           const hours = deliveryDateTime.getHours()
           const minutes = deliveryDateTime.getMinutes()
-          setDeliveryTime(`${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`)
+          const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+          setDeliveryTimeStart(timeStr)
           
-          // Calculate timeframe based on hour (round down to nearest odd-hour slot: 5, 7, 9, 11, 13, 15, 17, 19, 21)
-          let startHour: number
-          if (hours < 5) startHour = 5
-          else if (hours < 7) startHour = 5
-          else if (hours < 9) startHour = 7
-          else if (hours < 11) startHour = 9
-          else if (hours < 13) startHour = 11
-          else if (hours < 15) startHour = 13
-          else if (hours < 17) startHour = 15
-          else if (hours < 19) startHour = 17
-          else if (hours < 21) startHour = 19
-          else if (hours < 23) startHour = 21
-          else startHour = 21
-          const endHour = startHour + 2
-          const timeframe = `${String(startHour).padStart(2, '0')}:00-${String(endHour).padStart(2, '0')}:00`
-          setDeliveryTimeFrame(timeframe)
+          // Try to load end time from notes (DELIVERY_TIME_END:HH:mm format)
+          const orderNotes = order.notes || ''
+          const endTimeMatch = orderNotes.match(/DELIVERY_TIME_END:(\d{2}:\d{2})/)
+          if (endTimeMatch) {
+            setDeliveryTimeEnd(endTimeMatch[1])
+          } else {
+            // Fallback: Set end time as 2 hours after start (for backward compatibility)
+            const endHours = hours + 2
+            const endTimeStr = `${String(endHours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+            setDeliveryTimeEnd(endTimeStr)
+          }
         } else {
           setDeliveryDate(null)
-          setDeliveryTime('')
-          setDeliveryTimeFrame('')
+          setDeliveryTimeStart('')
+          setDeliveryTimeEnd('')
         } 
         setOrders([{
           ...makeEmptyOrder(),
@@ -476,6 +649,15 @@ const clearReturnsPending = (customerId: string, orderId: string) => {
     const sum = pieces.reduce((acc, p) => {
       const v = parseFloat((p.cost || '').toString().replace(',', '.'))
       return acc + (isNaN(v) ? 0 : v)
+    }, 0)
+    return sum.toFixed(2)
+  }, [pieces])
+
+  // Calculate total square meters (sum of all areaM2 values)
+  const totalAreaM2 = useMemo(() => {
+    const sum = pieces.reduce((acc, p) => {
+      const area = parseFloat((p.areaM2 || '').toString().replace(',', '.'))
+      return acc + (isNaN(area) ? 0 : area)
     }, 0)
     return sum.toFixed(2)
   }, [pieces])
@@ -942,6 +1124,31 @@ const savePieceModal = () => {
       // if final cost =0 --> not ab
       const finalTotal = totNum === 0 ? 0 : Math.max(0, totNum - dep)
 
+      // Calculate average price per square meter from all order items
+      let avgPricePerM2: number | null = null
+      const itemsWithArea = pieces.filter(p => {
+        const area = parseFloat((p.areaM2 || '').toString().replace(',', '.')) || 0
+        const pricePerM2 = parseFloat((p.pricePerM2 || '').toString().replace(',', '.')) || 0
+        return area > 0 && pricePerM2 > 0
+      })
+
+      if (itemsWithArea.length > 0) {
+        // Calculate weighted average: sum(area * price_per_m2) / sum(area)
+        let totalArea = 0
+        let totalPrice = 0
+        
+        itemsWithArea.forEach(p => {
+          const area = parseFloat((p.areaM2 || '').toString().replace(',', '.')) || 0
+          const pricePerM2 = parseFloat((p.pricePerM2 || '').toString().replace(',', '.')) || 0
+          totalArea += area
+          totalPrice += area * pricePerM2
+        })
+        
+        if (totalArea > 0) {
+          avgPricePerM2 = totalPrice / totalArea
+        }
+      }
+
       const patch: any = {
         customerId: selectedCustomer || undefined,
         orderDate:
@@ -961,12 +1168,62 @@ const savePieceModal = () => {
         patch.paymentMethod = paymentMethod
       }
       
-      // Save delivery date if status is "Προς παράδοση"
-      if (orderStatus === 'readyForDelivery' && deliveryDate) {
-        patch.deliveryDate = deliveryDate
+      // Store average price per square meter in notes (format: AVG_PRICE_PER_M2:XX.XX)
+      // This needs to be done before handling delivery time end to preserve both
+      let updatedNotes = notes || ''
+      
+      // Remove old AVG_PRICE_PER_M2 marker if exists
+      updatedNotes = updatedNotes.replace(/\s*\|\s*AVG_PRICE_PER_M2:\d+\.?\d*/g, '')
+      updatedNotes = updatedNotes.replace(/AVG_PRICE_PER_M2:\d+\.?\d*\s*\|\s*/g, '')
+      updatedNotes = updatedNotes.replace(/AVG_PRICE_PER_M2:\d+\.?\d*/g, '')
+      updatedNotes = updatedNotes.trim()
+      updatedNotes = updatedNotes.replace(/\s*\|\s*\|\s*/g, ' | ').trim()
+      
+      // Add average price per m² if calculated
+      if (avgPricePerM2 !== null && avgPricePerM2 > 0) {
+        const avgPriceNote = `AVG_PRICE_PER_M2:${avgPricePerM2.toFixed(2)}`
+        if (updatedNotes) {
+          updatedNotes += ` | ${avgPriceNote}`
+        } else {
+          updatedNotes = avgPriceNote
+        }
+      }
+      
+      // Save delivery date and times if status is "Προς παράδοση"
+      if (orderStatus === 'readyForDelivery' && deliveryDate && deliveryTimeStart && deliveryTimeEnd) {
+        // Update deliveryDate with start time
+        const [hours, minutes] = deliveryTimeStart.split(':').map(Number)
+        const dateOnly = deliveryDate.split('T')[0] // Get just the date part
+        const updatedDate = new Date(`${dateOnly}T${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:00`)
+        patch.deliveryDate = updatedDate.toISOString()
+        
+        // Store end time in notes in a structured format: "DELIVERY_TIME_END:HH:mm"
+        // Remove existing DELIVERY_TIME_END marker (with surrounding separators)
+        updatedNotes = updatedNotes.replace(/\s*\|\s*DELIVERY_TIME_END:\d{2}:\d{2}/g, '')
+        updatedNotes = updatedNotes.replace(/DELIVERY_TIME_END:\d{2}:\d{2}\s*\|\s*/g, '')
+        updatedNotes = updatedNotes.replace(/DELIVERY_TIME_END:\d{2}:\d{2}/g, '')
+        updatedNotes = updatedNotes.trim()
+        // Clean up double separators
+        updatedNotes = updatedNotes.replace(/\s*\|\s*\|\s*/g, ' | ').trim()
+        // Add new end time
+        if (updatedNotes) {
+          updatedNotes += ` | DELIVERY_TIME_END:${deliveryTimeEnd}`
+        } else {
+          updatedNotes = `DELIVERY_TIME_END:${deliveryTimeEnd}`
+        }
+        patch.notes = updatedNotes
       } else if (orderStatus !== 'readyForDelivery') {
         // Clear delivery date if status is not "Προς παράδοση"
         patch.deliveryDate = null
+        // Remove delivery time end from notes, preserve other notes (including AVG_PRICE_PER_M2)
+        updatedNotes = updatedNotes.replace(/\s*\|\s*DELIVERY_TIME_END:\d{2}:\d{2}/g, '')
+        updatedNotes = updatedNotes.replace(/DELIVERY_TIME_END:\d{2}:\d{2}\s*\|\s*/g, '')
+        updatedNotes = updatedNotes.replace(/DELIVERY_TIME_END:\d{2}:\d{2}/g, '')
+        updatedNotes = updatedNotes.replace(/\s*\|\s*\|\s*/g, ' | ').trim()
+        patch.notes = updatedNotes || notes
+      } else {
+        // Status is readyForDelivery but no delivery date/time set, just update notes with avg price
+        patch.notes = updatedNotes
       }
 
       await updateOrder(orderId, patch, userId)
@@ -980,7 +1237,7 @@ const savePieceModal = () => {
               await removeItemFromShelf({ orderItemId: item.id, userId })
             } catch (e) {
               // Item might not be on a shelf, ignore
-              console.log(`Item ${item.id} not on shelf or already removed`)
+              console.log(`Item ${item.id} not on shelf or already removed and this is the e ${e}`)
             }
           }
         } catch (e) {
@@ -1219,13 +1476,20 @@ const savePieceModal = () => {
                       {/* Εικονίδιο calendar για toggle */}
                       <Pressable
                         onPress={() => updateOrderUI(idx, { dateOpen: !ord.dateOpen })}
-                        style={{
-                          position: 'absolute',
-                          right: 8,
-                          top: '90%',
-                          transform: [{ translateY: -10 }],
-                          padding: 4,
-                        }}
+                        style={[
+                          {
+                            position: 'absolute',
+                            right: 8,
+                            top: '90%',           
+                            transform: [{ translateY: -10 }],
+                            padding: 4,
+                          },
+                          Platform.OS === 'web' && {
+                            top: '40%',           
+                            transform: [{ translateY: -9 }],
+                          }
+                        ]}
+
                         hitSlop={8}
                         accessibilityLabel="Άνοιγμα ημερολογίου"
                       >
@@ -1603,7 +1867,7 @@ const savePieceModal = () => {
                   <View style={styles.depositRow}>
                       <Text style={[styles.inputLabel, { marginLeft: 1 }]}>Προκαταβολή</Text>
                       <Pressable
-                      onPress={() => setDepositEnabled(prev => !prev)} // ή toggleDeposit() αν το έχεις
+                      onPress={toggleDeposit}
                       style={[styles.toggleWrapSmall, depositEnabled && styles.toggleWrapOnSmall]}
                       >
                       <View style={[styles.toggleKnobSmall, depositEnabled && styles.toggleKnobOnSmall]} />
@@ -1633,6 +1897,16 @@ const savePieceModal = () => {
                       <Text style={[styles.totalAmountText, { fontSize: 18 }]}>{balance} €</Text>
                       </View>
                   </View>
+
+                  {/* Συνολικά τετραγωνικά */}
+                  {parseFloat(totalAreaM2) > 0 && (
+                    <View style={{ marginTop: 12 }}>
+                      <Text style={[styles.inputLabelInline, { marginBottom: 4 }]}>Συνολικά τετραγωνικά</Text>
+                      <View style={[styles.totalAmountWrap, { paddingVertical: 8 }]}>
+                        <Text style={[styles.totalAmountText, { fontSize: 18, color: '#1F2A44' }]}>{totalAreaM2} m²</Text>
+                      </View>
+                    </View>
+                  )}
               </View>
 
 
@@ -1726,8 +2000,8 @@ const savePieceModal = () => {
                             tomorrow.setDate(tomorrow.getDate() + 1)
                             tomorrow.setHours(9, 0, 0, 0) // Default 09:00
                             setDeliveryDate(tomorrow.toISOString())
-                            setDeliveryTime('09:00')
-                            setDeliveryTimeFrame('09:00-11:00')
+                            setDeliveryTimeStart('09:00')
+                            setDeliveryTimeEnd('11:00')
                           }
                           setDeliveryDateOpen(true)
                         }}
@@ -1752,8 +2026,9 @@ const savePieceModal = () => {
                             // Clear delivery date if changing from readyForDelivery
                             if (orderStatus === 'readyForDelivery') {
                               setDeliveryDate(null)
-                              setDeliveryTime('')
-                              setDeliveryTimeFrame('')
+                              setDeliveryTimeStart('')
+                              setDeliveryTimeEnd('')
+                              setTimeError('')
                             }
                           }
                         }}
@@ -1781,7 +2056,7 @@ const savePieceModal = () => {
             >
               <Text style={[styles.fakeInputText, !deliveryDate && { color: '#999' }]}>
                 {deliveryDate 
-                  ? `${new Date(deliveryDate).toLocaleDateString('el-GR', { day: '2-digit', month: '2-digit', year: 'numeric' })} ${deliveryTimeFrame || deliveryTime || ''}`
+                  ? `${new Date(deliveryDate).toLocaleDateString('el-GR', { day: '2-digit', month: '2-digit', year: 'numeric' })} ${deliveryTimeStart && deliveryTimeEnd ? `${deliveryTimeStart} - ${deliveryTimeEnd}` : ''}`
                   : 'Επιλέξτε ημερομηνία & ώρα παράδοσης...'}
               </Text>
               <Ionicons name="calendar-outline" size={18} color="#666" />
@@ -1804,13 +2079,19 @@ const savePieceModal = () => {
                       <Calendar
                         onDayPress={(day) => {
                           const selectedDate = new Date(day.dateString)
-                          const currentDate = deliveryDate ? new Date(deliveryDate) : new Date()
-                          selectedDate.setHours(
-                            currentDate.getHours() || 10,
-                            currentDate.getMinutes() || 0,
-                            0,
-                            0
-                          )
+                          // If time is already selected, use that; otherwise use existing time or default
+                          if (deliveryTimeStart) {
+                            const [hours, minutes] = deliveryTimeStart.split(':').map(Number)
+                            selectedDate.setHours(hours, minutes, 0, 0)
+                          } else {
+                            const currentDate = deliveryDate ? new Date(deliveryDate) : new Date()
+                            selectedDate.setHours(
+                              currentDate.getHours() || 10,
+                              currentDate.getMinutes() || 0,
+                              0,
+                              0
+                            )
+                          }
                           setDeliveryDate(selectedDate.toISOString())
                         }}
                         markedDates={
@@ -1827,56 +2108,51 @@ const savePieceModal = () => {
                       />
 
                       <View style={{ marginTop: 20, paddingHorizontal: 20 }}>
-                        <Text style={styles.inputLabel}>Ώρα Παράδοσης (Timeframe 2 ωρών)</Text>
-                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
-                          {[
-                            { start: 5, end: 7, label: '05:00-07:00' },
-                            { start: 7, end: 9, label: '07:00-09:00' },
-                            { start: 9, end: 11, label: '09:00-11:00' },
-                            { start: 11, end: 13, label: '11:00-13:00' },
-                            { start: 13, end: 15, label: '13:00-15:00' },
-                            { start: 15, end: 17, label: '15:00-17:00' },
-                            { start: 17, end: 19, label: '17:00-19:00' },
-                            { start: 19, end: 21, label: '19:00-21:00' },
-                            { start: 21, end: 23, label: '21:00-23:00' },
-                          ].map((timeSlot) => {
-                            const isSelected = deliveryTimeFrame === timeSlot.label;
-                            return (
-                              <Pressable
-                                key={timeSlot.label}
-                                onPress={() => {
-                                  setDeliveryTimeFrame(timeSlot.label);
-                                  setDeliveryTime(`${String(timeSlot.start).padStart(2, '0')}:00`);
-                                  
-                                  // Update deliveryDate with start time
-                                  if (deliveryDate) {
-                                    const updated = new Date(deliveryDate);
-                                    updated.setHours(timeSlot.start, 0, 0, 0);
-                                    setDeliveryDate(updated.toISOString());
-                                  }
-                                }}
-                                style={{
-                                  paddingHorizontal: 16,
-                                  paddingVertical: 10,
-                                  borderRadius: 8,
-                                  backgroundColor: isSelected ? '#3B82F6' : '#F3F4F6',
-                                  borderWidth: 1,
-                                  borderColor: isSelected ? '#3B82F6' : '#E5E7EB',
-                                }}
-                              >
-                                <Text
-                                  style={{
-                                    fontSize: 14,
-                                    fontWeight: isSelected ? '600' : '500',
-                                    color: isSelected ? '#FFFFFF' : '#1F2A44',
-                                  }}
-                                >
-                                  {timeSlot.label}
-                                </Text>
-                              </Pressable>
-                            );
-                          })}
+                        <Text style={styles.inputLabel}>Ώρα Παράδοσης</Text>
+                        <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 13, fontWeight: '500', color: '#374151', marginBottom: 6 }}>Ώρα Έναρξης</Text>
+                            <SimpleDropdown
+                              value={deliveryTimeStart}
+                              placeholder="Επιλέξτε ώρα έναρξης"
+                              options={generateTimeSlots()}
+                              onChange={(time) => {
+                                setDeliveryTimeStart(time);
+                                setTimeError('');
+                                // Update deliveryDate with start time
+                                if (deliveryDate) {
+                                  const [hours, minutes] = time.split(':').map(Number);
+                                  const updated = new Date(deliveryDate);
+                                  updated.setHours(hours, minutes, 0, 0);
+                                  setDeliveryDate(updated.toISOString());
+                                }
+                                // Validate if end time is set
+                                if (deliveryTimeEnd && compareTimes(time, deliveryTimeEnd) >= 0) {
+                                  setTimeError('Η ώρα λήξης πρέπει να είναι μεγαλύτερη από την ώρα έναρξης');
+                                }
+                              }}
+                            />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 13, fontWeight: '500', color: '#374151', marginBottom: 6 }}>Ώρα Λήξης</Text>
+                            <SimpleDropdown
+                              value={deliveryTimeEnd}
+                              placeholder="Επιλέξτε ώρα λήξης"
+                              options={generateTimeSlots()}
+                              onChange={(time) => {
+                                setDeliveryTimeEnd(time);
+                                setTimeError('');
+                                // Validate if start time is set
+                                if (deliveryTimeStart && compareTimes(deliveryTimeStart, time) >= 0) {
+                                  setTimeError('Η ώρα λήξης πρέπει να είναι μεγαλύτερη από την ώρα έναρξης');
+                                }
+                              }}
+                            />
+                          </View>
                         </View>
+                        {timeError ? (
+                          <Text style={{ color: '#B91C1C', fontSize: 12, marginTop: 8 }}>{timeError}</Text>
+                        ) : null}
                       </View>
                     </ScrollView>
 
@@ -1896,11 +2172,27 @@ const savePieceModal = () => {
                             Alert.alert('Προσοχή', 'Παρακαλώ επιλέξτε ημερομηνία παράδοσης.')
                             return
                           }
-                          if (!deliveryTimeFrame) {
-                            Alert.alert('Προσοχή', 'Παρακαλώ επιλέξτε timeframe ώρας παράδοσης (2 ώρες).')
+                          if (!deliveryTimeStart) {
+                            Alert.alert('Προσοχή', 'Παρακαλώ επιλέξτε ώρα έναρξης παράδοσης.')
                             return
                           }
+                          if (!deliveryTimeEnd) {
+                            Alert.alert('Προσοχή', 'Παρακαλώ επιλέξτε ώρα λήξης παράδοσης.')
+                            return
+                          }
+                          if (compareTimes(deliveryTimeStart, deliveryTimeEnd) >= 0) {
+                            Alert.alert('Προσοχή', 'Η ώρα λήξης πρέπει να είναι μεγαλύτερη από την ώρα έναρξης.')
+                            return
+                          }
+                          // Update deliveryDate with start time
+                          if (deliveryDate) {
+                            const [hours, minutes] = deliveryTimeStart.split(':').map(Number);
+                            const updated = new Date(deliveryDate);
+                            updated.setHours(hours, minutes, 0, 0);
+                            setDeliveryDate(updated.toISOString());
+                          }
                           setDeliveryDateOpen(false)
+                          setTimeError('')
                         }}
                       >
                         <Text style={styles.primaryBtnText}>ΟΚ</Text>
@@ -1923,6 +2215,13 @@ const savePieceModal = () => {
           <View style={styles.totalAmountWrap}>
             <Text style={styles.totalAmountText}>{finalTotalCost} €</Text>
           </View>
+          {/* Total Square Meters */}
+          {parseFloat(totalAreaM2) > 0 && (
+            <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#E5E7EB', alignItems: 'center' }}>
+              <Text style={{ fontSize: 14, color: '#6B7280', marginBottom: 4 }}>Συνολικά τετραγωνικά</Text>
+              <Text style={{ fontSize: 20, fontWeight: '500', color: '#1F2A44' }}>{totalAreaM2} m²</Text>
+            </View>
+          )}
         </View>
 
         {/* ===== Σημειώσεις ===== */}
@@ -1951,7 +2250,7 @@ const savePieceModal = () => {
         </View>
       </ScrollView>
 
-      {/* ===== Modal επιλογής πελάτη (ίδιο με δημιουργία) ===== */}
+      {/* ===== Modal επιλογής πελάτη  ===== */}
       <Modal
         visible={customerModalOpen}
         animationType="fade"
@@ -1984,51 +2283,105 @@ const savePieceModal = () => {
                 <View style={styles.vDivider} />
                 <Text style={[styles.th, styles.colAddr]}>Διεύθυνση</Text>
                 <View style={styles.vDivider} />
-                <Text style={[styles.th, styles.colPhone]}>Κινητό</Text> 
+                <Text style={[styles.th, styles.colPhone]}>Κινητό</Text>
               </View>
 
-              <ScrollView
-                style={{ flex: 1, maxHeight: 420 }}
-                contentContainerStyle={{ paddingBottom: 88 }}
-                keyboardShouldPersistTaps="handled"
-              >
-                {customers.map((c, idx) => {
-                  const full = `${c.firstName} ${c.lastName}`.trim()
-                  const selected = selectedCustomer === c.id
-                  const zebra = idx % 2 === 1
-                  return (
-                    <Pressable
-                      key={c.id}
-                      style={[
-                        styles.rowItem,
-                        zebra && styles.trZebra,
-                        selected && styles.rowItemSelected,
-                      ]}
-                      onPress={() => {
-                        setSelectedCustomer(c.id)
-                        setCustomerModalOpen(false)
-                      }}
-                    >
-                      <Text style={[styles.rowText, styles.colName]} numberOfLines={1}>
-                        {full || '—'}
-                      </Text>
-                      <View style={styles.vDivider} />
-                      <Text style={[styles.rowText, styles.colAfm]} numberOfLines={1}>
-                        {c.afm || '—'}
-                      </Text>
-                      <View style={styles.vDivider} />
-                      <Text style={[styles.rowText, styles.colAddr]} numberOfLines={1}>
-                        {c.address || '—'}
-                      </Text>
-                      <View style={styles.vDivider} />
-                      <Text style={[styles.rowText, styles.colPhone]} numberOfLines={1}>
-                        {c.phone || '—'} 
-                      </Text>
-                    </Pressable>
-                  )
-                })}
-              </ScrollView>
+              {/*  web = όπως πριν, mobile = ρητό ύψος με scroll */}
+              {Platform.OS === 'web' ? (
+                // ---- Web version (δεν αλλάζουμε τίποτα) ----
+                <ScrollView
+                  style={{ flex: 1, maxHeight: 420 }}
+                  contentContainerStyle={{ paddingBottom: 88 }}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {customers.map((c, idx) => {
+                    const full = `${c.firstName} ${c.lastName}`.trim()
+                    const selected = selectedCustomer === c.id
+                    const zebra = idx % 2 === 1
+                    return (
+                      <Pressable
+                        key={c.id}
+                        style={[
+                          styles.rowItem,
+                          zebra && styles.trZebra,
+                          selected && styles.rowItemSelected,
+                        ]}
+                        onPress={() => {
+                          setSelectedCustomer(c.id)
+                          setCustomerModalOpen(false)
+                        }}
+                      >
+                        <Text style={[styles.rowText, styles.colName]} numberOfLines={1}>
+                          {full || '—'}
+                        </Text>
+                        <View style={styles.vDivider} />
+                        <Text style={[styles.rowText, styles.colAfm]} numberOfLines={1}>
+                          {c.afm || '—'}
+                        </Text>
+                        <View style={styles.vDivider} />
+                        <Text style={[styles.rowText, styles.colAddr]} numberOfLines={1}>
+                          {c.address || '—'}
+                        </Text>
+                        <View style={styles.vDivider} />
+                        <Text style={[styles.rowText, styles.colPhone]} numberOfLines={1}>
+                          {c.phone || '—'} 
+                        </Text>
+                      </Pressable>
+                    )
+                  })}
+                </ScrollView>
+              ) : (
+                // ---- Mobile version ----
+                <View style={{ height: 400, width: '100%' }}>
+                  <FlatList
+                    data={customers}
+                    keyExtractor={(c) => c.id}
+                    keyboardShouldPersistTaps="handled"
+                    ListEmptyComponent={
+                      <View style={{ padding: 16 }}>
+                        <Text>Δεν βρέθηκαν πελάτες</Text>
+                      </View>
+                    }
+                    renderItem={({ item, index }) => {
+                      const full = `${item.firstName} ${item.lastName}`.trim()
+                      const selected = selectedCustomer === item.id
+                      const zebra = index % 2 === 1
+
+                      return (
+                        <Pressable
+                          style={[
+                            styles.rowItem,
+                            zebra && styles.trZebra,
+                            selected && styles.rowItemSelected,
+                          ]}
+                          onPress={() => {
+                            setSelectedCustomer(item.id)
+                            setCustomerModalOpen(false)
+                          }}
+                        >
+                          <Text style={[styles.rowText, styles.colName]} numberOfLines={1}>
+                            {full || '—'}
+                          </Text>
+                          <View style={styles.vDivider} />
+                          <Text style={[styles.rowText, styles.colAfm]} numberOfLines={1}>
+                            {item.afm || '—'}
+                          </Text>
+                          <View style={styles.vDivider} />
+                          <Text style={[styles.rowText, styles.colAddr]} numberOfLines={1}>
+                            {item.address || '—'}
+                          </Text>
+                          <View style={styles.vDivider} />
+                          <Text style={[styles.rowText, styles.colPhone]} numberOfLines={1}>
+                            {item.phone || '—'}
+                          </Text>
+                        </Pressable>
+                      )
+                    }}
+                  />
+                </View>
+              )}
             </View>
+
 
             <View style={styles.modalActionsBottom}>
               <Pressable
@@ -2352,8 +2705,7 @@ const savePieceModal = () => {
               Πλήρωσε;
             </Text>
 
-            <View style={{ flexDirection: 'row', justifyContent: 'space-evenly' }}>
-
+            <View style={{ gap: 12 }}>
               {/* Ναι = πλήρωσε → hasDebt: false */}
               <Pressable
                 onPress={() => {
@@ -2362,9 +2714,20 @@ const savePieceModal = () => {
                   setConfirmDeliveredOpen(false)
                   setReturnsPromptOpen(true)
                 }}
-                style={{ backgroundColor: '#3B82F6', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8 }}
+                style={{ backgroundColor: '#3B82F6', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8, alignItems: 'center' }}
               >
                 <Text style={{ color: 'white', fontWeight: '600' }}>Ναι</Text>
+              </Pressable>
+
+              {/* Ναι, αλλά όχι όλο το ποσό = πλήρωσε μερικώς → hasDebt: true */}
+              <Pressable
+                onPress={() => {
+                  setConfirmDeliveredOpen(false)
+                  setPartialPaymentModalOpen(true)
+                }}
+                style={{ backgroundColor: '#F59E0B', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8, alignItems: 'center' }}
+              >
+                <Text style={{ color: 'white', fontWeight: '600' }}>Ναι, αλλά όχι όλο το ποσό</Text>
               </Pressable>
 
               {/* Όχι = δεν πλήρωσε → hasDebt: true */}
@@ -2375,14 +2738,140 @@ const savePieceModal = () => {
                   setConfirmDeliveredOpen(false)
                   setReturnsPromptOpen(true)
                 }}
-                style={{ backgroundColor: '#F3F4F6', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8 }}
+                style={{ backgroundColor: '#F3F4F6', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 8, alignItems: 'center' }}
               >
                 <Text style={{ color: '#374151', fontWeight: '600' }}>Όχι</Text>
               </Pressable>
-
-              
             </View>
 
+          </View>
+        </View>
+      </Modal>
+
+      {/* Partial Payment Modal */}
+      <Modal
+        visible={partialPaymentModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setPartialPaymentModalOpen(false)
+          setPartialPaymentAmount('')
+        }}
+      >
+        <View style={{
+          flex: 1,
+          backgroundColor: 'rgba(0,0,0,0.4)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          padding: 24,
+        }}>
+          <View style={{
+            backgroundColor: '#fff',
+            borderRadius: 12,
+            padding: 24,
+            width: '90%',
+            maxWidth: 360,
+          }}>
+            <Text style={{ fontSize: 18, fontWeight: '600', marginBottom: 12, textAlign: 'center' }}>
+              Μερική Πληρωμή
+            </Text>
+            
+            {/* Show total order amount */}
+            <View style={{ marginBottom: 16 }}>
+              <Text style={{ fontSize: 14, color: '#6B7280', marginBottom: 4 }}>Συνολικό ποσό παραγγελίας:</Text>
+              <Text style={{ fontSize: 20, fontWeight: '600', color: '#1F2A44' }}>{totalCost} €</Text>
+            </View>
+
+            {/* Paid amount input */}
+            <View style={{ marginBottom: 16 }}>
+              <Text style={{ fontSize: 14, color: '#374151', marginBottom: 8 }}>Ποσό που πληρώθηκε:</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 8, paddingHorizontal: 12 }}>
+                <TextInput
+                  value={partialPaymentAmount}
+                  onChangeText={(text) => {
+                    // Only allow numbers, comma, and dot
+                    const cleaned = text.replace(/[^\d.,]/g, '')
+                    setPartialPaymentAmount(cleaned)
+                  }}
+                  placeholder="0.00"
+                  keyboardType="decimal-pad"
+                  inputMode="decimal"
+                  style={{ flex: 1, fontSize: 16, paddingVertical: 10 }}
+                />
+                <Text style={{ fontSize: 16, color: '#6B7280', marginLeft: 8 }}>€</Text>
+              </View>
+            </View>
+
+            {/* Calculate and show debt */}
+            {partialPaymentAmount && (() => {
+              const total = parseFloat(totalCost) || 0
+              const paid = parseFloat(partialPaymentAmount.replace(',', '.')) || 0
+              const debt = total - paid
+              const isValid = paid > 0 && paid < total
+              
+              return (
+                <View style={{ marginBottom: 20, padding: 12, backgroundColor: '#F9FAFB', borderRadius: 8 }}>
+                  <Text style={{ fontSize: 14, color: '#6B7280', marginBottom: 4 }}>Υπόλοιπο (χρέος):</Text>
+                  <Text style={{ fontSize: 18, fontWeight: '600', color: isValid ? '#DC2626' : '#9CA3AF' }}>
+                    {isValid ? `${debt.toFixed(2)} €` : '—'}
+                  </Text>
+                  {paid >= total && (
+                    <Text style={{ fontSize: 12, color: '#DC2626', marginTop: 4 }}>
+                      Το ποσό πρέπει να είναι μικρότερο από {totalCost} €
+                    </Text>
+                  )}
+                  {paid <= 0 && partialPaymentAmount && (
+                    <Text style={{ fontSize: 12, color: '#DC2626', marginTop: 4 }}>
+                      Το ποσό πρέπει να είναι μεγαλύτερο από 0
+                    </Text>
+                  )}
+                </View>
+              )
+            })()}
+
+            {/* Action buttons */}
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <Pressable
+                onPress={() => {
+                  setPartialPaymentModalOpen(false)
+                  setPartialPaymentAmount('')
+                  setConfirmDeliveredOpen(true)
+                }}
+                style={{ flex: 1, backgroundColor: '#F3F4F6', paddingVertical: 10, borderRadius: 8, alignItems: 'center' }}
+              >
+                <Text style={{ color: '#374151', fontWeight: '600' }}>Ακύρωση</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  const total = parseFloat(totalCost) || 0
+                  const paid = parseFloat(partialPaymentAmount.replace(',', '.')) || 0
+                  
+                  if (paid <= 0 || paid >= total) {
+                    Alert.alert('Σφάλμα', `Το ποσό πρέπει να είναι μεταξύ 0 και ${totalCost} €`)
+                    return
+                  }
+
+                  // Set order status and hasDebt
+                  setOrderStatus('delivered')
+                  setHasDebt(true)
+                  
+                  // Store partial payment info in notes (format: PARTIAL_PAYMENT:amount)
+                  const currentNotes = notes || ''
+                  const partialPaymentNote = `PARTIAL_PAYMENT:${paid.toFixed(2)}`
+                  const updatedNotes = currentNotes 
+                    ? `${currentNotes} | ${partialPaymentNote}`
+                    : partialPaymentNote
+                  setNotes(updatedNotes)
+                  
+                  setPartialPaymentModalOpen(false)
+                  setPartialPaymentAmount('')
+                  setReturnsPromptOpen(true)
+                }}
+                style={{ flex: 1, backgroundColor: '#F59E0B', paddingVertical: 10, borderRadius: 8, alignItems: 'center' }}
+              >
+                <Text style={{ color: 'white', fontWeight: '600' }}>Επιβεβαίωση</Text>
+              </Pressable>
+            </View>
           </View>
         </View>
       </Modal>
@@ -3263,5 +3752,82 @@ dropdownMenuAbove: {
     fontSize: 13.5,
   },
 
+  /* ===== Dropdown styles ===== */
+  dropdownWrap: {
+    backgroundColor: '#F6F7F9',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    minHeight: 44,
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  filledInputText: {
+    fontSize: 14,
+    color: '#111827',
+  },
+  dropdownIcon: {
+    position: 'absolute',
+    right: 10,
+    top: '50%',
+    transform: [{ translateY: -9 }],
+  },
+  dropdownList: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    zIndex: 1000,
+    elevation: 100,
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    overflow: 'hidden',
+  },
+  ddBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.25)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  ddCard: {
+    width: '90%',
+    maxWidth: 420,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 12,
+    maxHeight: '80%',
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+  },
+  ddSearchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+    paddingBottom: 8,
+    marginBottom: 8,
+  },
+  ddSearchInput: { flex: 1, fontSize: 14, color: '#111827' },
+  ddEmpty: { paddingVertical: 16, alignItems: 'center' },
+  ddEmptyText: { color: '#6B7280' },
+  ddOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+  },
+  ddOptionAlt: { backgroundColor: '#F9FAFB' },
+  ddOptionText: { color: '#111827', fontSize: 14 },
+  ddOptionTextSelected: { fontWeight: '800', color: '#3B82F6' },
 
 });

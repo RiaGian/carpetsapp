@@ -41,6 +41,53 @@ const normalize = (s: string) =>
 const isAFM = (q: string) => /^\d{9}$/.test(q)
 const isPhone = (q: string) => /^\d{7,}$/.test(q)
 
+// Greek phone number validation function
+const isValidGreekPhone = (phone: string): boolean => {
+  if (!phone || phone.trim() === '') return true; // Empty is allowed (optional field)
+  
+  // Remove spaces, dashes, and parentheses
+  const cleaned = phone.replace(/[\s\-\(\)]/g, '');
+  
+  // Remove country code prefixes (+30, 0030, 30)
+  let normalized = cleaned;
+  if (cleaned.startsWith('+30')) {
+    normalized = cleaned.substring(3);
+  } else if (cleaned.startsWith('0030')) {
+    normalized = cleaned.substring(4);
+  } else if (cleaned.startsWith('30') && cleaned.length > 10) {
+    normalized = cleaned.substring(2);
+  }
+  
+  // Must be exactly 10 digits
+  if (!/^\d{10}$/.test(normalized)) return false;
+  
+  // Mobile: starts with 69
+  if (normalized.startsWith('69')) return true;
+  
+  // Landline: starts with 21, 22, 23, 24, 25, 26, 27, 28, 29
+  if (/^2[1-9]\d{8}$/.test(normalized)) return true;
+  
+  return false;
+};
+
+const formatGreekPhone = (phone: string): string => {
+  if (!phone || phone.trim() === '') return '';
+  
+  // Remove all non-digit characters (only keep numbers)
+  const digitsOnly = phone.replace(/\D/g, '');
+  
+  // Remove country code prefixes (+30, 0030, 30) if present
+  let normalized = digitsOnly;
+  if (digitsOnly.startsWith('30') && digitsOnly.length > 10) {
+    normalized = digitsOnly.substring(2);
+  }
+  
+  // Limit to 10 digits
+  normalized = normalized.substring(0, 10);
+  
+  return normalized;
+};
+
 
 // Parse/Compose helpers : notes (desc | Receipt: X | €/m²: Y)
 function parseNotes(notes: string | null | undefined) {
@@ -86,6 +133,31 @@ function hasDebtNote(notes?: string | null) {
   return /\bχρέος\b/i.test(desc || '')
 }
 
+// Helper function to calculate debt amount from order
+function calculateDebtAmount(order: { totalAmount: number; notes?: string | null; hasDebt?: boolean }): number {
+  if (!order.hasDebt) return 0
+  
+  // Check for partial payment in notes (format: PARTIAL_PAYMENT:XX.XX)
+  const partialPaymentMatch = order.notes?.match(/PARTIAL_PAYMENT:(\d+\.?\d*)/)
+  if (partialPaymentMatch) {
+    const partialPaid = parseFloat(partialPaymentMatch[1]) || 0
+    return Math.max(0, order.totalAmount - partialPaid)
+  }
+  
+  // If no partial payment, full amount is debt
+  return order.totalAmount
+}
+
+// Helper function to extract average price per m² from order notes
+function extractAvgPricePerM2(notes?: string | null): string | null {
+  if (!notes) return null
+  const match = notes.match(/AVG_PRICE_PER_M2:(\d+\.?\d*)/)
+  if (match) {
+    return parseFloat(match[1]).toFixed(2)
+  }
+  return null
+}
+
 
 /*  Helpers (ημερομηνίες ανθεκτικές σε dd/MM/yyyy, YYYY-MM-DD, ms) */
 function parseDateFlexible(input?: string | number | null) {
@@ -129,6 +201,27 @@ function yearOf(v?: string | number | null) {
   const d = parseDateFlexible(v)
   return d ? d.getFullYear() : null
 }
+
+// Generate time slots from 05:00 to 23:00 in 15-minute intervals
+const generateTimeSlots = (): string[] => {
+  const slots: string[] = [];
+  for (let hour = 5; hour <= 23; hour++) {
+    for (let minute = 0; minute < 60; minute += 15) {
+      const timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+      slots.push(timeStr);
+    }
+  }
+  return slots;
+};
+
+// Compare two time strings (HH:mm format)
+const compareTimes = (time1: string, time2: string): number => {
+  const [h1, m1] = time1.split(':').map(Number);
+  const [h2, m2] = time2.split(':').map(Number);
+  const total1 = h1 * 60 + m1;
+  const total2 = h2 * 60 + m2;
+  return total1 - total2;
+};
 
 
 const fmtMoney = (n: number | string | null | undefined) => {
@@ -391,25 +484,15 @@ function OrderCard({
               year: 'numeric' 
             })
             const hours = deliveryDateTime.getHours()
-            // Calculate timeframe based on hour
-            let startHour: number
-            if (hours < 5) startHour = 5
-            else if (hours < 7) startHour = 5
-            else if (hours < 9) startHour = 7
-            else if (hours < 11) startHour = 9
-            else if (hours < 13) startHour = 11
-            else if (hours < 15) startHour = 13
-            else if (hours < 17) startHour = 15
-            else if (hours < 19) startHour = 17
-            else if (hours < 21) startHour = 19
-            else if (hours < 23) startHour = 21
-            else startHour = 21
-            const endHour = startHour + 2
-            const timeframe = `${String(startHour).padStart(2, '0')}:00-${String(endHour).padStart(2, '0')}:00`
+            const minutes = deliveryDateTime.getMinutes()
+            const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+            // For display, show start time and estimate end time (2 hours later for backward compatibility)
+            const endHours = hours + 2
+            const endTimeStr = `${String(endHours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
             return (
               <KV 
                 label="Ημερομηνία & Ώρα Παράδοσης" 
-                value={`${deliveryDateStr} ${timeframe}`}
+                value={`${deliveryDateStr} ${timeStr} - ${endTimeStr}`}
               />
             )
           })()}
@@ -812,12 +895,7 @@ const [confirmDeleteOrder, setConfirmDeleteOrder] = useState<{ orderId: string; 
 const [showDebtPaymentModal, setShowDebtPaymentModal] = useState(false)
 const [debtOrderToPay, setDebtOrderToPay] = useState<string | null>(null)
 
-const handleAfmChange = (text: string) => {
-  setAfm(text)
-  setAfmError('')  
-}
-
-// Filters state 
+// Filters state
 type HistoryFilters = {
   category: string | null
   color: string | null
@@ -825,20 +903,10 @@ type HistoryFilters = {
   yearTo: number | null
 }
 
-const [filtersDraft, setFiltersDraft] = useState<HistoryFilters>({
-  category: null,
-  color: null,
-  yearFrom: null,
-  yearTo: null,
-})
+const [appliedFilters] = useState<HistoryFilters | null>(null)
+const [modalResultsFilters] = useState<HistoryFilters | null>(null)
 
 
-const [appliedFilters, setAppliedFilters] = useState<HistoryFilters | null>(null)
-const [modalResultsFilters, setModalResultsFilters] = useState<HistoryFilters | null>(null)
-
-
-const hasActiveFilters = !!appliedFilters &&
-  (!!appliedFilters.category || !!appliedFilters.color || !!appliedFilters.yearFrom || !!appliedFilters.yearTo)
 
 
 const fullName = React.useMemo(() => {
@@ -893,21 +961,6 @@ const itemsByYear = React.useMemo(() => {
   return map;
 }, [histItems]);
 
-const yearsToShow = React.useMemo(() => {
-  const all = [...ordersByYear.keys()] 
-  if (!hasActiveFilters) return all
-
-  return all.filter((y) => {
-    if (appliedFilters?.yearFrom != null && y < appliedFilters.yearFrom) return false
-    if (appliedFilters?.yearTo   != null && y > appliedFilters.yearTo)   return false
-
-    const its = itemsByYear.get(y) || []
-    const okCategory = appliedFilters?.category ? its.some(it => normCat(it.category) === appliedFilters.category) : true
-    const okColor    = appliedFilters?.color    ? its.some(it => (it.color || '—').trim() === appliedFilters.color) : true
-    return okCategory && okColor
-  })
-}, [ordersByYear, itemsByYear, appliedFilters, hasActiveFilters])
-
 // helper: year (item)
 const yearOfItem = (it: any) => yearOf(it.order_date || it.created_at)
 
@@ -940,9 +993,6 @@ const modalPreviewItems = React.useMemo(() => {
   return arr
 }, [histItems, modalResultsFilters])
 
-const modalPreviewCount  = modalPreviewItems.length
-const modalPreviewAmount = sum(modalPreviewItems.map(it => Number(it.price || 0)))
-const modalPreviewYears  = new Set(modalPreviewItems.map(yearOfItem).filter(Boolean)).size
 
 
 //  items group by order
@@ -1273,6 +1323,13 @@ function renderYearDetail(year: number) {
                  <Text style={styles.entryMeta}>Κατηγορία: {categoriesLabel}</Text>
                   <Text style={styles.entryMeta}>Order: {fmtMoney(o.totalAmount)}</Text>
                 </View>
+                {extractAvgPricePerM2(o.notes) && (
+                  <View style={styles.entryMetaRow}>
+                    <Text style={[styles.entryMeta, { color: '#3B82F6', fontWeight: '600' }]}>
+                      Τιμή/τ.μ.: {extractAvgPricePerM2(o.notes)} €
+                    </Text>
+                  </View>
+                )}
               </View>
 
             </View>
@@ -1467,7 +1524,7 @@ async function exportHistoryYearPDF(year: number) {
       </html>
     `
 
-    // 🔁 WEB ΠΡΩΤΑ — χωρίς printToFileAsync
+    //  WEB ΠΡΩΤΑ — χωρίς printToFileAsync
     if (Platform.OS === 'web') {
       printHtmlWeb(html); 
       return
@@ -1665,7 +1722,6 @@ const [itemEdit, setItemEdit] = useState({
   React.useEffect(() => {
   if (!detailsOpen || activeTab !== 'history' || !selectedCustomer) return
 
-  let unsub: any = null
   setHistLoading(true)
 
   // 1) Observe orders αυτού του πελάτη (όπως στο orders tab, αλλά εδώ ανεξάρτητα)
@@ -1941,17 +1997,21 @@ async function handleChangeStatus(item: any, nextStatus: string) {
       const deliveryDateTime = new Date(item.deliveryDate)
       setDeliveryDate(item.deliveryDate)
       const hours = deliveryDateTime.getHours()
-      const startHour = Math.floor(hours / 2) * 2
-      const endHour = startHour + 2
-      const timeframe = `${String(startHour).padStart(2, '0')}:00-${String(endHour).padStart(2, '0')}:00`
-      setDeliveryTimeFrame(timeframe)
+      const minutes = deliveryDateTime.getMinutes()
+      const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+      setDeliveryTimeStart(timeStr)
+      // Set end time as 2 hours after start (for backward compatibility)
+      const endHours = hours + 2
+      const endTimeStr = `${String(endHours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+      setDeliveryTimeEnd(endTimeStr)
     } else {
-      // Set default to tomorrow 10:00-12:00
+      // Set default to tomorrow 09:00-11:00
       const tomorrow = new Date()
       tomorrow.setDate(tomorrow.getDate() + 1)
-      tomorrow.setHours(10, 0, 0, 0)
+      tomorrow.setHours(9, 0, 0, 0)
       setDeliveryDate(tomorrow.toISOString())
-      setDeliveryTimeFrame('10:00-12:00')
+      setDeliveryTimeStart('09:00')
+      setDeliveryTimeEnd('11:00')
     }
     setDeliveryDateModalOrder({ orderId, item })
     return
@@ -1967,6 +2027,12 @@ async function handleChangeStatus(item: any, nextStatus: string) {
     if (!selectedCustomer) return
 
     if (!validateEdit()) return
+
+    // Validate phone number if provided
+    if (edit.phone && edit.phone.trim() && !isValidGreekPhone(edit.phone.trim())) {
+      Alert.alert('Προσοχή', 'Παρακαλώ εισάγετε έγκυρο ελληνικό τηλέφωνο (π.χ. 6912345678).')
+      return
+    }
 
     const actorId = String(user?.id ?? (user as any)?.uid ?? (user as any)?._id ?? 'system')
 
@@ -2044,16 +2110,20 @@ async function handleChangeStatus(item: any, nextStatus: string) {
     setCities([...cities, ''])
   }
   const addPhone = () => setPhones(prev => [...prev, ''])
+
   const updateAddress = (idx: number, val: string) =>
     setAddresses(prev => prev.map((a, i) => (i === idx ? val : a)))
+  
   const updatePhone = (idx: number, val: string) =>
     setPhones(prev => prev.map((p, i) => (i === idx ? val : p)))
+
   const removeAddress = (index: number) => {
     const newAddresses = addresses.filter((_, i) => i !== index)
     const newCities = cities.filter((_, i) => i !== index)
     setAddresses(newAddresses)
     setCities(newCities)
   }
+
   const removePhone = (idx: number) => setPhones(prev => prev.filter((_, i) => i !== idx))
 
   // INSERT new customer (as-is)
@@ -2166,7 +2236,9 @@ const [confirmDelivered, setConfirmDelivered] = useState<{ orderId: string } | n
 const [confirmReadyForce, setConfirmReadyForce] = useState<{ orderId: string } | null>(null)
 const [deliveryDateModalOrder, setDeliveryDateModalOrder] = useState<{ orderId: string; item: any } | null>(null)
 const [deliveryDate, setDeliveryDate] = useState<string | null>(null)
-const [deliveryTimeFrame, setDeliveryTimeFrame] = useState<string>('')
+const [deliveryTimeStart, setDeliveryTimeStart] = useState<string>('')
+const [deliveryTimeEnd, setDeliveryTimeEnd] = useState<string>('')
+const [timeError, setTimeError] = useState<string>('')
 
 // if items not delivered
 // 2ο popup: κρατάμε και ποια παραγγελία είναι
@@ -2671,51 +2743,145 @@ const isWeb = Platform.OS === 'web';
             
             {/* Pagination Controls */}
             {totalPages > 1 && (
-              <View style={styles.paginationContainer}>
-                <TouchableOpacity
-                  onPress={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                  disabled={currentPage === 1}
-                  style={[
-                    styles.paginationButton,
-                    currentPage === 1 && styles.paginationButtonDisabled
-                  ]}
-                >
-                  <Ionicons name="chevron-back" size={20} color={currentPage === 1 ? '#9CA3AF' : '#1F2A44'} />
-                  <Text style={[
-                    styles.paginationButtonText,
-                    currentPage === 1 && styles.paginationButtonTextDisabled
-                  ]}>
-                    Προηγούμενη
-                  </Text>
-                </TouchableOpacity>
+              <>
+                {/*  ANDROID / iOS */}
+                {Platform.OS !== 'web' && (
+                  <View
+                    style={[
+                      styles.paginationContainer,
+                      {
+                        alignSelf: 'center',
+                        width: '85%',                
+                        justifyContent: 'space-between',
+                      },
+                    ]}
+                  >
+                    <TouchableOpacity
+                      onPress={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                      disabled={currentPage === 1}
+                      style={[
+                        styles.paginationButton,
+                        {
+                          paddingHorizontal: 8,  
+                          paddingVertical: 4,    
+                          borderRadius: 8,       
+                        },
+                        currentPage === 1 && styles.paginationButtonDisabled,
+                      ]}
+                    >
+                      <Ionicons
+                        name="chevron-back"
+                        size={16}                 
+                        color={currentPage === 1 ? '#9CA3AF' : '#1F2A44'}
+                      />
+                      <Text
+                        style={[
+                          styles.paginationButtonText,
+                          {
+                            fontSize: 12,        
+                            fontWeight: '400',   
+                          },
+                          currentPage === 1 && styles.paginationButtonTextDisabled,
+                        ]}
+                      >
+                        Πίσω
+                      </Text>
+                    </TouchableOpacity>
 
-                <View style={styles.paginationInfo}>
-                  <Text style={styles.paginationText}>
-                    Σελίδα {currentPage} από {totalPages}
-                  </Text>
-                  <Text style={styles.paginationSubtext}>
-                    ({results.length} {results.length === 1 ? 'πελάτης' : 'πελάτες'})
-                  </Text>
-                </View>
+                    <View style={styles.paginationInfo}>
+                      <Text style={styles.paginationText}>
+                        Σελίδα {currentPage} από {totalPages}
+                      </Text>
+                      <Text style={styles.paginationSubtext}>
+                        ({results.length} {results.length === 1 ? 'πελάτης' : 'πελάτες'})
+                      </Text>
+                    </View>
 
-                <TouchableOpacity
-                  onPress={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                  disabled={currentPage === totalPages}
-                  style={[
-                    styles.paginationButton,
-                    currentPage === totalPages && styles.paginationButtonDisabled
-                  ]}
-                >
-                  <Text style={[
-                    styles.paginationButtonText,
-                    currentPage === totalPages && styles.paginationButtonTextDisabled
-                  ]}>
-                    Επόμενη
-                  </Text>
-                  <Ionicons name="chevron-forward" size={20} color={currentPage === totalPages ? '#9CA3AF' : '#1F2A44'} />
-                </TouchableOpacity>
-              </View>
+                    <TouchableOpacity
+                      onPress={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                      disabled={currentPage === totalPages}
+                      style={[
+                        styles.paginationButton,
+                        {
+                          paddingHorizontal: 8,
+                          paddingVertical: 4,
+                          borderRadius: 8,
+                        },
+                        currentPage === totalPages && styles.paginationButtonDisabled,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.paginationButtonText,
+                          {
+                            fontSize: 12,
+                            fontWeight: '400',
+                          },
+                          currentPage === totalPages && styles.paginationButtonTextDisabled,
+                        ]}
+                      >
+                        Επόμενη
+                      </Text>
+                      <Ionicons
+                        name="chevron-forward"
+                        size={16}
+                        color={currentPage === totalPages ? '#9CA3AF' : '#1F2A44'}
+                      />
+                    </TouchableOpacity>
+
+                  </View>
+                )}
+
+                {/*  WEB  */}
+                {Platform.OS === 'web' && (
+                  <View style={styles.paginationContainer}>
+                    <TouchableOpacity
+                      onPress={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                      disabled={currentPage === 1}
+                      style={[
+                        styles.paginationButton,
+                        currentPage === 1 && styles.paginationButtonDisabled
+                      ]}
+                    >
+                      <Ionicons name="chevron-back" size={20} color={currentPage === 1 ? '#9CA3AF' : '#1F2A44'} />
+                      <Text style={[
+                        styles.paginationButtonText,
+                        currentPage === 1 && styles.paginationButtonTextDisabled
+                      ]}>
+                        Προηγούμενη
+                      </Text>
+                    </TouchableOpacity>
+
+                    <View style={styles.paginationInfo}>
+                      <Text style={styles.paginationText}>
+                        Σελίδα {currentPage} από {totalPages}
+                      </Text>
+                      <Text style={styles.paginationSubtext}>
+                        ({results.length} {results.length === 1 ? 'πελάτης' : 'πελάτες'})
+                      </Text>
+                    </View>
+
+                    <TouchableOpacity
+                      onPress={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                      disabled={currentPage === totalPages}
+                      style={[
+                        styles.paginationButton,
+                        currentPage === totalPages && styles.paginationButtonDisabled
+                      ]}
+                    >
+                      <Text style={[
+                        styles.paginationButtonText,
+                        currentPage === totalPages && styles.paginationButtonTextDisabled
+                      ]}>
+                        Επόμενη
+                      </Text>
+                      <Ionicons name="chevron-forward" size={20} color={currentPage === totalPages ? '#9CA3AF' : '#1F2A44'} />
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </>
             )}
+
             </>
           )}
         </View>
@@ -2796,7 +2962,7 @@ const isWeb = Platform.OS === 'web';
               {/* Διευθύνσεις */}
               <View style={styles.group}>
                 <View style={styles.groupHeader}>
-                  <Text style={styles.label}>Διευθύνση, Πόλη *</Text>
+                  <Text style={styles.label}>Διεύθυνση, Πόλη *</Text>
                   <TouchableOpacity onPress={addAddress} style={styles.linkBtn}>
                     <Text style={styles.linkBtnText}>+ Προσθήκη</Text>
                   </TouchableOpacity>
@@ -2831,8 +2997,18 @@ const isWeb = Platform.OS === 'web';
                     {/* Πόλη */}
                     <TextInput
                       value={cities[idx] || ''}
-                      onChangeText={(v) => updateCity(idx, v)}
-                      style={[styles.input, { flex: 0.8 }]}
+                      onChangeText={(v) => {
+                        updateCity(idx, v)
+                      
+                        if (errors.addresses && v.trim()) {
+                          setErrors((s) => ({ ...s, addresses: false }))
+                        }
+                      }}
+                      style={[
+                        styles.input,
+                        { flex: 0.8 },
+                        errors.addresses && idx === 0 && styles.inputError, 
+                      ]}
                       placeholder="Πόλη"
                       placeholderTextColor={colors.muted}
                       autoCapitalize="words"
@@ -2852,7 +3028,7 @@ const isWeb = Platform.OS === 'web';
                 ))}
 
                 {errors.addresses && (
-                  <Text style={styles.errorText}>Πρέπει να προσθέσεις τουλάχιστον μία διεύθυνση.</Text>
+                  <Text style={styles.errorText}>Πρέπει να προσθέσεις τουλάχιστον μία διεύθυνση και πόλη.</Text>
                 )}
               </View>
 
@@ -2870,8 +3046,9 @@ const isWeb = Platform.OS === 'web';
                   <TextInput
                     value={phones[0] || ''}
                     onChangeText={(v) => {
-                      updatePhone(0, v)
-                      if (errors.phones && v.trim()) setErrors(s => ({ ...s, phones: false }))
+                      const formatted = formatGreekPhone(v)
+                      updatePhone(0, formatted)
+                      if (errors.phones && formatted.trim()) setErrors(s => ({ ...s, phones: false }))
                     }}
                     style={[
                       styles.input,
@@ -2879,7 +3056,8 @@ const isWeb = Platform.OS === 'web';
                       errors.phones && styles.inputError, 
                     ]}
                     keyboardType="phone-pad"
-                    placeholder="Τηλέφωνο"
+                    inputMode="numeric"
+                    placeholder="π.χ. 6912345678"
                     placeholderTextColor={colors.muted}
                     autoComplete="tel"
                     {...Platform.select({
@@ -2896,15 +3074,17 @@ const isWeb = Platform.OS === 'web';
                     <TextInput
                       value={ph}
                       onChangeText={(v) => {
-                        updatePhone(idx + 1, v)
-                        if (errors.phones && v.trim()) setErrors(s => ({ ...s, phones: false }))
+                        const formatted = formatGreekPhone(v)
+                        updatePhone(idx + 1, formatted)
+                        if (errors.phones && formatted.trim()) setErrors(s => ({ ...s, phones: false }))
                       }}
                       style={[
                         styles.input,
                         styles.flex1,
                       ]}
                       keyboardType="phone-pad"
-                      placeholder="Τηλέφωνο"
+                      inputMode="numeric"
+                      placeholder="π.χ. 6912345678"
                       placeholderTextColor={colors.muted}
                       autoComplete="off"
                       {...Platform.select({
@@ -2954,7 +3134,7 @@ const isWeb = Platform.OS === 'web';
                     placeholder="9 ψηφία"
                     placeholderTextColor={colors.muted}
                     maxLength={9}
-                    // 🔒 off
+                    //  off
                     autoComplete="off"
                     {...Platform.select({
                       ios:     { textContentType: 'none' as any },
@@ -3163,9 +3343,11 @@ const isWeb = Platform.OS === 'web';
                       value={edit.phone}
                       editable={editMode}
                       keyboardType="phone-pad"
+                      inputMode="numeric"
                       onChangeText={(v) => {
-                        setEdit(s => ({ ...s, phone: v }))
-                        if (editErr.phone && v.trim()) setEditErr(s => ({ ...s, phone: false }))
+                        const formatted = formatGreekPhone(v)
+                        setEdit(s => ({ ...s, phone: formatted }))
+                        if (editErr.phone && formatted.trim()) setEditErr(s => ({ ...s, phone: false }))
                       }}
                     />
                     {editMode && editErr.phone && (
@@ -3281,7 +3463,9 @@ const isWeb = Platform.OS === 'web';
 
                         {orders
                           .filter(o => o.hasDebt)
-                          .map(o => (
+                          .map(o => {
+                            const debtAmount = calculateDebtAmount(o)
+                            return (
                             <Pressable
                               key={o.id}
                               onPress={() => {
@@ -3292,12 +3476,18 @@ const isWeb = Platform.OS === 'web';
                               style={styles.debtRow}
                             >
                               <View style={styles.debtDot} />
-                              <Text style={styles.debtText}>
-                                Η παραγγελία <Text style={styles.debtCode}>#{o.id.slice(0, 6).toUpperCase()}</Text> έχει χρέος!
-                              </Text>
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.debtText}>
+                                  Η παραγγελία <Text style={styles.debtCode}>#{o.id.slice(0, 6).toUpperCase()}</Text> έχει χρέος!
+                                </Text>
+                                <Text style={{ fontSize: 14, color: '#DC2626', fontWeight: '600', marginTop: 4 }}>
+                                  Ποσό: {fmtMoney(debtAmount)}
+                                </Text>
+                              </View>
                               <Ionicons name="chevron-forward" size={16} color="#B91C1C" />
                             </Pressable>
-                          ))}
+                            )
+                          })}
                       </View>
                     )}
 
@@ -3370,7 +3560,12 @@ const isWeb = Platform.OS === 'web';
                           value={edit.phone}
                           editable={editMode}
                           keyboardType="phone-pad"
-                          onChangeText={(v)=>{ setEdit(s=>({...s, phone:v})); if (editErr.phone && v.trim()) setEditErr(s=>({...s, phone:false})); }}
+                          inputMode="numeric"
+                          onChangeText={(v)=>{ 
+                            const formatted = formatGreekPhone(v)
+                            setEdit(s=>({...s, phone:formatted})); 
+                            if (editErr.phone && formatted.trim()) setEditErr(s=>({...s, phone:false})); 
+                          }}
                         />
                         {editMode && editErr.phone && <Text style={{ fontSize: 11, color: '#DC2626', marginTop: 3, marginLeft: 4 }}>Το τηλέφωνο είναι υποχρεωτικό.</Text>}
                       </View>
@@ -3440,13 +3635,21 @@ const isWeb = Platform.OS === 'web';
                     {orders.some(o=>o.hasDebt) && (
                       <View style={styles.debtBox}>
                         <Text style={styles.debtTitle}>Χρέη παραγγελιών</Text>
-                        {orders.filter(o=>o.hasDebt).map(o=>(
+                        {orders.filter(o=>o.hasDebt).map(o=>{
+                          const debtAmount = calculateDebtAmount(o)
+                          return (
                           <Pressable key={o.id} onPress={()=>{ setDebtOrderToPay(o.id); setShowDebtPaymentModal(true); }} style={styles.debtRow}>
                             <View style={styles.debtDot} />
-                            <Text style={styles.debtText}>Η παραγγελία <Text style={styles.debtCode}>#{o.id.slice(0,6).toUpperCase()}</Text> έχει χρέος!</Text>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.debtText}>Η παραγγελία <Text style={styles.debtCode}>#{o.id.slice(0,6).toUpperCase()}</Text> έχει χρέος!</Text>
+                              <Text style={{ fontSize: 14, color: '#DC2626', fontWeight: '600', marginTop: 4 }}>
+                                Ποσό: {fmtMoney(debtAmount)}
+                              </Text>
+                            </View>
                             <Ionicons name="chevron-forward" size={16} color="#B91C1C" />
                           </Pressable>
-                        ))}
+                          )
+                        })}
                       </View>
                     )}
 
@@ -3589,29 +3792,21 @@ const isWeb = Platform.OS === 'web';
                                   const deliveryDateTime = new Date(item.deliveryDate)
                                   setDeliveryDate(item.deliveryDate)
                                   const hours = deliveryDateTime.getHours()
-                                  // Calculate timeframe based on hour (round down to nearest odd-hour slot: 5, 7, 9, 11, 13, 15, 17, 19, 21)
-                                  let startHour: number
-                                  if (hours < 5) startHour = 5
-                                  else if (hours < 7) startHour = 5
-                                  else if (hours < 9) startHour = 7
-                                  else if (hours < 11) startHour = 9
-                                  else if (hours < 13) startHour = 11
-                                  else if (hours < 15) startHour = 13
-                                  else if (hours < 17) startHour = 15
-                                  else if (hours < 19) startHour = 17
-                                  else if (hours < 21) startHour = 19
-                                  else if (hours < 23) startHour = 21
-                                  else startHour = 21
-                                  const endHour = startHour + 2
-                                  const timeframe = `${String(startHour).padStart(2, '0')}:00-${String(endHour).padStart(2, '0')}:00`
-                                  setDeliveryTimeFrame(timeframe)
+                                  const minutes = deliveryDateTime.getMinutes()
+                                  const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+                                  setDeliveryTimeStart(timeStr)
+                                  // Set end time as 2 hours after start (for backward compatibility)
+                                  const endHours = hours + 2
+                                  const endTimeStr = `${String(endHours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+                                  setDeliveryTimeEnd(endTimeStr)
                                 } else {
                                   // Set default to tomorrow 09:00-11:00
                                   const tomorrow = new Date()
                                   tomorrow.setDate(tomorrow.getDate() + 1)
                                   tomorrow.setHours(9, 0, 0, 0)
                                   setDeliveryDate(tomorrow.toISOString())
-                                  setDeliveryTimeFrame('09:00-11:00')
+                                  setDeliveryTimeStart('09:00')
+                                  setDeliveryTimeEnd('11:00')
                                 }
                                 setDeliveryDateModalOrder({ orderId: item.id, item })
                                 return
@@ -4205,7 +4400,8 @@ const isWeb = Platform.OS === 'web';
       onRequestClose={() => {
         setDeliveryDateModalOrder(null)
         setDeliveryDate(null)
-        setDeliveryTimeFrame('')
+        setDeliveryTimeStart('')
+        setDeliveryTimeEnd('')
       }}
     >
       <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
@@ -4235,54 +4431,52 @@ const isWeb = Platform.OS === 'web';
               minDate={new Date().toISOString().split('T')[0]}
             />
 
-            <View style={{ marginTop: 20 }}>
-              <Text style={{ fontSize: 14, fontWeight: '600', color: '#1F2A44', marginBottom: 8 }}>Ώρα Παράδοσης (Timeframe 2 ωρών)</Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                {[
-                  { start: 5, end: 7, label: '05:00-07:00' },
-                  { start: 7, end: 9, label: '07:00-09:00' },
-                  { start: 9, end: 11, label: '09:00-11:00' },
-                  { start: 11, end: 13, label: '11:00-13:00' },
-                  { start: 13, end: 15, label: '13:00-15:00' },
-                  { start: 15, end: 17, label: '15:00-17:00' },
-                  { start: 17, end: 19, label: '17:00-19:00' },
-                  { start: 19, end: 21, label: '19:00-21:00' },
-                  { start: 21, end: 23, label: '21:00-23:00' },
-                ].map((timeSlot) => {
-                  const isSelected = deliveryTimeFrame === timeSlot.label;
-                  return (
-                    <Pressable
-                      key={timeSlot.label}
-                      onPress={() => {
-                        setDeliveryTimeFrame(timeSlot.label);
-                        if (deliveryDate) {
-                          const updated = new Date(deliveryDate);
-                          updated.setHours(timeSlot.start, 0, 0, 0);
-                          setDeliveryDate(updated.toISOString());
-                        }
-                      }}
-                      style={{
-                        paddingHorizontal: 16,
-                        paddingVertical: 10,
-                        borderRadius: 8,
-                        backgroundColor: isSelected ? '#3B82F6' : '#F3F4F6',
-                        borderWidth: 1,
-                        borderColor: isSelected ? '#3B82F6' : '#E5E7EB',
-                      }}
-                    >
-                      <Text
-                        style={{
-                          fontSize: 14,
-                          fontWeight: isSelected ? '600' : '500',
-                          color: isSelected ? '#FFFFFF' : '#1F2A44',
-                        }}
-                      >
-                        {timeSlot.label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
+            <View style={{ marginTop: 20, paddingHorizontal: 20 }}>
+              <Text style={{ fontSize: 14, fontWeight: '600', color: '#1F2A44', marginBottom: 8 }}>Ώρα Παράδοσης</Text>
+              <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '500', color: '#374151', marginBottom: 6 }}>Ώρα Έναρξης</Text>
+                  <SimpleDropdown
+                    value={deliveryTimeStart}
+                    placeholder="Επιλέξτε ώρα έναρξης"
+                    options={generateTimeSlots()}
+                    onChange={(time) => {
+                      setDeliveryTimeStart(time);
+                      setTimeError('');
+                      // Update deliveryDate with start time
+                      if (deliveryDate) {
+                        const [hours, minutes] = time.split(':').map(Number);
+                        const updated = new Date(deliveryDate);
+                        updated.setHours(hours, minutes, 0, 0);
+                        setDeliveryDate(updated.toISOString());
+                      }
+                      // Validate if end time is set
+                      if (deliveryTimeEnd && compareTimes(time, deliveryTimeEnd) >= 0) {
+                        setTimeError('Η ώρα λήξης πρέπει να είναι μεγαλύτερη από την ώρα έναρξης');
+                      }
+                    }}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 13, fontWeight: '500', color: '#374151', marginBottom: 6 }}>Ώρα Λήξης</Text>
+                  <SimpleDropdown
+                    value={deliveryTimeEnd}
+                    placeholder="Επιλέξτε ώρα λήξης"
+                    options={generateTimeSlots()}
+                    onChange={(time) => {
+                      setDeliveryTimeEnd(time);
+                      setTimeError('');
+                      // Validate if start time is set
+                      if (deliveryTimeStart && compareTimes(deliveryTimeStart, time) >= 0) {
+                        setTimeError('Η ώρα λήξης πρέπει να είναι μεγαλύτερη από την ώρα έναρξης');
+                      }
+                    }}
+                  />
+                </View>
               </View>
+              {timeError ? (
+                <Text style={{ color: '#B91C1C', fontSize: 12, marginTop: 8 }}>{timeError}</Text>
+              ) : null}
             </View>
           </ScrollView>
 
@@ -4291,7 +4485,9 @@ const isWeb = Platform.OS === 'web';
               onPress={() => {
                 setDeliveryDateModalOrder(null)
                 setDeliveryDate(null)
-                setDeliveryTimeFrame('')
+                setDeliveryTimeStart('')
+                setDeliveryTimeEnd('')
+                setTimeError('')
               }}
               style={{ flex: 1, paddingVertical: 12, borderRadius: 8, backgroundColor: '#F3F4F6', alignItems: 'center' }}
             >
@@ -4303,18 +4499,35 @@ const isWeb = Platform.OS === 'web';
                   Alert.alert('Προσοχή', 'Παρακαλώ επιλέξτε ημερομηνία παράδοσης.')
                   return
                 }
-                if (!deliveryTimeFrame) {
-                  Alert.alert('Προσοχή', 'Παρακαλώ επιλέξτε timeframe ώρας παράδοσης (2 ώρες).')
+                if (!deliveryTimeStart) {
+                  Alert.alert('Προσοχή', 'Παρακαλώ επιλέξτε ώρα έναρξης παράδοσης.')
+                  return
+                }
+                if (!deliveryTimeEnd) {
+                  Alert.alert('Προσοχή', 'Παρακαλώ επιλέξτε ώρα λήξης παράδοσης.')
+                  return
+                }
+                if (compareTimes(deliveryTimeStart, deliveryTimeEnd) >= 0) {
+                  Alert.alert('Προσοχή', 'Η ώρα λήξης πρέπει να είναι μεγαλύτερη από την ώρα έναρξης.')
                   return
                 }
 
                 if (!deliveryDateModalOrder) return
 
+                // Update deliveryDate with start time
+                let finalDeliveryDate = deliveryDate
+                if (deliveryDate) {
+                  const [hours, minutes] = deliveryTimeStart.split(':').map(Number);
+                  const updated = new Date(deliveryDate);
+                  updated.setHours(hours, minutes, 0, 0);
+                  finalDeliveryDate = updated.toISOString();
+                }
+
                 try {
                   // Update order status and delivery date
                   await updateOrder(deliveryDateModalOrder.orderId, {
                     orderStatus: 'Προς παράδοση',
-                    deliveryDate: deliveryDate,
+                    deliveryDate: finalDeliveryDate,
                     hasDebt: false,
                   }, userId)
 
@@ -4329,7 +4542,9 @@ const isWeb = Platform.OS === 'web';
 
                   setDeliveryDateModalOrder(null)
                   setDeliveryDate(null)
-                  setDeliveryTimeFrame('')
+                  setDeliveryTimeStart('')
+                  setDeliveryTimeEnd('')
+                  setTimeError('')
                   
                   Alert.alert('Επιτυχία', 'Η παραγγελία ορίστηκε ως "Προς παράδοση" με επιτυχία.')
                 } catch (e) {

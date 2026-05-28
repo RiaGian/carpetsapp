@@ -296,6 +296,7 @@ export default function WarehouseScreen() {
       showsVerticalScrollIndicator={false}
     >
       {/* Section header (εικονίδιο + τίτλος + CTA) */}
+      {Platform.OS === 'web' ? (
       <View style={styles.sectionHeaderRow}>
         <View style={styles.sectionHeaderLeft}>
           <View style={styles.headerIcon}>
@@ -335,6 +336,47 @@ export default function WarehouseScreen() {
         </View>
       </View>
 
+      ) : (
+       <View>
+          {/* Πάνω σειρά: Αποθήκη + Νέο Ράφι */}
+          <View style={styles.mobileHeaderRow}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <View style={styles.headerIcon}>
+                <Ionicons name="cube" size={22} color={colors.primary} />
+              </View>
+              <View style={{ marginLeft: 10 }}>
+                <Text style={styles.title}>Αποθήκη</Text>
+                <Text style={styles.subtitle}>{shelves.length} ράφια συνολικά</Text>
+              </View>
+            </View>
+
+            <Pressable style={styles.addButton} onPress={handleAddShelf}>
+              <Ionicons name="add" size={20} color="#FFFFFF" />
+              <Text style={styles.addButtonText}>Νέο Ράφι</Text>
+            </Pressable>
+          </View>
+
+          {/* Κάτω σειρά: Τεμάχια & Προεπισκόπηση */}
+          <View style={styles.mobileActionsRow}>
+            <Pressable
+              style={[styles.previewBtn, { marginRight: 8 }]}
+              onPress={() => setShowItemsModal(true)}
+            >
+              <Ionicons name="list" size={18} color={colors.primary} />
+              <Text style={styles.previewBtnText}>Τεμάχια</Text>
+            </Pressable>
+
+            <Pressable
+              style={styles.previewBtn}
+              onPress={() => router.push('/warehouse-overview' as any)}
+            >
+              <Ionicons name="cube-outline" size={18} color={colors.primary} />
+              <Text style={styles.previewBtnText}>Προεπισκόπηση Αποθήκης</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
       {/* Search Bar – ίδιο look με History */}
       <View style={styles.searchContainer}>
         <Ionicons name="search-outline" size={20} color={colors.primary} style={styles.searchIcon} />
@@ -350,7 +392,13 @@ export default function WarehouseScreen() {
       {/* Shelves Grid */}
       <View style={[styles.shelvesGrid, isWide ? styles.shelvesGridWide : undefined]}>
         {/* Add New Shelf Card */}
-        <View style={isWide ? { width: '12%' } : { width: '48%' }}>
+        <View 
+        style={
+          isWide
+            ? { width: '12%' }
+           : { width: '48%', height: 190, marginBottom: 7 }
+        }
+        >
           <Pressable style={styles.addShelfCard} onPress={handleAddShelf}>
             <Ionicons name="add" size={isWide ? 20 : 32} color={colors.primary} />
             <Text style={[styles.addShelfText, isWide && styles.addShelfTextSmall]}>Νέο Ράφι</Text>
@@ -359,7 +407,13 @@ export default function WarehouseScreen() {
 
         {/* Existing Shelves */}
         {filteredShelves.map((shelf) => (
-          <View key={shelf.id} style={isWide ? { width: '20%' } : { width: '97%' }}>
+          <View key={shelf.id} 
+           style={
+        isWide
+          ? { width: '20%' }
+           : { width: '48%', height: 190, marginBottom: 7 }
+      }
+          >
             <ShelfCard
               shelf={shelf}
               onEdit={() => handleEditShelf(shelf)}
@@ -1022,16 +1076,68 @@ function ShelfDetailModal({
                 </View>
               </View>
 
-              {/* Add Item Button */}
-              <Pressable
-                style={styles.addItemButton}
-                onPress={() => {
-                  if (shelf) onAddItem(shelf)
-                }}
-              >
-                <Ionicons name="add-circle" size={24} color="#FFFFFF" />
-                <Text style={styles.addItemButtonText}>Προσθήκη Υπάρχοντος Τεμαχίου</Text>
-              </Pressable>
+
+             {/* Add Item Button */}
+            <Pressable
+              style={[
+                styles.addItemButton, 
+                Platform.OS !== 'web' && {
+                  alignSelf: 'center', 
+                  width: '82%',        
+                  marginHorizontal: 10, 
+                  marginTop: 8,
+                  marginBottom: 10,
+                },
+              ]}
+              onPress={() => {
+                if (shelf) onAddItem(shelf)
+              }}
+            >
+              {Platform.OS !== 'web' ? (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center', 
+                    flex: 1,
+                  }}
+                >
+                  <Ionicons
+                    name="add-circle"
+                    size={22}
+                    color="#FFFFFF"
+                    style={{ marginRight: 8, marginTop: 1 }} 
+                  />
+                  <Text
+                    style={{
+                      color: '#FFFFFF',
+                      fontWeight: '600',
+                      fontSize: 16,
+                      lineHeight: 20,
+                      includeFontPadding: false,
+                      textAlignVertical: 'center',
+                    }}
+                  >
+                    Προσθήκη Υπάρχοντος Τεμαχίου
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  <Ionicons
+                    name="add-circle"
+                    size={24}
+                    color="#FFFFFF"
+                    style={{ marginRight: 8 }}
+                  />
+                  <Text style={styles.addItemButtonText}>
+                    Προσθήκη Υπάρχοντος Τεμαχίου
+                  </Text>
+                </>
+              )}
+
+            </Pressable>
+
+
 
               {/* Items Section */}
               <View style={[styles.shelfDetailSectionLast, { flex: 1 }]}>
@@ -1240,7 +1346,17 @@ function EditItemModal({
       <View style={styles.editOverlay}>
         <Pressable style={styles.editBackdrop} onPress={onClose}>
           <Pressable onPress={(e) => e.stopPropagation()}>
-            <View style={styles.editContainer}>
+            <View
+              style={[
+                styles.editContainer,
+                Platform.OS !== 'web' && {
+                  width: '99%',
+                  maxWidth: 850,          // 👉 αυξάνεις το πλάτος (π.χ. από 700 σε 750)
+                  paddingHorizontal: 35,  // λίγο μικρότερο padding για να κερδίσεις χώρο
+                  paddingVertical: 16,
+                },
+              ]}
+            >
               {/* Header */}
               <View style={styles.editHeader}>
                 <Text style={styles.editTitle}>Στοιχεία Τεμαχίου</Text>
@@ -1406,9 +1522,7 @@ function ItemsModal({
   const [storageFilter, setStorageFilter] = useState<StorageFilter>('all')
   const [shelfFilter, setShelfFilter] = useState<string>('all') // φίλτρο ραφιού
 
-  // Modals για edit/delete
-  const [showEdit, setShowEdit] = useState(false)
-  const [editItem, setEditItem] = useState<any | null>(null)
+  // Modals για delete
   const [showDelete, setShowDelete] = useState(false)
   const [deleteItem, setDeleteItem] = useState<any | null>(null)
 
@@ -1663,16 +1777,6 @@ function ItemsModal({
                           {/* Actions δεξιά */}
                           <View style={styles.actions}>
                             <Pressable
-                              accessibilityLabel="Επεξεργασία τεμαχίου"
-                              onPress={() => { setEditItem(it); setShowEdit(true) }}
-                              android_ripple={{ color: '#E5E7EB' }}
-                              style={({ pressed }) => [styles.iconBtn, styles.editBtn, pressed && { opacity: 0.8 }]}
-                              hitSlop={8}
-                            >
-                              <Ionicons name="pencil" size={16} color="#374151" />
-                            </Pressable>
-
-                            <Pressable
                               accessibilityLabel="Διαγραφή τεμαχίου"
                               onPress={() => { setDeleteItem(it); setShowDelete(true) }}
                               android_ripple={{ color: '#FCA5A5' }}
@@ -1700,17 +1804,7 @@ function ItemsModal({
         </Pressable>
       </Modal>
 
-      {/* Modals για edit/delete */}
-      <EditItemModal
-        visible={showEdit}
-        item={editItem}
-        onClose={() => { setShowEdit(false); setEditItem(null) }}
-        onSaved={(updated) => {
-          setItems(prev => prev.map(x => x.id === updated.id ? { ...x, ...updated } : x))
-          setShowEdit(false); setEditItem(null)
-        }}
-        userId={currentUserId}
-      />
+      {/* Modals για delete */}
       <DeleteItemConfirmModal
         visible={showDelete}
         item={deleteItem}
@@ -1822,22 +1916,42 @@ searchContainer: {
   marginBottom: 16,
   borderWidth: 2,
   borderColor: '#BFDBFE',
+  marginTop: Platform.OS === 'web' ? 0 : 10,      
+  height: Platform.OS === 'web' ? 44 : 42, 
 },
-searchIcon: { marginRight: 8 },
-searchInput: { flex: 1, fontSize: 15, color: '#111827' },
+searchIcon: { marginRight: 8},
+searchInput: { 
+  flex: 1, 
+  color: '#111827',
+  fontSize: Platform.OS === 'web' ? 15 : 13, 
+  paddingVertical: Platform.OS === 'web' ? 8 : -2,
+ },
 
 
   shelvesContainer: {
     flex: 1,
   },
+
   shelvesGrid: {
-    flexDirection: 'column',
+  flexDirection: 'column',
+     ...(Platform.OS !== 'web' && {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',  
+    alignContent: 'flex-start',
+    gap: 2,
+    paddingBottom: 0,
+  
+  }),
   },
+
   shelvesGridWide: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
   },
+
   shelfCard: {
     backgroundColor: '#D1FAE5',
     borderRadius: 16,
@@ -1854,6 +1968,14 @@ searchInput: { flex: 1, fontSize: 15, color: '#111827' },
     shadowRadius: 4,
     shadowOffset: { width: 0, height: 2 },
     elevation: 2,
+    ...(Platform.OS !== 'web' && {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    marginBottom: 0,   
+    height: 210,      
+    minHeight: undefined,
+  }),
   },
   shelfCardEmpty: {
     backgroundColor: '#FFFFFF',
@@ -1882,7 +2004,7 @@ searchInput: { flex: 1, fontSize: 15, color: '#111827' },
   marginBottom: 12,
   backgroundColor: '#F1F5F9',  
   borderRadius: 14,
-  paddingVertical: 18,
+  paddingVertical: Platform.OS === 'web' ? 18 : 5,
 },
   shelfItemCount: {
     fontSize: 22,
@@ -1923,6 +2045,11 @@ searchInput: { flex: 1, fontSize: 15, color: '#111827' },
     borderStyle: 'dashed',
     marginBottom: 16,
     minHeight: 120,
+    ...(Platform.OS !== 'web' && {
+    marginBottom: 0, 
+    height: 190,      
+    padding: 20,
+  }),
   },
   addShelfText: {
     fontSize: 16,
@@ -1955,6 +2082,12 @@ searchInput: { flex: 1, fontSize: 15, color: '#111827' },
   shadowOpacity: 0.25,
   shadowRadius: 20,
   elevation: 10,
+  ...(Platform.OS !== 'web' && {
+    width: '85%',
+    height: '85%',   
+    maxWidth: 380,   
+    alignSelf: 'center',
+  }),
 },
 
 
@@ -2248,6 +2381,10 @@ modalBackButton: { padding: 4, marginBottom: 8 },
     shadowOpacity: 0.25,
     shadowRadius: 12,
     elevation: 8,
+    ...(Platform.OS !== 'web' && {
+    width: '90%',       // πιο στενό
+    maxWidth: 420,      // cap πλάτους στο κινητό
+  }),
   },
 
   shelfDetailHeader: {
@@ -2256,6 +2393,7 @@ modalBackButton: { padding: 4, marginBottom: 8 },
     padding: 16,             
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
+    ...(Platform.OS !== 'web' && { padding: 12 }),
   },
 
   shelfDetailBackButton: {
@@ -2321,19 +2459,32 @@ modalBackButton: { padding: 4, marginBottom: 8 },
   justifyContent: 'center',
   backgroundColor: '#8B5CF6',
   margin: 16,
-  paddingVertical: 12,
-  paddingHorizontal: 20,
   borderRadius: 10,
   gap: 10,
   width: 420,
   alignSelf: 'center',
   textAlign: 'center',
+  paddingVertical: Platform.OS === 'web' ? 12 : 14,
+ paddingHorizontal: Platform.OS === 'web' ? 20 : 24,
+
 },
 
+addItemIconWrap: {
+  position: 'absolute',
+  left: 16,
+  top: '50%',
+  transform: [{ translateY: -12 }], // -(icon size / 2)
+  marginTop: Platform.OS !== 'web' ? 1 : 0,
+},
+
+
   addItemButtonText: {
-    fontSize: 14,
     color: '#FFFFFF',
     fontWeight: '400',
+    fontSize: Platform.OS === 'web' ? 15 : 16,
+    lineHeight: Platform.OS === 'web' ? 18 : 20,
+    includeFontPadding: false, 
+    textAlignVertical: 'center',
   },
 
   emptyItemsContainer: {
@@ -2481,17 +2632,78 @@ actions: {
   deleteBtn: { backgroundColor: '#EF4444' },
 
   // edit modal
-editOverlay: { flex: 1, backgroundColor: 'rgba(17,24,39,0.4)', justifyContent: 'center', alignItems: 'center' },
+editOverlay: { 
+  flex: 1, 
+  backgroundColor: 'rgba(17,24,39,0.4)', 
+  justifyContent: 'center', 
+  alignItems: 'center' ,
+  ...(Platform.OS !== 'web' && { paddingHorizontal: 8 }), 
+},
+
 editBackdrop: { width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center' },
-editContainer: { width: '92%', maxWidth: 640, backgroundColor: '#FFF', borderRadius: 16, padding: 16, shadowColor: '#000', shadowOpacity: 0.15, shadowOffset: { width: 0, height: 6 }, shadowRadius: 16, elevation: 6 },
+
+editContainer: { 
+  width: '92%', 
+  maxWidth: 640, 
+  backgroundColor: '#FFF', 
+  borderRadius: 16, 
+  padding: 16, 
+  shadowColor: '#000', 
+  shadowOpacity: 0.15, 
+  shadowOffset: { width: 0, height: 6 }, 
+  shadowRadius: 16,
+   elevation: 6 ,
+   ...(Platform.OS !== 'web' && {
+    width: '90%',    
+    maxWidth: 340,    
+    padding: 16,      
+  }),
+},
+
 editHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
 editTitle: { fontSize: 18, fontWeight: '400', color: '#111827' },
 
-formGrid: { marginTop: 8 },
-formRow: { flexDirection: 'row', gap: 12, marginBottom: 10 },
-formCol: { flex: 1 },
+formGrid: { 
+  marginTop: 8,
+  ...(Platform.OS !== 'web' && {
+    rowGap: 12,              
+  }),
+ },
+formRow: { 
+  flexDirection: 'row', 
+  gap: 12, 
+  marginBottom: 10,
+    ...(Platform.OS !== 'web' && {
+    flexWrap: 'nowrap',   
+    marginBottom: 8,
+  }),
+ },
+
+formCol: { 
+  flex: 1,
+  ...(Platform.OS !== 'web' && {
+    flexBasis: '48%',    
+    minWidth: 0,        
+  }),
+},
 label: { fontSize: 12, color: '#6B7280', marginBottom: 6 },
-input: { borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 10, paddingHorizontal: 12, paddingVertical: Platform.select({ ios: 12, android: 8, default: 10 }), fontSize: 14, color: '#111827', backgroundColor: '#FFFFFF' },
+
+input: { 
+  borderWidth: 1, 
+  borderColor: '#E5E7EB', 
+  borderRadius: 10, 
+  paddingHorizontal: 12, 
+  paddingVertical: Platform.select({ ios: 12, android: 8, default: 10 }), 
+  fontSize: 14, 
+  color: '#111827',
+   backgroundColor: '#FFFFFF' ,
+  ...(Platform.OS !== 'web' && {
+    width: '100%',
+    alignSelf: 'stretch',
+    flexGrow: 1,         
+    minWidth: 0,        
+  }),
+  },
 
 actionsRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 8 },
 cancelBtn: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: '#E5E7EB' },
@@ -2589,5 +2801,19 @@ itemsModalOverlay: {
     color: '#3730A3', 
     fontWeight: '600',
   },
+
+
+  mobileHeaderRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+},
+
+  mobileActionsRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  marginTop: 10,
+  gap: 8,
+},
 
 });

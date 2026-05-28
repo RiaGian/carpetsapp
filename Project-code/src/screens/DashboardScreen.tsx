@@ -1,8 +1,9 @@
 // src/screens/DashboardScreen.tsx
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Alert, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 
 import { Q } from '@nozbe/watermelondb';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -17,12 +18,14 @@ import { database } from '../database/initializeDatabase';
 import User from '../database/models/Users';
 import { logLogout } from '../services/activitylog';
 
-import { usePreview } from '../state/PreviewProvider';
-
 import { useFocusEffect } from '@react-navigation/native';
 import { Calendar } from 'react-native-calendars';
-import { observeCustomers } from '../services/customer';
+import { listCustomers, observeCustomers } from '../services/customer';
 import { observeActiveOrders, observeReadyForDeliveryOrders } from '../services/orders';
+import { createPickup, observePickups } from '../services/pickups';
+import { useAuth } from '../state/AuthProvider';
+import { usePreview } from '../state/PreviewProvider';
+
 
 type CustomersPreview = { count: number; names: string[] };
 type ShelfPreview = { code: string; count: number };
@@ -42,6 +45,7 @@ export default function DashboardScreen() {
     [params.name, params.email]
   );
 
+  const { user } = useAuth();
   const [fallbackName, setFallbackName] = useState<string | null>(null);
   const [customersPreview, setCustomersPreviewLocal] = useState<CustomersPreview | null>(null);
 
@@ -49,12 +53,25 @@ export default function DashboardScreen() {
   const [historyOrdersPreview, setHistoryOrdersPreview] = useState<HistoryOrder[]>([]);
   const [activeOrdersPreview, setActiveOrdersPreview] = useState<any[]>([]);
   const [readyForDeliveryOrders, setReadyForDeliveryOrders] = useState<any[]>([]);
+  const [pickups, setPickups] = useState<any[]>([]);
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string>(
     new Date().toISOString().split('T')[0] // Today's date by default
   );
+  
+  // Pickup creation modal state
+  const [pickupModalOpen, setPickupModalOpen] = useState(false);
+  const [pickupCustomerId, setPickupCustomerId] = useState<string | null>(null);
+  const [pickupCustomers, setPickupCustomers] = useState<{ id: string; label: string; firstName: string; lastName: string; phone: string; afm: string; address: string }[]>([]);
+  const [pickupDate, setPickupDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [pickupTime, setPickupTime] = useState<string>('10:00');
+  const [pickupDateModalOpen, setPickupDateModalOpen] = useState(false);
+  const [pickupSearchQuery, setPickupSearchQuery] = useState('');
+  const [pickupDebouncedQuery, setPickupDebouncedQuery] = useState('');
+  const previousCustomerCountRef = useRef<number>(0);
+  
+  const [creatingPickup, setCreatingPickup] = useState(false);
 
   const [warehousePreview, setWarehousePreview] = useState<WarehousePreview | null>(null);
-  const MOBILE_CARD_HEIGHT = 180;
   
   const [activityCounts, setActivityCounts] = useState({
     authentication: 0,
@@ -139,35 +156,222 @@ export default function DashboardScreen() {
     }, [])
   );
 
+  // Helper functions for search
+  const normalize = (s: string) =>
+    s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase().trim();
+  const isAFM = (q: string) => /^\d{9}$/.test(q);
+  const isPhone = (q: string) => /^\d{7,}$/.test(q);
+
+  // Load customers for pickup modal and handle return from customer creation
+  useFocusEffect(
+    useCallback(() => {
+      const loadCustomers = async () => {
+        try {
+          const customers = await listCustomers(1000);
+          const options = customers.map((c: any) => ({
+            id: c.id,
+            label: `${c.firstName || ''} ${c.lastName || ''}`.trim() || '—',
+            firstName: c.firstName || '',
+            lastName: c.lastName || '',
+            phone: c.phone || '',
+            afm: c.afm || '',
+            address: c.address || '',
+          }));
+          
+          // Check if we're returning from customer creation
+          const fromPickupCreation = await AsyncStorage.getItem('fromPickupCreation');
+          if (fromPickupCreation === 'true') {
+            // Clear the flag
+            await AsyncStorage.removeItem('fromPickupCreation');
+            
+            // Check if a new customer was created (customer count increased)
+            if (options.length > previousCustomerCountRef.current && previousCustomerCountRef.current > 0) {
+              // Find the newest customer (by comparing with previous list or using createdAt)
+              // Since we don't have createdAt in the options, we'll use the last one in the list
+              // (assuming newest customers are added at the end)
+              const newestCustomer = options[options.length - 1];
+              if (newestCustomer) {
+                setPickupCustomerId(newestCustomer.id);
+                setPickupModalOpen(true);
+              }
+            } else if (options.length > 0 && previousCustomerCountRef.current === 0) {
+              // First time loading, but we came from pickup creation
+              // Select the last customer (newest)
+              const newestCustomer = options[options.length - 1];
+              if (newestCustomer) {
+                setPickupCustomerId(newestCustomer.id);
+                setPickupModalOpen(true);
+              }
+            }
+          }
+          
+          previousCustomerCountRef.current = options.length;
+          setPickupCustomers(options);
+        } catch (e) {
+          console.error('Failed to load customers:', e);
+        }
+      };
+      
+      // Always load customers when screen gets focus
+      loadCustomers();
+    }, [])
+  );
+
+  // Reset search when modal closes
+  React.useEffect(() => {
+    if (!pickupModalOpen) {
+      setPickupSearchQuery('');
+      setPickupDebouncedQuery('');
+    }
+  }, [pickupModalOpen]);
+
+  // Debounce search query
+  React.useEffect(() => {
+    const timer = setTimeout(() => {
+      setPickupDebouncedQuery(pickupSearchQuery.trim());
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [pickupSearchQuery]);
+
+  // Filter customers based on search
+  const filteredPickupCustomers = React.useMemo(() => {
+    const q = pickupDebouncedQuery;
+    if (!q) return pickupCustomers;
+
+    if (isAFM(q)) {
+      return pickupCustomers.filter(c => (c.afm || '').includes(q));
+    }
+    if (isPhone(q)) {
+      return pickupCustomers.filter(c => (c.phone || '').includes(q));
+    }
+
+    const nq = normalize(q);
+    return pickupCustomers.filter(c => {
+      const fullName = `${c.firstName} ${c.lastName}`.trim();
+      const hay = [fullName, c.address || '', c.afm || '', c.phone || '']
+        .map(x => normalize(x))
+        .join(' | ');
+      return hay.includes(nq);
+    });
+  }, [pickupDebouncedQuery, pickupCustomers]);
+
   // Live observe ready for delivery orders (for calendar)
   useFocusEffect(
     useCallback(() => {
-      const sub = observeReadyForDeliveryOrders(1000).subscribe((rows: any[]) => {
+      const sub = observeReadyForDeliveryOrders(1000).subscribe(async (rows: any[]) => {
         // Transform orders with customer names and delivery dates
         // Filter out orders without delivery_date
-        const ordersWithDelivery = rows
-          .filter((r: any) => {
-            const deliveryDate = r.deliveryDate || r.delivery_date;
-            return deliveryDate != null && deliveryDate !== '';
-          })
-          .map((r: any) => {
-            const customer = r.customer?._raw || r.customer || {};
-            const customerName = customer.first_name && customer.last_name
-              ? `${customer.first_name} ${customer.last_name}`.trim()
-              : customer.first_name || customer.last_name || '—';
-            
-            return {
-              id: r.id,
-              orderId: r.id,
-              customerName,
-              orderDate: r.orderDate || r.order_date || '—',
-              deliveryDate: r.deliveryDate || r.delivery_date || null,
-              status: r.orderStatus || r.order_status || 'Προς παράδοση',
-              totalAmount: r.totalAmount || r.total_amount || 0,
-              hasDebt: r.hasDebt || r.has_debt || false,
-            };
-          });
+        const ordersWithDelivery = await Promise.all(
+          rows
+            .filter((r: any) => {
+              const deliveryDate = r.deliveryDate || r.delivery_date;
+              return deliveryDate != null && deliveryDate !== '';
+            })
+            .map(async (r: any) => {
+              let customerName = '—';
+              let customerPhone = '—';
+              let customerAddress = '—';
+              
+              // Get customer_id from order
+              const customerId = r.customer_id || r._raw?.customer_id || r.customer?.id;
+              
+              // Fetch customer data by customer_id
+              if (customerId) {
+                try {
+                  const customers = database.get('customers');
+                  const customer: any = await customers.find(customerId);
+                  
+                  // Access customer properties from the model (camelCase) or _raw (snake_case)
+                  const firstName = customer.firstName || customer._raw?.first_name || '';
+                  const lastName = customer.lastName || customer._raw?.last_name || '';
+                  const phone = customer.phone || customer._raw?.phone || '';
+                  const address = customer.address || customer._raw?.address || '';
+                  
+                  customerName = firstName && lastName
+                    ? `${firstName} ${lastName}`.trim()
+                    : firstName || lastName || '—';
+                  customerPhone = phone || '—';
+                  customerAddress = address || '—';
+                } catch (err) {
+                  console.warn('Failed to fetch customer for order:', customerId, err);
+                }
+              }
+              
+              const notes = r.notes || r._raw?.notes || '';
+              // Check if it's a pickup order (marked with ΠΑΡΑΛΑΒΗ) or delivery order
+              const isPickup = notes && notes.trim() === 'ΠΑΡΑΛΑΒΗ';
+              
+              return {
+                id: r.id,
+                orderId: r.id,
+                customerName,
+                customerPhone,
+                customerAddress,
+                orderDate: r.orderDate || r.order_date || '—',
+                deliveryDate: r.deliveryDate || r.delivery_date || null,
+                status: r.orderStatus || r.order_status || 'Προς παράδοση',
+                totalAmount: r.totalAmount || r.total_amount || 0,
+                hasDebt: r.hasDebt || r.has_debt || false,
+                isPickup,
+              };
+            })
+        );
         setReadyForDeliveryOrders(ordersWithDelivery);
+      });
+      return () => sub.unsubscribe();
+    }, [])
+  );
+
+  // Live observe pickups (for calendar)
+  useFocusEffect(
+    useCallback(() => {
+      const sub = observePickups().subscribe(async (rows: any[]) => {
+        // Transform pickups with customer names, address, and phone
+        // Fetch customer data for each pickup using customer_id
+        const pickupsWithCustomer = await Promise.all(rows.map(async (r: any) => {
+          let customerName = '—';
+          let customerPhone = '—';
+          let customerAddress = '—';
+          
+          // Get customer_id from pickup
+          const customerId = r.customer_id || r._raw?.customer_id || r.customer?.id;
+          
+          // Fetch customer data by customer_id
+          if (customerId) {
+            try {
+              const customers = database.get('customers');
+              const customer: any = await customers.find(customerId);
+              
+              // Access customer properties from the model (camelCase) or _raw (snake_case)
+              const firstName = customer.firstName || customer._raw?.first_name || '';
+              const lastName = customer.lastName || customer._raw?.last_name || '';
+              const phone = customer.phone || customer._raw?.phone || '';
+              const address = customer.address || customer._raw?.address || '';
+              
+              customerName = firstName && lastName
+                ? `${firstName} ${lastName}`.trim()
+                : firstName || lastName || '—';
+              customerPhone = phone || '—';
+              customerAddress = address || '—';
+            } catch (err) {
+              console.warn('Failed to fetch customer for pickup:', customerId, err);
+            }
+          }
+          
+          return {
+            id: r.id,
+            pickupId: r.id,
+            customerName,
+            customerPhone,
+            customerAddress,
+            pickupDate: r.pickupDate || r.pickup_date || null,
+            pickupTimeStart: r.pickupTimeStart || r.pickup_time_start || null,
+            pickupTimeEnd: r.pickupTimeEnd || r.pickup_time_end || null,
+            notes: r.notes || '',
+            isPickup: true,
+          };
+        }));
+        setPickups(pickupsWithCustomer);
       });
       return () => sub.unsubscribe();
     }, [])
@@ -289,13 +493,14 @@ export default function DashboardScreen() {
   const logout = async () => {
     try {
       await logLogout(
-        '1',
+        user?.id ?? 'unknown',                   
         Device.modelName || 'Unknown Device',
         Platform.OS
       );
     } catch (error) {
       console.error('Error logging logout:', error);
     }
+
     router.replace('/');
   };
 
@@ -304,6 +509,7 @@ export default function DashboardScreen() {
   const goActivityLog = () => router.push('/activitylog');
   const goHistory     = () => router.push('/history');
   const goActiveOrders = () => router.push('/activeorders' as any);
+  const openItemsModal = () => router.push('/orderitems');
 
   const CARDS = [
     { key: 'customers', title: 'Πελάτες', bg: '#E9F2FF', icon: 'people-outline', onPress: goCustomers },
@@ -324,6 +530,15 @@ export default function DashboardScreen() {
       >
 
       <View ref={ref} style={styles.content}>
+        {/* Items Management Button */}
+        <Pressable
+          onPress={openItemsModal}
+          style={styles.itemsManagementButton}
+        >
+          <Ionicons name="layers-outline" size={Platform.OS !== 'web' ? 18 : 20} color="#FFFFFF" />
+          <Text style={styles.itemsManagementButtonText}>Διαχείριση Τεμαχίων</Text>
+        </Pressable>
+
         {/* Πάνω 4 κάρτες */}
         <View
           style={[
@@ -384,9 +599,9 @@ export default function DashboardScreen() {
         <View style={styles.calendarSection}>
             <View style={styles.calendarHeader}>
               <Ionicons name="calendar-outline" size={24} color={colors.primary} style={{ marginRight: 8 }} />
-              <Text style={styles.calendarTitle}>Ημερολόγιο Παραδόσεων</Text>
+              <Text style={styles.calendarTitle}>Ημερολόγιο</Text>
               <View style={styles.calendarBadge}>
-                <Text style={styles.calendarBadgeText}>{readyForDeliveryOrders.length}</Text>
+                <Text style={styles.calendarBadgeText}>{readyForDeliveryOrders.length + pickups.length}</Text>
               </View>
             </View>
             
@@ -414,25 +629,31 @@ export default function DashboardScreen() {
                   },
                 };
                 
-                // Mark dates with delivery orders
-                readyForDeliveryOrders.forEach((order) => {
+                // Mark dates with delivery orders (separate pickup and delivery)
+                const pickupOrders = readyForDeliveryOrders.filter((o: any) => o.isPickup);
+                const deliveryOrders = readyForDeliveryOrders.filter((o: any) => !o.isPickup);
+                
+                // Combine pickups from pickups table with pickup orders
+                const allPickups = [...pickups, ...pickupOrders];
+                
+                // Mark delivery orders (blue)
+                deliveryOrders.forEach((order) => {
                   if (order.deliveryDate) {
                     const dateStr = new Date(order.deliveryDate).toISOString().split('T')[0];
-                    const ordersForDate = readyForDeliveryOrders.filter((o) => {
+                    const deliveryOrdersForDate = deliveryOrders.filter((o) => {
                       if (!o.deliveryDate) return false;
                       return new Date(o.deliveryDate).toISOString().split('T')[0] === dateStr;
                     }).length;
                     
                     if (marked[dateStr]) {
-                      // If already marked (e.g., today), add dots
+                      // If already marked, add delivery dot
                       marked[dateStr].dots = marked[dateStr].dots || [];
                       marked[dateStr].dots.push({
                         color: dateStr === today ? '#FFFFFF' : '#3B82F6',
                         selectedDotColor: '#FFFFFF',
                       });
-                      marked[dateStr].count = ordersForDate;
                     } else {
-                      // New date with orders
+                      // New date with delivery orders
                       marked[dateStr] = {
                         selected: dateStr === selectedCalendarDate,
                         selectedColor: dateStr === selectedCalendarDate ? '#3B82F6' : 'transparent',
@@ -453,7 +674,53 @@ export default function DashboardScreen() {
                           color: '#3B82F6',
                           selectedDotColor: '#FFFFFF',
                         }],
-                        count: ordersForDate,
+                        count: deliveryOrdersForDate,
+                      };
+                    }
+                  }
+                });
+                
+                // Mark pickup orders (orange/amber)
+                allPickups.forEach((order: any) => {
+                  const pickupDate = order.pickupDate || order.deliveryDate;
+                  if (pickupDate) {
+                    const dateStr = new Date(pickupDate).toISOString().split('T')[0];
+                    const pickupOrdersForDate = allPickups.filter((o: any) => {
+                      const oDate = o.pickupDate || o.deliveryDate;
+                      if (!oDate) return false;
+                      return new Date(oDate).toISOString().split('T')[0] === dateStr;
+                    }).length;
+                    
+                    if (marked[dateStr]) {
+                      // If already marked, add pickup dot
+                      marked[dateStr].dots = marked[dateStr].dots || [];
+                      marked[dateStr].dots.push({
+                        color: dateStr === today ? '#FFFFFF' : '#F59E0B',
+                        selectedDotColor: '#FFFFFF',
+                      });
+                    } else {
+                      // New date with pickup orders only
+                      marked[dateStr] = {
+                        selected: dateStr === selectedCalendarDate,
+                        selectedColor: dateStr === selectedCalendarDate ? '#F59E0B' : 'transparent',
+                        marked: true,
+                        customStyles: {
+                          container: {
+                            backgroundColor: dateStr === selectedCalendarDate ? '#F59E0B' : '#FEF3C7',
+                            borderColor: '#F59E0B',
+                            borderWidth: dateStr === selectedCalendarDate ? 0 : 1,
+                            borderRadius: 8,
+                          },
+                          text: {
+                            color: dateStr === selectedCalendarDate ? '#FFFFFF' : '#92400E',
+                            fontWeight: dateStr === selectedCalendarDate ? '700' : '600',
+                          },
+                        },
+                        dots: [{
+                          color: '#F59E0B',
+                          selectedDotColor: '#FFFFFF',
+                        }],
+                        count: pickupOrdersForDate,
                       };
                     }
                   }
@@ -530,85 +797,164 @@ export default function DashboardScreen() {
             
             {/* Events List for Selected Date */}
             {(() => {
-              const ordersForSelectedDate = readyForDeliveryOrders.filter((o) => {
-                if (!o.deliveryDate) return false;
-                const orderDate = new Date(o.deliveryDate).toISOString().split('T')[0];
-                return orderDate === selectedCalendarDate;
-              }).sort((a, b) => {
+              // Combine deliveries and pickups for the selected date
+              const deliveriesForSelectedDate = readyForDeliveryOrders
+                .filter((o: any) => {
+                  if (!o.deliveryDate) return false;
+                  const orderDate = new Date(o.deliveryDate).toISOString().split('T')[0];
+                  return orderDate === selectedCalendarDate && !o.isPickup;
+                })
+                .map((o: any) => ({ ...o, type: 'delivery' }));
+              
+              const pickupsForSelectedDate = pickups
+                .filter((p: any) => {
+                  if (!p.pickupDate) return false;
+                  const pickupDate = new Date(p.pickupDate).toISOString().split('T')[0];
+                  return pickupDate === selectedCalendarDate;
+                })
+                .map((p: any) => ({ ...p, type: 'pickup', deliveryDate: p.pickupDate }));
+              
+              // Also include pickup orders from readyForDeliveryOrders
+              const pickupOrdersForSelectedDate = readyForDeliveryOrders
+                .filter((o: any) => {
+                  if (!o.deliveryDate) return false;
+                  const orderDate = new Date(o.deliveryDate).toISOString().split('T')[0];
+                  return orderDate === selectedCalendarDate && o.isPickup;
+                })
+                .map((o: any) => ({ ...o, type: 'pickup' }));
+              
+              const allEventsForSelectedDate = [
+                ...deliveriesForSelectedDate,
+                ...pickupsForSelectedDate,
+                ...pickupOrdersForSelectedDate,
+              ].sort((a: any, b: any) => {
                 // Sort by time
-                const timeA = new Date(a.deliveryDate).getTime();
-                const timeB = new Date(b.deliveryDate).getTime();
+                const timeA = new Date(a.deliveryDate || a.pickupDate).getTime();
+                const timeB = new Date(b.deliveryDate || b.pickupDate).getTime();
                 return timeA - timeB;
               });
-
-              if (ordersForSelectedDate.length === 0) {
-                return (
-                  <View style={styles.eventsContainer}>
-                    <Text style={styles.noEventsText}>
-                      Δεν υπάρχουν παραγγελίες για {new Date(selectedCalendarDate).toLocaleDateString('el-GR', { 
-                        weekday: 'long', 
-                        day: 'numeric', 
-                        month: 'long',
-                        year: 'numeric'
-                      })}
-                    </Text>
-                  </View>
-                );
-              }
 
               return (
                 <View style={styles.eventsContainer}>
                   <View style={styles.eventsHeader}>
-                    <Ionicons name="list-outline" size={20} color={colors.primary} style={{ marginRight: 8 }} />
-                    <Text style={styles.eventsTitle}>
-                      {ordersForSelectedDate.length} {ordersForSelectedDate.length === 1 ? 'Παραγγελία' : 'Παραγγελίες'} - {new Date(selectedCalendarDate).toLocaleDateString('el-GR', { 
-                        weekday: 'long', 
-                        day: 'numeric', 
-                        month: 'long'
-                      })}
-                    </Text>
+                    {allEventsForSelectedDate.length === 0 ? (
+                      <Text style={styles.noEventsText}>
+                        Δεν υπάρχουν παραγγελίες ή παραλαβές για {new Date(selectedCalendarDate).toLocaleDateString('el-GR', { 
+                          weekday: 'long', 
+                          day: 'numeric', 
+                          month: 'long',
+                          year: 'numeric'
+                        })}
+                      </Text>
+                    ) : (
+                      <>
+                        <View style={{ flex: 1 }}>
+                          <Ionicons name="list-outline" size={20} color={colors.primary} style={{ marginRight: 8 }} />
+                          <Text style={styles.eventsTitle}>
+                            {allEventsForSelectedDate.length} {allEventsForSelectedDate.length === 1 ? 'Συμβάν' : 'Συμβάντα'} - {new Date(selectedCalendarDate).toLocaleDateString('el-GR', { 
+                              weekday: 'long', 
+                              day: 'numeric', 
+                              month: 'long'
+                            })}
+                          </Text>
+                        </View>
+                      </>
+                    )}
+                    <TouchableOpacity
+                      onPress={() => {
+                        setPickupDate(selectedCalendarDate);
+                        setPickupModalOpen(true);
+                      }}
+                      style={styles.createPickupButtonSmall}
+                    >
+                      <Ionicons name="add-circle" size={16} color="#FFFFFF" style={{ marginRight: 4 }} />
+                      {Platform.OS !== 'web' ? (
+                        <Text style={styles.createPickupButtonTextSmall}>
+                          Δημιουργία{'\n'}Παραλαβής
+                        </Text>
+                      ) : (
+                        <Text style={styles.createPickupButtonTextSmall}>
+                          Δημιουργία Παραλαβής
+                        </Text>
+                      )}
+                    </TouchableOpacity>
                   </View>
-                  <ScrollView style={styles.eventsList} showsVerticalScrollIndicator={false}>
-                    {ordersForSelectedDate.map((order) => {
-                      const deliveryTime = new Date(order.deliveryDate).toLocaleTimeString('el-GR', { 
-                        hour: '2-digit', 
-                        minute: '2-digit' 
-                      });
-                      return (
-                        <Pressable
-                          key={order.id}
-                          onPress={() => router.push(`/editorder?orderId=${order.id}` as any)}
-                          style={styles.eventCard}
-                        >
-                          <View style={styles.eventTimeContainer}>
-                            <Ionicons name="time-outline" size={16} color="#3B82F6" />
-                            <Text style={styles.eventTime}>{deliveryTime}</Text>
-                          </View>
-                          <View style={styles.eventContent}>
-                            <View style={styles.eventHeader}>
-                              <Text style={styles.eventOrderId}>
-                                #{order.orderId.slice(0, 6).toUpperCase()}
+                  {allEventsForSelectedDate.length > 0 && (
+                    <ScrollView style={styles.eventsList} showsVerticalScrollIndicator={false}>
+                      {allEventsForSelectedDate.map((order: any) => {
+                        const eventDate = order.deliveryDate || order.pickupDate;
+                        const deliveryTime = new Date(eventDate).toLocaleTimeString('el-GR', { 
+                          hour: '2-digit', 
+                          minute: '2-digit' 
+                        });
+                        const isPickup = order.isPickup || order.type === 'pickup';
+                        const eventColor = isPickup ? '#F59E0B' : '#3B82F6';
+                        const eventBgColor = isPickup ? '#FEF3C7' : '#EFF6FF';
+                        const eventTextColor = isPickup ? '#92400E' : '#1E40AF';
+                        
+                        return (
+                          <Pressable
+                            key={order.id}
+                            onPress={() => {
+                              if (order.type === 'pickup' && order.pickupId) {
+                                // TODO: Navigate to pickup edit screen when created
+                                // For now, just show alert
+                                Alert.alert('Παραλαβή', `Παραλαβή #${order.pickupId.slice(0, 6).toUpperCase()}`);
+                              } else {
+                                router.push(`/editorder?orderId=${order.id}` as any);
+                              }
+                            }}
+                            style={[styles.eventCard, { borderColor: eventColor, backgroundColor: eventBgColor }]}
+                          >
+                            <View style={[styles.eventTimeContainer, { borderRightColor: eventColor }]}>
+                              <Ionicons name={isPickup ? "arrow-down-circle-outline" : "time-outline"} size={16} color={eventColor} />
+                              <Text style={[styles.eventTime, { color: eventTextColor }]}>{deliveryTime}</Text>
+                            </View>
+                            <View style={styles.eventContent}>
+                              <View style={styles.eventHeader}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                  <Text style={[styles.eventOrderId, { color: eventTextColor }]}>
+                                    #{order.orderId?.slice(0, 6).toUpperCase() || order.pickupId?.slice(0, 6).toUpperCase() || 'N/A'}
+                                  </Text>
+                                  <View style={[styles.typeBadge, { backgroundColor: eventColor }]}>
+                                    <Text style={styles.typeBadgeText}>
+                                      {isPickup ? 'Παραλαβή' : 'Παράδοση'}
+                                    </Text>
+                                  </View>
+                                </View>
+                                {order.hasDebt && (
+                                  <View style={styles.debtBadge}>
+                                    <Text style={styles.debtBadgeText}>Χρέος</Text>
+                                  </View>
+                                )}
+                              </View>
+                              <Text style={[styles.eventCustomerName, { color: eventTextColor }]} numberOfLines={1}>
+                                {order.customerName || '—'}
                               </Text>
-                              {order.hasDebt && (
-                                <View style={styles.debtBadge}>
-                                  <Text style={styles.debtBadgeText}>Χρέος</Text>
+                              {(order.customerAddress && order.customerAddress !== '—') && (
+                                <Text style={[styles.eventCustomerInfo, { color: eventTextColor }]} numberOfLines={1}>
+                                  📍 {order.customerAddress}
+                                </Text>
+                              )}
+                              {(order.customerPhone && order.customerPhone !== '—') && (
+                                <Text style={[styles.eventCustomerInfo, { color: eventTextColor }]} numberOfLines={1}>
+                                  📞 {order.customerPhone}
+                                </Text>
+                              )}
+                              {order.type !== 'pickup' && order.totalAmount !== undefined && (
+                                <View style={styles.eventFooter}>
+                                  <Text style={[styles.eventAmount, { color: eventTextColor }]}>
+                                    {order.totalAmount.toFixed(2)} €
+                                  </Text>
                                 </View>
                               )}
                             </View>
-                            <Text style={styles.eventCustomerName} numberOfLines={1}>
-                              {order.customerName}
-                            </Text>
-                            <View style={styles.eventFooter}>
-                              <Text style={styles.eventAmount}>
-                                {order.totalAmount.toFixed(2)} €
-                              </Text>
-                            </View>
-                          </View>
-                          <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
+                            <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+                          </Pressable>
+                        );
+                      })}
+                    </ScrollView>
+                  )}
                 </View>
               );
             })()}
@@ -625,6 +971,255 @@ export default function DashboardScreen() {
       >
         <Ionicons name="cart" size={24} color="#FFFFFF" />
       </Pressable>
+
+      {/* Pickup Creation Modal */}
+      <Modal
+        visible={pickupModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setPickupModalOpen(false);
+          setPickupCustomerId(null);
+          setPickupSearchQuery('');
+          setPickupDebouncedQuery('');
+        }}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Δημιουργία Παραλαβής</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setPickupModalOpen(false);
+                  setPickupCustomerId(null);
+                  setPickupSearchQuery('');
+                  setPickupDebouncedQuery('');
+                }}
+              >
+                <Ionicons name="close" size={24} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+              {/* Customer Selection */}
+              <View style={styles.modalField}>
+                    <Text style={styles.modalLabel}>Πελάτης</Text>
+                    <View style={styles.searchContainer}>
+                      <Ionicons name="search-outline" size={20} color="#6B7280" style={{ marginRight: 8 }} />
+                      <TextInput
+                        style={styles.searchInput}
+                        value={pickupSearchQuery}
+                        onChangeText={setPickupSearchQuery}
+                        placeholder="Όνομα, Επώνυμο, ΑΦΜ, Τηλέφωνο, Διεύθυνση"
+                        placeholderTextColor="#9CA3AF"
+                      />
+                      {pickupSearchQuery.length > 0 && (
+                        <TouchableOpacity
+                          onPress={() => setPickupSearchQuery('')}
+                          style={{ padding: 4 }}
+                        >
+                          <Ionicons name="close-circle" size={20} color="#9CA3AF" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                    {pickupDebouncedQuery && filteredPickupCustomers.length === 0 ? (
+                      <View style={styles.noResultsContainer}>
+                        <Text style={styles.noResultsText}>
+                          Δεν βρέθηκαν πελάτες με &quot;{pickupDebouncedQuery}&quot;
+                        </Text>
+                      </View>
+                    ) : filteredPickupCustomers.length > 0 ? (
+                      <ScrollView style={styles.customerList} nestedScrollEnabled>
+                        {filteredPickupCustomers.map((customer) => (
+                          <TouchableOpacity
+                            key={customer.id}
+                            onPress={() => {
+                              setPickupCustomerId(customer.id);
+                              setPickupSearchQuery('');
+                            }}
+                            style={[
+                              styles.customerOption,
+                              pickupCustomerId === customer.id && styles.customerOptionSelected
+                            ]}
+                          >
+                            <View style={styles.customerOptionContent}>
+                              <Text style={[
+                                styles.customerOptionName,
+                                pickupCustomerId === customer.id && styles.customerOptionNameSelected
+                              ]}>
+                                {customer.label}
+                              </Text>
+                              {customer.phone && (
+                                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+                                  <Ionicons name="call-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+                                  <Text style={styles.customerOptionDetail}>{customer.phone}</Text>
+                                </View>
+                              )}
+                              {customer.address && (
+                                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+                                  <Ionicons name="location-outline" size={14} color="#6B7280" style={{ marginRight: 4 }} />
+                                  <Text style={styles.customerOptionDetail}>{customer.address}</Text>
+                                </View>
+                              )}
+                            </View>
+                            {pickupCustomerId === customer.id && (
+                              <Ionicons name="checkmark-circle" size={20} color="#3B82F6" />
+                            )}
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    ) : null}
+                    {pickupCustomerId && (
+                      <View style={styles.selectedCustomerContainer}>
+                        <Text style={styles.selectedCustomerLabel}>Επιλεγμένος πελάτης:</Text>
+                        <Text style={styles.selectedCustomerName}>
+                          {pickupCustomers.find(c => c.id === pickupCustomerId)?.label || '—'}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => setPickupCustomerId(null)}
+                          style={styles.clearSelectionButton}
+                        >
+                          <Ionicons name="close-circle" size={18} color="#6B7280" />
+                          <Text style={styles.clearSelectionText}>Ακύρωση επιλογής</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                </View>
+                
+                <TouchableOpacity
+                  onPress={async () => {
+                    // Store flag that we're navigating from pickup creation
+                    await AsyncStorage.setItem('fromPickupCreation', 'true');
+                    // Store current customer count
+                    previousCustomerCountRef.current = pickupCustomers.length;
+                    setPickupModalOpen(false);
+                    router.push('/customers');
+                  }}
+                  style={styles.newCustomerButton}
+                >
+                  <Ionicons name="person-add-outline" size={18} color="#3B82F6" style={{ marginRight: 6 }} />
+                  <Text style={styles.newCustomerButtonText}>Νέος πελάτης</Text>
+                </TouchableOpacity>
+
+              {/* Date Selection */}
+              <View style={styles.modalField}>
+                <Text style={styles.modalLabel}>Ημερομηνία</Text>
+                <TouchableOpacity
+                  onPress={() => setPickupDateModalOpen(true)}
+                  style={styles.dateTimeButton}
+                >
+                  <Ionicons name="calendar-outline" size={18} color="#3B82F6" style={{ marginRight: 8 }} />
+                  <Text style={styles.dateTimeButtonText}>
+                    {new Date(pickupDate).toLocaleDateString('el-GR', {
+                      weekday: 'long',
+                      day: 'numeric',
+                      month: 'long',
+                      year: 'numeric'
+                    })}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Time Selection */}
+              <View style={styles.modalField}>
+                <Text style={styles.modalLabel}>Ώρα</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  value={pickupTime}
+                  onChangeText={setPickupTime}
+                  placeholder="Ώρα (π.χ. 10:00)"
+                  keyboardType="numeric"
+                />
+              </View>
+
+              {/* Submit Button */}
+              <TouchableOpacity
+                onPress={async () => {
+                  if (!pickupCustomerId) {
+                    Alert.alert('Προσοχή', 'Παρακαλώ επιλέξτε πελάτη.');
+                    return;
+                  }
+                  if (!pickupTime.match(/^\d{1,2}:\d{2}$/)) {
+                    Alert.alert('Προσοχή', 'Παρακαλώ εισάγετε έγκυρη ώρα (π.χ. 10:00).');
+                    return;
+                  }
+
+                  setCreatingPickup(true);
+                  try {
+                    // Create pickup datetime
+                    const [hours, minutes] = pickupTime.split(':');
+                    const pickupDateTime = new Date(pickupDate);
+                    pickupDateTime.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0);
+
+                    // Create pickup in the pickups table
+                    await createPickup({
+                      customerId: pickupCustomerId!,
+                      pickupDate: pickupDateTime.toISOString(),
+                      pickupTimeStart: pickupTime,
+                      createdBy: 'system',
+                    }, 'system');
+
+                    Alert.alert('OK', 'Η παραλαβή δημιουργήθηκε επιτυχώς.');
+                    setPickupModalOpen(false);
+                    setPickupCustomerId(null);
+                    setPickupDate(new Date().toISOString().split('T')[0]);
+                    setPickupTime('10:00');
+                    setPickupSearchQuery('');
+                    setPickupDebouncedQuery('');
+                  } catch (e: any) {
+                    console.error('Failed to create pickup:', e);
+                    Alert.alert('Σφάλμα', e.message || 'Αποτυχία δημιουργίας παραλαβής.');
+                  } finally {
+                    setCreatingPickup(false);
+                  }
+                }}
+                style={[styles.submitButton, creatingPickup && styles.submitButtonDisabled]}
+                disabled={creatingPickup}
+              >
+                <Text style={styles.submitButtonText}>
+                  {creatingPickup ? 'Δημιουργία...' : 'Δημιουργία Παραλαβής'}
+                </Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+
+        {/* Date Picker Modal */}
+        {pickupDateModalOpen && (
+          <Modal
+            visible={pickupDateModalOpen}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setPickupDateModalOpen(false)}
+          >
+            <View style={styles.modalBackdrop}>
+              <View style={styles.datePickerModal}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Επιλογή Ημερομηνίας</Text>
+                  <TouchableOpacity onPress={() => setPickupDateModalOpen(false)}>
+                    <Ionicons name="close" size={24} color="#6B7280" />
+                  </TouchableOpacity>
+                </View>
+                <Calendar
+                  current={pickupDate}
+                  onDayPress={(day) => {
+                    setPickupDate(day.dateString);
+                    setPickupDateModalOpen(false);
+                  }}
+                  markedDates={{
+                    [pickupDate]: {
+                      selected: true,
+                      selectedColor: '#3B82F6',
+                    },
+                  }}
+                  minDate={new Date().toISOString().split('T')[0]}
+                />
+              </View>
+            </View>
+          </Modal>
+        )}
+      </Modal>
+
     </Page>
   );
 }
@@ -706,7 +1301,10 @@ function DashboardCard({ kind, title, bg, icon, onPress, isWide, customersPrevie
               </View>
             </View>
 
-            <View style={[styles.previewChipsWrap, Platform.OS !== 'web' && {  flexShrink: 1, minHeight: 0, width: '100%' }]}>
+            <View 
+            style=
+            {[styles.previewChipsWrap, 
+              Platform.OS !== 'web' && { flexShrink: 1, minHeight: 70, width: '100%' }]}>
               {(Platform.OS !== 'web' ? effectivePreview.names.slice(0, 2) : effectivePreview.names).map(
                 (n: string, idx: number) => (
                   <View
@@ -1083,6 +1681,36 @@ const SOFT_BORDER_MOBILE = Platform.OS === 'web' ? {} : {
 
 const styles = StyleSheet.create({
   content: { flex: 1, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'flex-start' },
+  itemsManagementButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#F97316',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    marginBottom: 20,
+    ...(Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
+      android: { elevation: 3 },
+      web: { boxShadow: '0 4px 6px rgba(0,0,0,0.1)' } as any,
+    }) as object),
+
+    ...(Platform.OS !== 'web' && {
+      paddingVertical: 10,
+      paddingHorizontal: 14,
+      borderRadius: 10,
+      marginBottom: 4,
+      gap: 6,
+    }),
+  },
+  itemsManagementButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+    ...(Platform.OS !== 'web' && { fontSize: 14 }),
+  },
   grid: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1150,6 +1778,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     minHeight: 0,
     overflow: 'hidden',
+    
   },
   previewChip: {
     flexDirection: 'row',
@@ -1600,6 +2229,7 @@ wminiShelfEmptyText: { color: '#6B7280' },
   eventsHeader: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     marginBottom: 12,
   },
   eventsTitle: {
@@ -1618,7 +2248,7 @@ wminiShelfEmptyText: { color: '#6B7280' },
     borderRadius: 12,
     padding: 16,
     marginBottom: 12,
-    borderWidth: 1,
+    borderWidth: 2,
     borderColor: '#E5E7EB',
     ...(Platform.select({
       ios: { shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
@@ -1631,9 +2261,19 @@ wminiShelfEmptyText: { color: '#6B7280' },
     alignItems: 'center',
     marginRight: 16,
     paddingRight: 16,
-    borderRightWidth: 1,
+    borderRightWidth: 2,
     borderRightColor: '#E5E7EB',
     minWidth: 60,
+  },
+  typeBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  typeBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
   },
   eventTime: {
     fontSize: 14,
@@ -1654,6 +2294,10 @@ wminiShelfEmptyText: { color: '#6B7280' },
     fontWeight: '700',
     color: '#1F2A44',
     marginRight: 8,
+    ...(Platform.OS !== 'web' && {
+    fontSize: 13,
+    fontWeight: '600', 
+  }),
   },
   debtBadge: {
     backgroundColor: '#FEE2E2',
@@ -1671,6 +2315,11 @@ wminiShelfEmptyText: { color: '#6B7280' },
     color: '#6B7280',
     marginBottom: 6,
   },
+  eventCustomerInfo: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2,
+  },
   eventFooter: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1683,9 +2332,326 @@ wminiShelfEmptyText: { color: '#6B7280' },
   noEventsText: {
     fontSize: 14,
     color: '#6B7280',
-    textAlign: 'center',
-    paddingVertical: 20,
     fontStyle: 'italic',
+    flex: 1,
+    ...(Platform.OS !== 'web' && {
+    fontSize: 13,   
+    lineHeight: 20,  
+    marginTop: 8,    
+  }),
+  },
+  createPickupButtonSmall: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#3B82F6',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    ...(Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 3, shadowOffset: { width: 0, height: 2 } },
+      android: { elevation: 2 },
+      web: { boxShadow: '0 2px 4px rgba(0,0,0,0.1)' } as any,
+    }) as object),
+  },
+  createPickupButtonTextSmall: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    ...(Platform.OS !== 'web' && {
+    justifyContent: 'flex-end', 
+    alignItems: 'center',
+    padding: 0,     
+    transform: [{ translateY: -30 }],           
+  }),
+  },
+  modalContent: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    width: '100%',
+    maxWidth: 500,
+    maxHeight: '90%',
+    ...(Platform.select({
+    ios: { shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 5 } },
+    android: { elevation: 10 },
+    web: { boxShadow: '0 10px 25px rgba(0,0,0,0.2)' } as any,
+  }) as object),
+
+  ...(Platform.OS !== 'web' && {
+    maxHeight: '90%',      
+    flex: 1,               
+    width: '94%',
+    borderRadius: 16,
+    marginBottom: 30,
+   
+  }),
+  },
+  datePickerModal: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    width: '100%',
+    maxWidth: 400,
+    padding: 20,
+    ...(Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 5 } },
+      android: { elevation: 10 },
+      web: { boxShadow: '0 10px 25px rgba(0,0,0,0.2)' } as any,
+    }) as object),
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1F2A44',
+  },
+  modalBody: {
+    padding: 20,
+    maxHeight: 500,
+    ...(Platform.OS !== 'web' && {
+    maxHeight: undefined, 
+    flex: 1,             
+    paddingBottom: 12,
+  }),
+  },
+  modalField: {
+    marginBottom: 20,
+  },
+  modalLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 8,
+  },
+  modalInput: {
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: '#111827',
+    backgroundColor: '#FFFFFF',
+  },
+  modalInputError: {
+    borderColor: '#DC2626',
+  },
+  modalErrorText: {
+    fontSize: 12,
+    color: '#DC2626',
+    marginTop: 4,
+    marginLeft: 4,
+  },
+  dropdownContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  dropdownText: {
+    fontSize: 14,
+    color: '#111827',
+    flex: 1,
+  },
+  dropdownList: {
+    maxHeight: 200,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    marginTop: 4,
+    backgroundColor: '#FFFFFF',
+  },
+  dropdownOption: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  dropdownOptionSelected: {
+    backgroundColor: '#EFF6FF',
+  },
+  dropdownOptionText: {
+    fontSize: 14,
+    color: '#111827',
+  },
+  dropdownOptionTextSelected: {
+    color: '#3B82F6',
+    fontWeight: '600',
+  },
+  newCustomerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    marginTop: 8,
+    ...(Platform.OS !== 'web' && {
+    marginTop: 2,      
+    marginBottom: 2,   
+    paddingVertical: 4, 
+  }),
+  },
+  newCustomerButtonText: {
+    color: '#3B82F6',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  cancelNewCustomerButton: {
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  cancelNewCustomerButtonText: {
+    color: '#6B7280',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  dateTimeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  dateTimeButtonText: {
+    fontSize: 14,
+    color: '#111827',
+    flex: 1,
+  },
+  submitButton: {
+    backgroundColor: '#3B82F6',
+    borderRadius: 10,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 10,
+    ...(Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
+      android: { elevation: 3 },
+      web: { boxShadow: '0 4px 6px rgba(0,0,0,0.1)' } as any,
+    }) as object),
+    ...(Platform.OS !== 'web' && {
+    marginBottom: 70, 
+  }),
+  },
+  submitButtonDisabled: {
+    opacity: 0.6,
+  },
+  submitButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#D1D5DB',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#111827',
+    padding: 0,
+  },
+  customerList: {
+    maxHeight: 300,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 10,
+    marginTop: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  customerOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  customerOptionSelected: {
+    backgroundColor: '#EFF6FF',
+  },
+  customerOptionContent: {
+    flex: 1,
+  },
+  customerOptionName: {
+    fontSize: 15,
+    color: '#111827',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  customerOptionNameSelected: {
+    color: '#3B82F6',
+  },
+  customerOptionDetail: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  noResultsContainer: {
+    padding: 20,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  noResultsText: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontStyle: 'italic',
+  },
+  selectedCustomerContainer: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#F0F9FF',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#BAE6FD',
+  },
+  selectedCustomerLabel: {
+    fontSize: 12,
+    color: '#0369A1',
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  selectedCustomerName: {
+    fontSize: 15,
+    color: '#0C4A6E',
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  clearSelectionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  clearSelectionText: {
+    fontSize: 13,
+    color: '#6B7280',
+    marginLeft: 4,
   },
 
 });

@@ -1,5 +1,6 @@
 // src/screens/ActiveOrdersScreen.tsx
 import { Ionicons } from '@expo/vector-icons';
+import { Q } from '@nozbe/watermelondb';
 import { useFocusEffect } from '@react-navigation/native';
 import { router } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
@@ -12,7 +13,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { Q } from '@nozbe/watermelondb';
 import AppHeader from '../components/AppHeader';
 import Page from '../components/Page';
 import { database } from '../database/initializeDatabase';
@@ -178,7 +178,10 @@ export default function ActiveOrdersScreen() {
             onChangeText={setSearchQuery}
             placeholder="Αναζήτηση σε πελάτες, κωδικούς, ημερομηνίες..."
             placeholderTextColor={colors.muted}
-            style={styles.searchInput}
+            style={[
+              styles.searchInput,
+              Platform.OS !== 'web' && { paddingTop: 8 },
+            ]}
             returnKeyType="search"
           />
         </View>
@@ -340,16 +343,17 @@ const styles = StyleSheet.create({
     backgroundColor: '#F9FAFB',
     borderRadius: 12,
     paddingHorizontal: 16,
-    paddingVertical: 12,
+   paddingVertical: Platform.OS !== 'web' ? 2 : 12,
     marginBottom: 16,
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
   searchInput: {
     flex: 1,
-    fontSize: 15,
+    fontSize: Platform.OS !== 'web' ? 13 : 15,
     color: '#1F2A44',
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' } as any : {}),
+    paddingVertical: Platform.OS !== 'web' ? 2 : 12,
   },
   filtersRow: {
     marginBottom: 20,
@@ -359,8 +363,8 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   filterChip: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingHorizontal: Platform.OS !== 'web' ? 10 : 16, // πιο στενό σε κινητό
+    paddingVertical: Platform.OS !== 'web' ? 5 : 8, 
     borderRadius: 20,
     marginRight: 8,
   },
@@ -368,7 +372,7 @@ const styles = StyleSheet.create({
     // Active state handled by backgroundColor in style prop
   },
   filterChipText: {
-    fontSize: 14,
+    fontSize: Platform.OS !== 'web' ? 13 : 14,
     fontWeight: '500',
     color: '#6B7280',
   },
