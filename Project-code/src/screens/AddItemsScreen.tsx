@@ -39,9 +39,9 @@ export default function AddItemsScreen() {
   const [activeTab, setActiveTab] = useState<'free' | 'onshelf'>('free');
   const [query, setQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 3;
-    
-   const isWeb = Platform.OS === 'web' 
+  const itemsPerPage = 10;
+
+
 
   const [freeItems, setFreeItems] = useState<any[]>([])
   const [loadingFree, setLoadingFree] = useState(false)
@@ -353,12 +353,12 @@ function ShelfChip({ code }: { code?: string }) {
     <Page>
       <AppHeader showBack />
       <ScrollView 
-      style={{ flex: 1 }}
-      scrollEnabled={true} 
-      contentContainerStyle={{ paddingBottom: isWeb ? 20 : 120 }}
-      showsVerticalScrollIndicator
-      keyboardShouldPersistTaps="handled"
-    >
+        style={{ flex: 1 }}
+        scrollEnabled={Platform.OS === 'web' || activeTab === 'onshelf'}
+        contentContainerStyle={{ paddingBottom: 20 }}
+        showsVerticalScrollIndicator
+        keyboardShouldPersistTaps="handled"
+      >
         {/* Τίτλος/Υπότιτλος */}
         <View style={{ alignItems: 'center', paddingVertical: 12 }}>
           <Text style={{ fontSize: 18, fontWeight: '400', color: '#111827' }}>

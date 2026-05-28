@@ -326,11 +326,6 @@ export async function pushChanges(
         deletedIds: changes.customers.deleted || [],
       } : null,
     })
-
-    console.log(
-      '[SYNC-DEBUG] RAW changes for customers:',
-      JSON.stringify(changes.customers, null, 2)
-    )
     
     // Log deletions specifically for debugging
     if (changes.customers?.deleted?.length > 0) {
