@@ -19,6 +19,7 @@ export default class Pickup extends Model {
   @field('pickup_time_start') pickupTimeStart?: string // HH:mm format
   @field('pickup_time_end') pickupTimeEnd?: string // HH:mm format
   @field('notes') notes?: string
+  @field('status') status?: string // 'new' | 'done'
   @date('created_at') createdAt!: number
   @date('last_modified_at') lastModifiedAt!: number
 }

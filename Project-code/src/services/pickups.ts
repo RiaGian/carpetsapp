@@ -9,6 +9,7 @@ export type NewPickup = {
   pickupTimeStart?: string      // HH:mm format (start time)
   pickupTimeEnd?: string        // HH:mm format (end time)
   notes?: string
+  status?: string               // 'new' | 'done' (defaults to 'new')
   createdBy: string            // FK -> users.id
 }
 
@@ -18,6 +19,7 @@ export type UpdatePickup = Partial<{
   pickupTimeStart: string
   pickupTimeEnd: string
   notes: string
+  status: string
 }>
 
 /** CREATE */
@@ -62,6 +64,7 @@ export async function createPickup(data: NewPickup, userIdForLog: string = data.
       rec.pickupTimeStart = data.pickupTimeStart || null
       rec.pickupTimeEnd = data.pickupTimeEnd || null
       rec.notes = data.notes || ''
+      rec.status = data.status || 'new' // Default to 'new' when creating
 
       const now = Date.now()
       rec.createdAt = now
@@ -127,6 +130,7 @@ export async function updatePickup(id: string, updates: UpdatePickup, userIdForL
       if (updates.pickupTimeStart !== undefined) rec.pickupTimeStart = updates.pickupTimeStart
       if (updates.pickupTimeEnd !== undefined) rec.pickupTimeEnd = updates.pickupTimeEnd
       if (updates.notes !== undefined) rec.notes = updates.notes
+      if (updates.status !== undefined) rec.status = updates.status
       rec.lastModifiedAt = Date.now()
     })
   })
@@ -147,7 +151,13 @@ export async function deletePickup(id: string, userIdForLog: string = 'system') 
 /** OBSERVE (for reactive queries) */
 export function observePickups() {
   const pickups = database.get('pickups')
-  return pickups.query(Q.sortBy('pickup_date', Q.desc)).observe()
+  return pickups.query(
+    Q.or(
+      Q.where('status', Q.notEq('done')),
+      Q.where('status', Q.eq(null))
+    ),
+    Q.sortBy('pickup_date', Q.desc)
+  ).observe()
 }
 
 export function observePickupsByDate(date: string) {
@@ -159,8 +169,29 @@ export function observePickupsByDate(date: string) {
     .query(
       Q.where('pickup_date', Q.gte(startOfDay)),
       Q.where('pickup_date', Q.lte(endOfDay)),
+      Q.or(
+        Q.where('status', Q.notEq('done')),
+        Q.where('status', Q.eq(null))
+      ),
       Q.sortBy('pickup_date', Q.asc)
     )
     .observe()
+}
+
+// Find pickup by customer ID that is not done
+export async function findActivePickupByCustomer(customerId: string) {
+  const pickups = database.get('pickups')
+  const results = await pickups
+    .query(
+      Q.where('customer_id', customerId),
+      Q.or(
+        Q.where('status', Q.notEq('done')),
+        Q.where('status', Q.eq(null))
+      ),
+      Q.sortBy('pickup_date', Q.desc),
+      Q.take(1)
+    )
+    .fetch()
+  return results.length > 0 ? results[0] : null
 }
 

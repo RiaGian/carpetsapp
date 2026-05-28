@@ -19,6 +19,7 @@ import Page from '../components/Page';
 import { database } from '../database/initializeDatabase';
 import { listOrderItems, listOrderItemsByOrder, updateOrderItem } from '../services/orderItems';
 import { getOrderById, updateOrder } from '../services/orders';
+import { assignItemToShelf, getItemShelfId, removeItemFromShelf, transferItemShelf } from '../services/warehouseItems';
 import { useAuth } from '../state/AuthProvider';
 import { colors } from '../theme/colors';
 
@@ -42,6 +43,8 @@ function SimpleDropdown({
   onChange,
   width = '100%',
   showSearch = true,
+  optionLabels,
+  disabled = false,
 }: {
   value: string;
   placeholder?: string;
@@ -49,6 +52,8 @@ function SimpleDropdown({
   onChange: (v: string) => void;
   width?: number | `${number}%` | 'auto';
   showSearch?: boolean;
+  optionLabels?: string[];
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -81,9 +86,16 @@ function SimpleDropdown({
     <>
       {/* Anchor (button) */}
       <View ref={anchorRef} style={{ width }}>
-        <Pressable onPress={toggleOpen} style={[styles.dropdownWrap, { width }]}>
+        <Pressable onPress={disabled ? undefined : toggleOpen} style={[styles.dropdownWrap, { width }, disabled && { opacity: 0.5 }]}>
           <Text style={[styles.filledInputText, { paddingRight: 28, opacity: value ? 1 : 0.6 }]} numberOfLines={1}>
-            {value?.trim() || (placeholder || 'Επιλέξτε…')}
+            {(() => {
+              if (!value?.trim()) return placeholder || 'Επιλέξτε…';
+              if (optionLabels && options.includes(value)) {
+                const idx = options.indexOf(value);
+                return optionLabels[idx] || value;
+              }
+              return value;
+            })()}
           </Text>
           <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={18} color="#9CA3AF" style={styles.dropdownIcon} />
         </Pressable>
@@ -143,6 +155,9 @@ function SimpleDropdown({
               ) : (
                 filtered.map((opt, idx) => {
                   const selected = value?.trim().toLowerCase() === opt.toLowerCase();
+                  const displayText = optionLabels && options.includes(opt) 
+                    ? optionLabels[options.indexOf(opt)] 
+                    : opt;
                   return (
                     <Pressable
                       key={`${opt}-${idx}`}
@@ -157,7 +172,7 @@ function SimpleDropdown({
                         style={[styles.ddOptionText, selected && styles.ddOptionTextSelected]}
                         numberOfLines={1}
                       >
-                        {opt}
+                        {displayText}
                       </Text>
                       {selected && <Ionicons name="checkmark" size={18} color="#3B82F6" />}
                     </Pressable>
@@ -201,16 +216,24 @@ export default function OrderItemsManagementScreen() {
         console.warn('Failed to load pricePerSqmByCustomer from AsyncStorage:', err);
       }
       
-      // Fetch customer names and prices for each item
+      // Fetch customer names and prices for each item, and filter out items from delivered orders
       const itemsWithCustomer = await Promise.all(items.map(async (item: any) => {
         let customerName = '—';
         let pricePerM2 = item.price_per_m2 || '';
+        let orderStatus = '';
         
         try {
           const orderId = item.order_id || item._raw?.order_id || item.order?.id;
           if (orderId) {
             const orders = database.get('orders');
             const order: any = await orders.find(orderId);
+            orderStatus = order.orderStatus || order._raw?.order_status || '';
+            
+            // Skip items from delivered orders
+            if (orderStatus === 'Παραδόθηκε') {
+              return null;
+            }
+            
             const customerId = order.customer_id || order._raw?.customer_id || order.customer?.id;
             if (customerId) {
               const customers = database.get('customers');
@@ -247,7 +270,10 @@ export default function OrderItemsManagementScreen() {
         };
       }));
       
-      setAllOrderItems(itemsWithCustomer);
+      // Filter out null values (items from delivered orders)
+      const activeItems = itemsWithCustomer.filter((item): item is NonNullable<typeof item> => item !== null);
+      
+      setAllOrderItems(activeItems);
     } catch (err) {
       console.error('Failed to load order items:', err);
       Alert.alert('Σφάλμα', 'Αποτυχία φόρτωσης τεμαχίων.');
@@ -614,16 +640,54 @@ function EditItemModal({
   const [width_m, setWidthM] = useState('');
   const [area_m2, setAreaM2] = useState('');
   const [price_per_m2, setPricePerM2] = useState('');
+  const [selectedShelfId, setSelectedShelfId] = useState<string>('');
+  const [shelves, setShelves] = useState<{ id: string; code: string }[]>([]);
+  const [loadingShelves, setLoadingShelves] = useState(false);
+  const [currentShelfId, setCurrentShelfId] = useState<string | null>(null);
 
-  // Check if category has dimensions (only Χαλί, Διαδρομάκι, Μοκέτα)
+  // Check if category has dimensions (Χαλί, Διαδρομάκι, Μοκέτα, Φλοκάτι)
   const hasDimensions = React.useMemo(() => {
     const normalizedCategory = category.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').trim();
-    return ['χαλι', 'διαδρομακι', 'μοκετα'].includes(normalizedCategory);
+    return ['χαλι', 'διαδρομακι', 'μοκετα', 'φλοκατι'].includes(normalizedCategory);
   }, [category]);
 
-  // Load item data when modal opens
+  // Check if status is 'πλυμένο' to enable shelf selection
+  const isStatusWashed = React.useMemo(() => {
+    return status.toLowerCase() === 'πλυμένο';
+  }, [status]);
+
+  // Load shelves when modal opens
   React.useEffect(() => {
-    if (!item) return;
+    if (!visible) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoadingShelves(true);
+        const shelvesColl = database.get('shelves');
+        const shelvesData = await shelvesColl.query().fetch();
+        if (cancelled) return;
+        const shelvesList = shelvesData.map((s: any) => ({
+          id: s.id,
+          code: s.code || '',
+        })).sort((a, b) => a.code.localeCompare(b.code, 'el'));
+        setShelves(shelvesList);
+      } catch (err) {
+        console.error('Failed to load shelves:', err);
+        if (!cancelled) setShelves([]);
+      } finally {
+        if (!cancelled) setLoadingShelves(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [visible]);
+
+  // Load item data and current shelf when modal opens
+  React.useEffect(() => {
+    if (!item) {
+      setCurrentShelfId(null);
+      setSelectedShelfId('');
+      return;
+    }
     setItemCode(item.item_code ?? '');
     setCategory(item.category ?? '');
     setColor(item.color ?? '');
@@ -635,6 +699,19 @@ function EditItemModal({
     setAreaM2(item.area_m2 ?? '');
     setPricePerM2(item.price_per_m2 ?? '');
     // Don't set price here - let the calculation useEffect handle it after dimensions are loaded
+    
+    // Load current shelf assignment
+    (async () => {
+      try {
+        const shelfId = await getItemShelfId(item.id);
+        setCurrentShelfId(shelfId);
+        setSelectedShelfId(shelfId || '');
+      } catch (err) {
+        console.error('Failed to get current shelf:', err);
+        setCurrentShelfId(null);
+        setSelectedShelfId('');
+      }
+    })();
   }, [item]);
 
   // Calculate area_m2 automatically from length × width (only for categories with dimensions)
@@ -712,6 +789,16 @@ function EditItemModal({
     try {
       const priceNum = parseFloat(price.replace(',', '.')) || 0;
       
+      // Validate shelf assignment: if shelf is selected, status must be 'πλυμένο'
+      if (selectedShelfId && status.toLowerCase() !== 'πλυμένο') {
+        Alert.alert(
+          'Σφάλμα',
+          'Για να τοποθετήσετε ένα τεμάχιο σε ράφι, η κατάσταση πρέπει να είναι "Πλυμένο".'
+        );
+        setSaving(false);
+        return;
+      }
+      
       await updateOrderItem(item.id, {
         item_code: item_code.trim(),
         category: category.trim(),
@@ -725,6 +812,25 @@ function EditItemModal({
         area_m2: area_m2.trim() || '',
         price_per_m2: price_per_m2.trim() || '',
       }, userId);
+
+      // Handle shelf assignment/removal/transfer
+      if (selectedShelfId !== currentShelfId) {
+        try {
+          if (selectedShelfId && !currentShelfId) {
+            // Assign to shelf
+            await assignItemToShelf({ orderItemId: item.id, shelfId: selectedShelfId, userId });
+          } else if (selectedShelfId && currentShelfId) {
+            // Transfer to different shelf
+            await transferItemShelf({ orderItemId: item.id, toShelfId: selectedShelfId, userId });
+          } else if (!selectedShelfId && currentShelfId) {
+            // Remove from shelf
+            await removeItemFromShelf({ orderItemId: item.id, userId });
+          }
+        } catch (shelfErr: any) {
+          console.error('Failed to update shelf assignment:', shelfErr);
+          Alert.alert('Προσοχή', `Η ενημέρωση του τεμαχίου ολοκληρώθηκε, αλλά η τοποθέτηση στο ράφι απέτυχε: ${shelfErr.message || 'Άγνωστο σφάλμα'}`);
+        }
+      }
 
       // Recalculate order totalAmount after updating item
       const orderId = item.order_id;
@@ -870,6 +976,43 @@ function EditItemModal({
                     </View>
                   </View>
 
+                  {/* Row 3.5: Shelf */}
+                  <View style={styles.formRow}>
+                    <View style={styles.formCol}>
+                      <Text style={styles.formLabel}>Ράφι</Text>
+                      <SimpleDropdown
+                        value={selectedShelfId}
+                        options={['', ...shelves.map(s => s.id)]}
+                        optionLabels={['—', ...shelves.map(s => s.code)]}
+                        onChange={(val) => {
+                          // If user tries to select a shelf but status is not 'πλυμένο', show warning
+                          if (val && !isStatusWashed) {
+                            Alert.alert(
+                              'Προσοχή',
+                              'Για να τοποθετήσετε ένα τεμάχιο σε ράφι, η κατάσταση πρέπει να είναι "Πλυμένο". Παρακαλώ αλλάξτε πρώτα την κατάσταση.'
+                            );
+                            return;
+                          }
+                          setSelectedShelfId(val);
+                        }}
+                        placeholder="Επιλέξτε ράφι"
+                        showSearch={true}
+                        disabled={loadingShelves || !isStatusWashed}
+                      />
+                      {selectedShelfId && !isStatusWashed && (
+                        <Text style={{ color: '#EF4444', fontSize: 12, marginTop: 4 }}>
+                          Η κατάσταση πρέπει να είναι &quot;Πλυμένο&quot; για τοποθέτηση σε ράφι
+                        </Text>
+                      )}
+                      {!isStatusWashed && (
+                        <Text style={{ color: '#6B7280', fontSize: 12, marginTop: 4 }}>
+                          Αλλάξτε την κατάσταση σε &quot;Πλυμένο&quot; για να επιλέξετε ράφι
+                        </Text>
+                      )}
+                    </View>
+                    <View style={styles.formCol} />
+                  </View>
+
                   {/* Row 4: Order Date */}
                   <View style={styles.formRow}>
                     <View style={styles.formCol}>
@@ -884,7 +1027,7 @@ function EditItemModal({
                     <View style={styles.formCol} />
                   </View>
 
-                  {/* Dimensions Section - Only show for Χαλί, Διαδρομάκι, Μοκέτα */}
+                  {/* Dimensions Section - Only show for Χαλί, Διαδρομάκι, Μοκέτα, Φλοκάτι */}
                   {hasDimensions && (
                     <>
                       <View style={styles.sectionDivider}>

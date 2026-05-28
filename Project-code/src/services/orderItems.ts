@@ -310,7 +310,7 @@ export async function listFreeOrderItems({ limit = 1000 }: ListFreeOpts = {}) {
   const getOrderId = (r: any): string | null =>
     r.order_id ?? r.order?.id ?? r._raw?.order_id ?? null
 
-  const out: Array<{
+  const out: {
     id: string
     order_id: string | null
     customer_id: string | null
@@ -323,7 +323,7 @@ export async function listFreeOrderItems({ limit = 1000 }: ListFreeOpts = {}) {
     storage_status: string
     order_date: string
     created_at: number
-  }> = []
+  }[] = []
 
   for (const r of rows) {
     const orderId = getOrderId(r)
@@ -331,10 +331,19 @@ export async function listFreeOrderItems({ limit = 1000 }: ListFreeOpts = {}) {
     // (best-effort)
     let customerId: string | null = null
     let customerName: string | null = null
+    let orderStatus: string | null = null
 
     try {
       if (orderId) {
         const order: any = await ordersColl.find(orderId)
+        // Get order status to filter out delivered orders
+        orderStatus = order.orderStatus ?? order._raw?.order_status ?? null
+        
+        // Skip items from delivered orders
+        if (orderStatus === 'Παραδόθηκε') {
+          continue
+        }
+        
         // customer id --> aliases/raw
         customerId =
           order.customer?.id ??

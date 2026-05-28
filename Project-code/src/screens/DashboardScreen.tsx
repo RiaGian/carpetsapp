@@ -31,6 +31,178 @@ type CustomersPreview = { count: number; names: string[] };
 type ShelfPreview = { code: string; count: number };
 type WarehousePreview = { totalShelves: number; shelves: ShelfPreview[] };
 
+// Generate time slots from 5:00 AM to 9:00 PM in 15-minute intervals
+function generateTimeSlots(): string[] {
+  const slots: string[] = [];
+  for (let hour = 5; hour <= 21; hour++) {
+    for (let minute = 0; minute < 60; minute += 15) {
+      if (hour === 21 && minute > 0) break; // Stop at 9:00 PM (21:00)
+      const hourStr = hour.toString().padStart(2, '0');
+      const minuteStr = minute.toString().padStart(2, '0');
+      slots.push(`${hourStr}:${minuteStr}`);
+    }
+  }
+  return slots;
+}
+
+// Compare two time strings (HH:mm format)
+function compareTimes(time1: string, time2: string): number {
+  const [h1, m1] = time1.split(':').map(Number);
+  const [h2, m2] = time2.split(':').map(Number);
+  const total1 = h1 * 60 + m1;
+  const total2 = h2 * 60 + m2;
+  return total1 - total2;
+}
+
+// Simple Dropdown Component for time selection
+function TimeDropdown({
+  value,
+  placeholder,
+  options,
+  onChange,
+  width = '100%',
+}: {
+  value: string;
+  placeholder?: string;
+  options: string[];
+  onChange: (v: string) => void;
+  width?: number | `${number}%` | 'auto';
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [anchor, setAnchor] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const anchorRef = React.useRef<View>(null);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter((o) => o.toLowerCase().includes(q));
+  }, [query, options]);
+
+  // When opening, measure the anchor position
+  const toggleOpen = React.useCallback(() => {
+    if (!open) {
+      // open -> measure first
+      requestAnimationFrame(() => {
+        anchorRef.current?.measureInWindow((x, y, w, h) => {
+          setAnchor({ x, y, w, h });
+          setOpen(true);
+        });
+      });
+    } else {
+      setOpen(false);
+    }
+  }, [open]);
+
+  return (
+    <>
+      {/* Anchor (button) */}
+      <View ref={anchorRef} style={{ width }}>
+        <Pressable onPress={toggleOpen} style={[styles.modalInput, { width }]}>
+          <Text style={[styles.modalInputText, { opacity: value ? 1 : 0.6 }]} numberOfLines={1}>
+            {value?.trim() || (placeholder || 'Επιλέξτε…')}
+          </Text>
+          <Ionicons 
+            name={open ? 'chevron-up' : 'chevron-down'} 
+            size={18} 
+            color="#9CA3AF" 
+            style={{ marginLeft: 'auto' }} 
+          />
+        </Pressable>
+      </View>
+
+      {/* Modal with absolutely positioned dropdown list */}
+      <Modal
+        visible={open}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setOpen(false)}
+        statusBarTranslucent
+      >
+        {/* Backdrop for click-outside */}
+        <Pressable style={StyleSheet.absoluteFill} onPress={() => setOpen(false)} />
+
+        {/* Dropdown list, absolutely positioned below anchor */}
+        {anchor && (
+          <View
+            style={[
+              styles.timeDropdownList,
+              {
+                position: 'absolute',
+                left: Math.max(8, anchor.x),
+                top: anchor.y + anchor.h + 4,
+                width: anchor.w,
+                maxHeight: 260,
+                zIndex: 99999,
+              },
+            ]}
+          >
+            {/* Search box */}
+            <View style={styles.dropdownSearchBox}>
+              <Ionicons name="search-outline" size={18} color="#6B7280" />
+              <TextInput
+                value={query}
+                onChangeText={setQuery}
+                placeholder="Αναζήτηση ώρας…"
+                placeholderTextColor="#9CA3AF"
+                style={[
+                  styles.dropdownSearchInput,
+                  Platform.OS === 'web' && ({ outlineStyle: 'none' } as any),
+                ]}
+                autoFocus
+              />
+              {query ? (
+                <Pressable onPress={() => setQuery('')}>
+                  <Ionicons name="close" size={16} color="#9CA3AF" />
+                </Pressable>
+              ) : null}
+            </View>
+
+            {/* Options */}
+            <ScrollView>
+              {filtered.length === 0 ? (
+                <View style={styles.dropdownEmpty}>
+                  <Text style={styles.dropdownEmptyText}>Δεν βρέθηκαν επιλογές</Text>
+                </View>
+              ) : (
+                filtered.map((option, idx) => {
+                  const selected = value?.trim() === option;
+                  return (
+                    <Pressable
+                      key={option}
+                      onPress={() => {
+                        onChange(option);
+                        setOpen(false);
+                        setQuery('');
+                      }}
+                      style={[
+                        styles.dropdownOption,
+                        selected && styles.dropdownOptionSelected,
+                        idx % 2 === 1 && styles.dropdownOptionAlt,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.dropdownOptionText,
+                          selected && styles.dropdownOptionTextSelected,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {option}
+                      </Text>
+                      {selected && <Ionicons name="checkmark" size={18} color="#3B82F6" />}
+                    </Pressable>
+                  );
+                })
+              )}
+            </ScrollView>
+          </View>
+        )}
+      </Modal>
+    </>
+  );
+}
+
 export default function DashboardScreen() {
   const ref = useRef<any>(null);
   const { width } = useWindowDimensions();
@@ -64,7 +236,8 @@ export default function DashboardScreen() {
   const [pickupCustomerId, setPickupCustomerId] = useState<string | null>(null);
   const [pickupCustomers, setPickupCustomers] = useState<{ id: string; label: string; firstName: string; lastName: string; phone: string; afm: string; address: string }[]>([]);
   const [pickupDate, setPickupDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [pickupTime, setPickupTime] = useState<string>('10:00');
+  const [pickupTimeStart, setPickupTimeStart] = useState<string>('10:00');
+  const [pickupTimeEnd, setPickupTimeEnd] = useState<string>('10:15');
   const [pickupDateModalOpen, setPickupDateModalOpen] = useState(false);
   const [pickupSearchQuery, setPickupSearchQuery] = useState('');
   const [pickupDebouncedQuery, setPickupDebouncedQuery] = useState('');
@@ -73,6 +246,12 @@ export default function DashboardScreen() {
   const pickupCustomersPerPage = 10;
   
   const [creatingPickup, setCreatingPickup] = useState(false);
+  const [pickupCustomerError, setPickupCustomerError] = useState<string | null>(null);
+  const [pickupTimeStartError, setPickupTimeStartError] = useState<string | null>(null);
+  const [pickupTimeEndError, setPickupTimeEndError] = useState<string | null>(null);
+
+  // Generate time slots for pickup time selection
+  const timeSlots = useMemo(() => generateTimeSlots(), []);
 
   const [warehousePreview, setWarehousePreview] = useState<WarehousePreview | null>(null);
   
@@ -382,6 +561,7 @@ export default function DashboardScreen() {
           return {
             id: r.id,
             pickupId: r.id,
+            customerId: customerId || null,
             customerName,
             customerPhone,
             customerAddress,
@@ -389,6 +569,7 @@ export default function DashboardScreen() {
             pickupTimeStart: r.pickupTimeStart || r.pickup_time_start || null,
             pickupTimeEnd: r.pickupTimeEnd || r.pickup_time_end || null,
             notes: r.notes || '',
+            status: r.status || 'new',
             isPickup: true,
           };
         }));
@@ -825,6 +1006,8 @@ export default function DashboardScreen() {
               const pickupsForSelectedDate = pickups
                 .filter((p: any) => {
                   if (!p.pickupDate) return false;
+                  // Filter out pickups with status 'done'
+                  if (p.status === 'done') return false;
                   const pickupDate = new Date(p.pickupDate).toISOString().split('T')[0];
                   return pickupDate === selectedCalendarDate;
                 })
@@ -913,9 +1096,12 @@ export default function DashboardScreen() {
                             key={order.id}
                             onPress={() => {
                               if (order.type === 'pickup' && order.pickupId) {
-                                // TODO: Navigate to pickup edit screen when created
-                                // For now, just show alert
-                                Alert.alert('Παραλαβή', `Παραλαβή #${order.pickupId.slice(0, 6).toUpperCase()}`);
+                                // Navigate to orders screen with customer pre-selected
+                                if (order.customerId) {
+                                  router.push(`/orders?customerId=${order.customerId}` as any);
+                                } else {
+                                  Alert.alert('Παραλαβή', `Παραλαβή #${order.pickupId.slice(0, 6).toUpperCase()}\nΔεν βρέθηκε πελάτης για αυτή την παραλαβή.`);
+                                }
                               } else {
                                 router.push(`/editorder?orderId=${order.id}` as any);
                               }
@@ -998,6 +1184,12 @@ export default function DashboardScreen() {
           setPickupCustomerId(null);
           setPickupSearchQuery('');
           setPickupDebouncedQuery('');
+          setPickupTimeStart('10:00');
+          setPickupTimeEnd('10:15');
+          // Clear errors
+          setPickupCustomerError(null);
+          setPickupTimeStartError(null);
+          setPickupTimeEndError(null);
         }}
       >
         <View style={styles.modalBackdrop}>
@@ -1010,6 +1202,12 @@ export default function DashboardScreen() {
                   setPickupCustomerId(null);
                   setPickupSearchQuery('');
                   setPickupDebouncedQuery('');
+                  setPickupTimeStart('10:00');
+                  setPickupTimeEnd('10:15');
+                  // Clear errors
+                  setPickupCustomerError(null);
+                  setPickupTimeStartError(null);
+                  setPickupTimeEndError(null);
                 }}
               >
                 <Ionicons name="close" size={24} color="#6B7280" />
@@ -1053,6 +1251,7 @@ export default function DashboardScreen() {
                             onPress={() => {
                               setPickupCustomerId(customer.id);
                               setPickupSearchQuery('');
+                              setPickupCustomerError(null); // Clear error when customer is selected
                             }}
                             style={[
                               styles.customerOption,
@@ -1122,12 +1321,21 @@ export default function DashboardScreen() {
                           {pickupCustomers.find(c => c.id === pickupCustomerId)?.label || '—'}
                         </Text>
                         <TouchableOpacity
-                          onPress={() => setPickupCustomerId(null)}
+                          onPress={() => {
+                            setPickupCustomerId(null);
+                            setPickupCustomerError(null); // Clear error when customer is deselected
+                          }}
                           style={styles.clearSelectionButton}
                         >
                           <Ionicons name="close-circle" size={18} color="#6B7280" />
                           <Text style={styles.clearSelectionText}>Ακύρωση επιλογής</Text>
                         </TouchableOpacity>
+                      </View>
+                    )}
+                    {pickupCustomerError && (
+                      <View style={styles.errorContainer}>
+                        <Ionicons name="alert-circle" size={16} color="#DC2626" style={{ marginRight: 6 }} />
+                        <Text style={styles.errorText}>{pickupCustomerError}</Text>
                       </View>
                     )}
                 </View>
@@ -1168,32 +1376,95 @@ export default function DashboardScreen() {
 
               {/* Time Selection */}
               <View style={styles.modalField}>
-                <Text style={styles.modalLabel}>Ώρα</Text>
-                <TextInput
-                  style={styles.modalInput}
-                  value={pickupTime}
-                  onChangeText={setPickupTime}
-                  placeholder="Ώρα (π.χ. 10:00)"
-                  keyboardType="numeric"
+                <Text style={styles.modalLabel}>Ώρα Έναρξης</Text>
+                <TimeDropdown
+                  value={pickupTimeStart}
+                  placeholder="Επιλέξτε ώρα έναρξης"
+                  options={timeSlots}
+                  onChange={(value) => {
+                    setPickupTimeStart(value);
+                    setPickupTimeStartError(null); // Clear error when time is selected
+                    // Auto-set end time to 15 minutes after start if end time is before start
+                    const [startHour, startMin] = value.split(':').map(Number);
+                    const startTotalMinutes = startHour * 60 + startMin;
+                    const endTotalMinutes = startTotalMinutes + 15;
+                    const endHour = Math.floor(endTotalMinutes / 60);
+                    const endMin = endTotalMinutes % 60;
+                    if (endHour <= 21) {
+                      const newEndTime = `${endHour.toString().padStart(2, '0')}:${endMin.toString().padStart(2, '0')}`;
+                      if (timeSlots.includes(newEndTime) && (!pickupTimeEnd || compareTimes(pickupTimeEnd, newEndTime) < 0)) {
+                        setPickupTimeEnd(newEndTime);
+                        setPickupTimeEndError(null); // Clear error when end time is auto-set
+                      }
+                    }
+                  }}
                 />
+                {pickupTimeStartError && (
+                  <View style={styles.errorContainer}>
+                    <Ionicons name="alert-circle" size={16} color="#DC2626" style={{ marginRight: 6 }} />
+                    <Text style={styles.errorText}>{pickupTimeStartError}</Text>
+                  </View>
+                )}
+              </View>
+
+              <View style={styles.modalField}>
+                <Text style={styles.modalLabel}>Ώρα Λήξης</Text>
+                <TimeDropdown
+                  value={pickupTimeEnd}
+                  placeholder="Επιλέξτε ώρα λήξης"
+                  options={timeSlots.filter(slot => {
+                    // Only show slots that are after start time
+                    if (!pickupTimeStart) return true;
+                    return compareTimes(slot, pickupTimeStart) > 0;
+                  })}
+                  onChange={(value) => {
+                    setPickupTimeEnd(value);
+                    setPickupTimeEndError(null); // Clear error when time is selected
+                  }}
+                />
+                {pickupTimeEndError && (
+                  <View style={styles.errorContainer}>
+                    <Ionicons name="alert-circle" size={16} color="#DC2626" style={{ marginRight: 6 }} />
+                    <Text style={styles.errorText}>{pickupTimeEndError}</Text>
+                  </View>
+                )}
               </View>
 
               {/* Submit Button */}
               <TouchableOpacity
                 onPress={async () => {
+                  // Clear previous errors
+                  setPickupCustomerError(null);
+                  setPickupTimeStartError(null);
+                  setPickupTimeEndError(null);
+
+                  let hasError = false;
+
                   if (!pickupCustomerId) {
-                    Alert.alert('Προσοχή', 'Παρακαλώ επιλέξτε πελάτη.');
-                    return;
+                    setPickupCustomerError('Παρακαλώ επιλέξτε πελάτη.');
+                    hasError = true;
                   }
-                  if (!pickupTime.match(/^\d{1,2}:\d{2}$/)) {
-                    Alert.alert('Προσοχή', 'Παρακαλώ εισάγετε έγκυρη ώρα (π.χ. 10:00).');
+                  if (!pickupTimeStart) {
+                    setPickupTimeStartError('Παρακαλώ επιλέξτε ώρα έναρξης.');
+                    hasError = true;
+                  }
+                  if (!pickupTimeEnd) {
+                    setPickupTimeEndError('Παρακαλώ επιλέξτε ώρα λήξης.');
+                    hasError = true;
+                  }
+                  if (pickupTimeStart && pickupTimeEnd && compareTimes(pickupTimeEnd, pickupTimeStart) <= 0) {
+                    setPickupTimeEndError('Η ώρα λήξης πρέπει να είναι μετά την ώρα έναρξης.');
+                    hasError = true;
+                  }
+
+                  if (hasError) {
                     return;
                   }
 
                   setCreatingPickup(true);
                   try {
-                    // Create pickup datetime
-                    const [hours, minutes] = pickupTime.split(':');
+                    // Create pickup datetime using start time
+                    const [hours, minutes] = pickupTimeStart.split(':');
                     const pickupDateTime = new Date(pickupDate);
                     pickupDateTime.setHours(parseInt(hours, 10), parseInt(minutes, 10), 0, 0);
 
@@ -1201,7 +1472,8 @@ export default function DashboardScreen() {
                     await createPickup({
                       customerId: pickupCustomerId!,
                       pickupDate: pickupDateTime.toISOString(),
-                      pickupTimeStart: pickupTime,
+                      pickupTimeStart: pickupTimeStart,
+                      pickupTimeEnd: pickupTimeEnd,
                       createdBy: 'system',
                     }, 'system');
 
@@ -1209,9 +1481,14 @@ export default function DashboardScreen() {
                     setPickupModalOpen(false);
                     setPickupCustomerId(null);
                     setPickupDate(new Date().toISOString().split('T')[0]);
-                    setPickupTime('10:00');
+                    setPickupTimeStart('10:00');
+                    setPickupTimeEnd('10:15');
                     setPickupSearchQuery('');
                     setPickupDebouncedQuery('');
+                    // Clear errors
+                    setPickupCustomerError(null);
+                    setPickupTimeStartError(null);
+                    setPickupTimeEndError(null);
                   } catch (e: any) {
                     console.error('Failed to create pickup:', e);
                     Alert.alert('Σφάλμα', e.message || 'Αποτυχία δημιουργίας παραλαβής.');
@@ -2473,6 +2750,13 @@ wminiShelfEmptyText: { color: '#6B7280' },
     fontSize: 14,
     color: '#111827',
     backgroundColor: '#FFFFFF',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  modalInputText: {
+    fontSize: 14,
+    color: '#111827',
+    flex: 1,
   },
   modalInputError: {
     borderColor: '#DC2626',
@@ -2482,6 +2766,21 @@ wminiShelfEmptyText: { color: '#6B7280' },
     color: '#DC2626',
     marginTop: 4,
     marginLeft: 4,
+  },
+  errorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    padding: 8,
+    backgroundColor: '#FEF2F2',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  errorText: {
+    fontSize: 13,
+    color: '#DC2626',
+    flex: 1,
   },
   dropdownContainer: {
     flexDirection: 'row',
@@ -2508,6 +2807,9 @@ wminiShelfEmptyText: { color: '#6B7280' },
     backgroundColor: '#FFFFFF',
   },
   dropdownOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 12,
     paddingVertical: 12,
     borderBottomWidth: 1,
@@ -2523,6 +2825,59 @@ wminiShelfEmptyText: { color: '#6B7280' },
   dropdownOptionTextSelected: {
     color: '#3B82F6',
     fontWeight: '600',
+  },
+  dropdownCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 12,
+    minWidth: 280,
+    maxWidth: 400,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  dropdownSearchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 8,
+    backgroundColor: '#F9FAFB',
+  },
+  dropdownSearchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: '#111827',
+    marginLeft: 8,
+    padding: 0,
+    ...(Platform.OS === 'web' && { outlineStyle: 'none' } as any),
+  },
+  timeDropdownList: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  dropdownEmpty: {
+    padding: 16,
+    alignItems: 'center',
+  },
+  dropdownEmptyText: {
+    fontSize: 14,
+    color: '#9CA3AF',
+  },
+  dropdownOptionAlt: {
+    backgroundColor: '#F9FAFB',
   },
   newCustomerButton: {
     flexDirection: 'row',

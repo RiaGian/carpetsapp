@@ -10,6 +10,7 @@ import CustomerAddress from './models/CustomerAddress'
 import CustomerPhone from './models/CustomerPhone'
 import Order from './models/Order'
 import OrderItem from './models/OrderItem'
+import Payment from './models/Payment'
 import Pickup from './models/Pickup'
 import Shelf from './models/Shelf'
 import User from './models/Users'
@@ -36,6 +37,7 @@ export const database = new Database({
     CustomerAddress,
     Order,
     OrderItem,
+    Payment,
     Shelf,
     WarehouseItem,
     Pickup,

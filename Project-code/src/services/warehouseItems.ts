@@ -244,6 +244,17 @@ export async function listActiveItemsOnShelf(shelfId: string): Promise<Warehouse
   })
 }
 
+// Get current shelf assignment for an order item
+export async function getItemShelfId(orderItemId: string): Promise<string | null> {
+  const witemsColl = database.get('warehouse_items')
+  const active = await witemsColl
+    .query(Q.where('is_active', true), Q.where('item_id', orderItemId), Q.take(1))
+    .fetch()
+  
+  if (!active.length) return null
+  return String((active[0] as any)._raw.shelf_id)
+}
+
 export async function listAllActiveWarehouseItems(): Promise<WarehouseListItem[]> {
   const witemsColl   = database.get('warehouse_items')
   const itemsColl    = database.get('order_items')

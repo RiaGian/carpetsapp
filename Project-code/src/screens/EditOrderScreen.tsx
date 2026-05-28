@@ -36,6 +36,7 @@ import {
   getOrderById,
   updateOrder,
 } from '../services/orders'
+import { createPayment, getTotalPaidForOrder } from '../services/payments'
 import { removeItemFromShelf } from '../services/warehouseItems'
 
 /**  helpers/types */
@@ -413,6 +414,8 @@ export default function EditOrderScreen() {
   const [confirmDeliveredOpen, setConfirmDeliveredOpen] = useState(false) //payed/not
   const [partialPaymentModalOpen, setPartialPaymentModalOpen] = useState(false) // partial payment input
   const [partialPaymentAmount, setPartialPaymentAmount] = useState<string>('') // amount paid (partial)
+  const [alreadyPaidAmount, setAlreadyPaidAmount] = useState<number>(0) // already paid amount (deposit + existing payments)
+  const [loadingPayments, setLoadingPayments] = useState(false) // loading payments data
   const [returnsPromptOpen, setReturnsPromptOpen] = useState(false)
   const [unsavedChangesModalOpen, setUnsavedChangesModalOpen] = useState(false) // unsaved changes warning
   const [hasUserMadeChanges, setHasUserMadeChanges] = useState(false) // Track if user has made actual changes (not from initial load)
@@ -428,7 +431,7 @@ export default function EditOrderScreen() {
   const toNum = (s?: string) => parseFloat((s || '').replace(',', '.')) || 0;
   const fix2 = (n: number) => n.toFixed(2);
   const isRugCategory = (c?: string | null) =>
-  c === 'Χαλί' || c === 'Μοκέτα' || c === 'Διαδρομάκι';
+  c === 'Χαλί' || c === 'Μοκέτα' || c === 'Διαδρομάκι' || c === 'Φλοκάτι';
 
   const [confirmReadyOpen, setConfirmReadyOpen] = useState(false)
 
@@ -649,6 +652,35 @@ const clearReturnsPending = (customerId: string, orderId: string) => {
       setHasUserMadeChanges(false) // Reset flag when leaving
     }
   }, [orderId])
+
+  // Load already paid amount when partial payment modal opens
+  React.useEffect(() => {
+    if (!partialPaymentModalOpen) return;
+    
+    let cancelled = false;
+    const loadPayments = async () => {
+      setLoadingPayments(true);
+      try {
+        const paid = await getTotalPaidForOrder(orderId);
+        if (!cancelled) {
+          setAlreadyPaidAmount(paid);
+        }
+      } catch {
+        // Fallback: use deposit if payments table query fails
+        if (!cancelled) {
+          const deposit = depositEnabled ? parseFloat((depositAmount || '0').replace(',', '.')) || 0 : 0;
+          setAlreadyPaidAmount(deposit);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingPayments(false);
+        }
+      }
+    };
+    
+    loadPayments();
+    return () => { cancelled = true; };
+  }, [partialPaymentModalOpen, orderId, depositEnabled, depositAmount]);
 
   /**  Load customers  */
   useEffect(() => {
@@ -1263,6 +1295,60 @@ const savePieceModal = () => {
       }
 
       await updateOrder(orderId, patch, userId)
+
+      // If status is "Παραδόθηκε" (delivered), create payment records
+      if (orderStatus === 'delivered') {
+        // Calculate items total and already paid
+        const itemsTotal = pieces.reduce((sum, p) => {
+          const price = parseFloat((p.cost || '').toString().replace(',', '.')) || 0
+          return sum + price
+        }, 0)
+        
+        // Get total already paid from payments table
+        let totalPaid = 0
+        try {
+          totalPaid = await getTotalPaidForOrder(orderId)
+        } catch {
+          // Fallback: use deposit
+          totalPaid = dep
+        }
+        
+        // Calculate remaining amount
+        const remainingToPay = Math.max(0, itemsTotal - totalPaid)
+        
+        if (hasDebt && partialPaymentAmount) {
+          // Partial payment: create payment record for the partial amount
+          try {
+            const partialPayment = parseFloat(partialPaymentAmount.replace(',', '.')) || 0
+            if (partialPayment > 0) {
+              await createPayment({
+                orderId,
+                amount: partialPayment,
+                paymentType: 'partial',
+                paymentMethod: paymentMethod || undefined,
+                createdBy: userId,
+              })
+              // Clear partial payment amount after successful save
+              setPartialPaymentAmount('')
+            }
+          } catch (err) {
+            console.warn('Failed to create partial payment record:', err)
+          }
+        } else if (!hasDebt && remainingToPay > 0) {
+          // Full payment: create payment record for the remaining amount
+          try {
+            await createPayment({
+              orderId,
+              amount: remainingToPay,
+              paymentType: 'full',
+              paymentMethod: paymentMethod || undefined,
+              createdBy: userId,
+            })
+          } catch (err) {
+            console.warn('Failed to create full payment record:', err)
+          }
+        }
+      }
 
       // If status is "Παραδόθηκε" (delivered), remove all items from shelves
       if (orderStatus === 'delivered') {
@@ -2804,6 +2890,8 @@ const savePieceModal = () => {
                   setHasUserMadeChanges(true)
                   setOrderStatus('delivered')
                   setHasDebt(false)
+                  // Store flag to create full payment record when order is saved
+                  // We'll create the payment record in onSave function
                   setConfirmDeliveredOpen(false)
                   setReturnsPromptOpen(true)
                 }}
@@ -2869,15 +2957,38 @@ const savePieceModal = () => {
               Μερική Πληρωμή
             </Text>
             
-            {/* Show total order amount */}
-            <View style={{ marginBottom: 16 }}>
-              <Text style={{ fontSize: 14, color: '#6B7280', marginBottom: 4 }}>Συνολικό ποσό παραγγελίας:</Text>
-              <Text style={{ fontSize: 20, fontWeight: '600', color: '#1F2A44' }}>{totalCost} €</Text>
-            </View>
+            {/* Show total order amount and already paid */}
+            {(() => {
+              const total = parseFloat(totalCost) || 0
+              const remainingToPay = Math.max(0, total - alreadyPaidAmount)
+              
+              return (
+                <>
+                  <View style={{ marginBottom: 12 }}>
+                    <Text style={{ fontSize: 14, color: '#6B7280', marginBottom: 4 }}>Συνολικό ποσό παραγγελίας:</Text>
+                    <Text style={{ fontSize: 20, fontWeight: '600', color: '#1F2A44' }}>{total.toFixed(2)} €</Text>
+                  </View>
+                  
+                  {!loadingPayments && alreadyPaidAmount > 0 && (
+                    <View style={{ marginBottom: 12 }}>
+                      <Text style={{ fontSize: 14, color: '#6B7280', marginBottom: 4 }}>Ήδη πληρωμένο:</Text>
+                      <Text style={{ fontSize: 16, fontWeight: '600', color: '#059669' }}>{alreadyPaidAmount.toFixed(2)} €</Text>
+                    </View>
+                  )}
+                  
+                  {!loadingPayments && (
+                    <View style={{ marginBottom: 16, padding: 12, backgroundColor: '#F0F9FF', borderRadius: 8 }}>
+                      <Text style={{ fontSize: 14, color: '#6B7280', marginBottom: 4 }}>Υπόλοιπο προς πληρωμή:</Text>
+                      <Text style={{ fontSize: 18, fontWeight: '600', color: '#DC2626' }}>{remainingToPay.toFixed(2)} €</Text>
+                    </View>
+                  )}
+                </>
+              )
+            })()}
 
             {/* Paid amount input */}
             <View style={{ marginBottom: 16 }}>
-              <Text style={{ fontSize: 14, color: '#374151', marginBottom: 8 }}>Ποσό που πληρώθηκε:</Text>
+              <Text style={{ fontSize: 14, color: '#374151', marginBottom: 8 }}>Ποσό που πληρώθηκε (επιπλέον):</Text>
               <View style={{ flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 8, paddingHorizontal: 12 }}>
                 <TextInput
                   value={partialPaymentAmount}
@@ -2898,22 +3009,24 @@ const savePieceModal = () => {
             {/* Calculate and show debt */}
             {partialPaymentAmount && (() => {
               const total = parseFloat(totalCost) || 0
-              const paid = parseFloat(partialPaymentAmount.replace(',', '.')) || 0
-              const debt = total - paid
-              const isValid = paid > 0 && paid < total
+              const newPayment = parseFloat(partialPaymentAmount.replace(',', '.')) || 0
+              const totalPaidAfter = alreadyPaidAmount + newPayment
+              const remainingToPay = Math.max(0, total - alreadyPaidAmount)
+              const debtAfterPayment = Math.max(0, total - totalPaidAfter)
+              const isValid = newPayment > 0 && newPayment < remainingToPay
               
               return (
                 <View style={{ marginBottom: 20, padding: 12, backgroundColor: '#F9FAFB', borderRadius: 8 }}>
-                  <Text style={{ fontSize: 14, color: '#6B7280', marginBottom: 4 }}>Υπόλοιπο (χρέος):</Text>
+                  <Text style={{ fontSize: 14, color: '#6B7280', marginBottom: 4 }}>Υπόλοιπο (χρέος) μετά την πληρωμή:</Text>
                   <Text style={{ fontSize: 18, fontWeight: '600', color: isValid ? '#DC2626' : '#9CA3AF' }}>
-                    {isValid ? `${debt.toFixed(2)} €` : '—'}
+                    {isValid ? `${debtAfterPayment.toFixed(2)} €` : '—'}
                   </Text>
-                  {paid >= total && (
+                  {newPayment >= remainingToPay && (
                     <Text style={{ fontSize: 12, color: '#DC2626', marginTop: 4 }}>
-                      Το ποσό πρέπει να είναι μικρότερο από {totalCost} €
+                      Για πλήρη πληρωμή χρησιμοποιήστε το &quot;Ναι&quot;. Το ποσό πρέπει να είναι μικρότερο από {remainingToPay.toFixed(2)} €
                     </Text>
                   )}
-                  {paid <= 0 && partialPaymentAmount && (
+                  {newPayment <= 0 && partialPaymentAmount && (
                     <Text style={{ fontSize: 12, color: '#DC2626', marginTop: 4 }}>
                       Το ποσό πρέπει να είναι μεγαλύτερο από 0
                     </Text>
@@ -2935,12 +3048,24 @@ const savePieceModal = () => {
                 <Text style={{ color: '#374151', fontWeight: '600' }}>Ακύρωση</Text>
               </Pressable>
               <Pressable
-                onPress={() => {
+                onPress={async () => {
                   const total = parseFloat(totalCost) || 0
-                  const paid = parseFloat(partialPaymentAmount.replace(',', '.')) || 0
+                  const deposit = depositEnabled ? parseFloat((depositAmount || '0').replace(',', '.')) || 0 : 0
                   
-                  if (paid <= 0 || paid >= total) {
-                    Alert.alert('Σφάλμα', `Το ποσό πρέπει να είναι μεταξύ 0 και ${totalCost} €`)
+                  // Get already paid amount
+                  let alreadyPaid = 0
+                  try {
+                    alreadyPaid = await getTotalPaidForOrder(orderId)
+                  } catch {
+                    // Fallback: use deposit if payments table query fails
+                    alreadyPaid = deposit
+                  }
+                  
+                  const remainingToPay = Math.max(0, total - alreadyPaid)
+                  const newPayment = parseFloat(partialPaymentAmount.replace(',', '.')) || 0
+                  
+                  if (newPayment <= 0 || newPayment >= remainingToPay) {
+                    Alert.alert('Σφάλμα', `Το ποσό πρέπει να είναι μεταξύ 0.01 και ${(remainingToPay - 0.01).toFixed(2)} €. Για πλήρη πληρωμή χρησιμοποιήστε το "Ναι".`)
                     return
                   }
 
@@ -2949,16 +3074,12 @@ const savePieceModal = () => {
                   setOrderStatus('delivered')
                   setHasDebt(true)
                   
-                  // Store partial payment info in notes (format: PARTIAL_PAYMENT:amount)
-                  const currentNotes = notes || ''
-                  const partialPaymentNote = `PARTIAL_PAYMENT:${paid.toFixed(2)}`
-                  const updatedNotes = currentNotes 
-                    ? `${currentNotes} | ${partialPaymentNote}`
-                    : partialPaymentNote
-                  setNotes(updatedNotes)
+                  // Don't add partial payment info to notes - keep notes as user entered them
+                  // Notes remain unchanged
+                  // Keep partialPaymentAmount in state until order is saved (it will be cleared in onSave)
                   
                   setPartialPaymentModalOpen(false)
-                  setPartialPaymentAmount('')
+                  // Don't clear partialPaymentAmount here - keep it for when order is saved
                   setReturnsPromptOpen(true)
                 }}
                 style={{ flex: 1, backgroundColor: '#F59E0B', paddingVertical: 10, borderRadius: 8, alignItems: 'center' }}

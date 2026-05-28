@@ -1,7 +1,7 @@
 import { appSchema, tableSchema } from '@nozbe/watermelondb'
 
 export const schema = appSchema({
-  version: 2, 
+  version: 4, 
   tables: [
     // ===================== USERS =====================
     tableSchema({
@@ -137,9 +137,24 @@ export const schema = appSchema({
         { name: 'pickup_time_start', type: 'string', isOptional: true }, // HH:mm format (start time)
         { name: 'pickup_time_end', type: 'string', isOptional: true }, // HH:mm format (end time)
         { name: 'notes', type: 'string', isOptional: true },
+        { name: 'status', type: 'string', isIndexed: true, isOptional: true }, // 'new' | 'done'
         { name: 'created_by', type: 'string', isIndexed: true }, // -> users.id
         { name: 'created_at', type: 'number' },
         { name: 'last_modified_at', type: 'number' },
+      ],
+    }),
+
+    // ===================== PAYMENTS =====================
+    tableSchema({
+      name: 'payments',
+      columns: [
+        { name: 'order_id', type: 'string', isIndexed: true }, // -> orders.id
+        { name: 'amount', type: 'number' }, // Payment amount
+        { name: 'payment_type', type: 'string', isIndexed: true }, // 'deposit' | 'partial' | 'full'
+        { name: 'payment_method', type: 'string', isOptional: true }, // 'cash' | 'card' | 'bank' | 'mixed'
+        { name: 'notes', type: 'string', isOptional: true }, // Optional notes about the payment
+        { name: 'created_by', type: 'string', isIndexed: true }, // -> users.id
+        { name: 'created_at', type: 'number' },
       ],
     }),
   ],

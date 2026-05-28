@@ -28,7 +28,8 @@ import Page from '../components/Page'
 import { logExportHistoryPDF, logViewCustomerHistory } from '../services/activitylog'
 import { createCustomer, deleteCustomer, observeCustomers, updateCustomer } from '../services/customer'
 import { listOrderItemsByCustomer, listOrderItemsByOrder, normId, updateOrderItem } from '../services/orderItems'
-import { deleteOrderCascade, getOrderById, observeOrdersByCustomer, updateOrder } from '../services/orders'
+import { deleteOrderCascade, getOrderById, listOrdersByCustomer, observeOrdersByCustomer, updateOrder } from '../services/orders'
+import { createPayment, getTotalPaidForOrder } from '../services/payments'
 import { removeItemFromShelf } from '../services/warehouseItems'
 import { useAuth } from '../state/AuthProvider'
 import { usePreview } from '../state/PreviewProvider'
@@ -128,29 +129,8 @@ function composeNotes(desc: string, receiptNo: string, pricePerSqm: string) {
   return parts.join(' | ')
 }
 
-// Helper function to calculate debt amount from order
-function calculateDebtAmount(order: { totalAmount: number; deposit?: number | null; notes?: string | null; hasDebt?: boolean }): number {
-  if (!order.hasDebt) return 0
-  
-  // totalAmount is already the remaining balance (items cost - deposit)
-  // So the debt is the totalAmount minus any partial payments
-  
-  // Check for all partial payments in notes (format: PARTIAL_PAYMENT:XX.XX)
-  // We store the TOTAL paid amount in PARTIAL_PAYMENT, but handle multiple entries for backwards compatibility
-  const partialPaymentMatches = order.notes?.match(/PARTIAL_PAYMENT:(\d+\.?\d*)/g) || []
-  if (partialPaymentMatches.length > 0) {
-    // Sum all partial payments (in case there are multiple entries)
-    const totalPartialPaid = partialPaymentMatches.reduce((sum: number, match: string) => {
-      const amount = parseFloat(match.replace('PARTIAL_PAYMENT:', '')) || 0
-      return sum + amount
-    }, 0)
-    // totalAmount is already net of deposit, so we subtract total partial payments
-    return Math.max(0, order.totalAmount - totalPartialPaid)
-  }
-  
-  // If no partial payment, totalAmount is the debt (already net of deposit)
-  return order.totalAmount
-}
+// Note: Debt calculation now uses the payments table via getTotalPaidForOrder()
+// This function is kept for backwards compatibility but is no longer used
 
 // Helper function to extract average price per m² from order notes
 function extractAvgPricePerM2(notes?: string | null): string | null {
@@ -404,7 +384,7 @@ function KV({ label, value }: { label: string; value: string }) {
 /*  OrderCard  */
 function OrderCard({
   code, date, total, deposit, paymentMethod, notes, itemsCount,
-  expanded, onToggle, onViewItems, onEdit, onClose, status, onChangeStatus, hasDebt, onDeletePress, receiptNumber, deliveryDate,
+  expanded, onToggle, onViewItems, onEdit, onClose, status, onChangeStatus, hasDebt, onDeletePress, receiptNumber, deliveryDate, statusReadOnly,
 }: {
   code: string
   date: string
@@ -424,6 +404,7 @@ function OrderCard({
   onDeletePress: () => void
   receiptNumber?: string | null
   deliveryDate?: string | null
+  statusReadOnly?: boolean
 }) {
   return (
     <TouchableOpacity activeOpacity={0.9} onPress={onToggle} style={styles.orderCard}>
@@ -507,15 +488,31 @@ function OrderCard({
             {/* action bar */}
             <View style={styles.orderActionsRow}>
               {Platform.OS === 'web' ? <View style={{ flex: 1 }} /> : null}
-               {/* dropdown */}
+               {/* dropdown or read-only status */}
                 <View style={{ marginRight: 8 }}>
-                  <SimpleDropdown
-                    value={status}
-                    placeholder="Κατάσταση"
-                    options={ORDER_STATUS_OPTIONS}
-                    onChange={onChangeStatus}
-                    width={160}
-                  />
+                  {statusReadOnly ? (
+                    <View style={{ 
+                      paddingVertical: 8, 
+                      paddingHorizontal: 12, 
+                      backgroundColor: '#F3F4F6', 
+                      borderRadius: 8, 
+                      minWidth: 160,
+                      borderWidth: 1,
+                      borderColor: '#D1D5DB'
+                    }}>
+                      <Text style={{ fontSize: 14, color: '#6B7280', fontWeight: '500' }}>
+                        {status || 'Κατάσταση'}
+                      </Text>
+                    </View>
+                  ) : (
+                    <SimpleDropdown
+                      value={status}
+                      placeholder="Κατάσταση"
+                      options={ORDER_STATUS_OPTIONS}
+                      onChange={onChangeStatus}
+                      width={160}
+                    />
+                  )}
                 </View>
             <View
                 style={[
@@ -806,7 +803,8 @@ export default function CustomersScreen() {
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'details' | 'orders' | 'history'>('details')
   const [editMode, setEditMode] = useState(false)
-  const [orders, setOrders] = React.useState<any[]>([])
+  const [orders, setOrders] = React.useState<any[]>([]) // Active orders (non-delivered) for Orders tab
+  const [allOrdersForDebt, setAllOrdersForDebt] = React.useState<any[]>([]) // All orders (including delivered) for debt calculation
   const [ordersLoading, setOrdersLoading] = React.useState(false)
   const [expandedOrderId, setExpandedOrderId] = React.useState<string | null>(null)
   const [editErr, setEditErr] = useState({
@@ -860,6 +858,8 @@ const [showDebtPaymentModal, setShowDebtPaymentModal] = useState(false)
 const [debtOrderToPay, setDebtOrderToPay] = useState<string | null>(null)
 const [debtPartialPaymentModalOpen, setDebtPartialPaymentModalOpen] = useState(false)
 const [debtPartialPaymentAmount, setDebtPartialPaymentAmount] = useState<string>('')
+const [debtPartialPaymentTotalPaid, setDebtPartialPaymentTotalPaid] = useState<number>(0)
+const [debtPartialPaymentItemsTotal, setDebtPartialPaymentItemsTotal] = useState<number>(0)
 
 // Filters state
 type HistoryFilters = {
@@ -1021,26 +1021,161 @@ React.useEffect(() => {
         }
       })
 
-      // 3) enrich orders with itemsCount
+      // 3) enrich orders with itemsCount and calculate actual debt from items and payments
       const byOrder = groupItemsByOrder(itemsMapped);
-      const ordersWithCounts = ordersMapped.map(o => {
-      return {
-        ...o,
-       itemsCount: byOrder.get(normId(o.id))?.length ?? 0,  // normalize
-      };
-    });
+      const ordersWithCounts = await Promise.all(ordersMapped.map(async (o) => {
+        const orderItems = byOrder.get(normId(o.id)) || []
+        const itemsTotal = orderItems.reduce((sum: number, item: any) => {
+          const price = parseFloat(String(item.price || 0))
+          return sum + (isNaN(price) ? 0 : price)
+        }, 0)
+        
+        // Get total paid from payments table ONLY
+        let totalPaid = 0
+        try {
+          totalPaid = await getTotalPaidForOrder(o.id)
+          // If no payments found in payments table, check if this is an old order with deposit in order record
+          if (totalPaid === 0 && o.deposit && o.deposit > 0) {
+            // Old order: use deposit from order record (before payments table existed)
+            totalPaid = o.deposit
+          }
+        } catch (err) {
+          console.warn('Failed to fetch payments for order:', o.id, err)
+          // Fallback: use deposit from order record if payments table query fails
+          totalPaid = o.deposit || 0
+        }
+        
+        // Calculate actual remaining debt: items total - total paid (includes deposit + partial payments)
+        const calculatedDebt = o.hasDebt ? Math.max(0, itemsTotal - totalPaid) : 0
+        
+        return {
+          ...o,
+          itemsCount: orderItems.length,
+          calculatedDebt, // Store calculated debt for display
+        };
+      }));
 
       // 4) set state for both tabs
-      setOrders(ordersWithCounts); // Orders tab
-      setHistOrders(ordersMapped); // History tab (year/group)
+      // Filter out delivered orders from the Orders tab (they should only appear in History)
+      const activeOrders = ordersWithCounts.filter(o => {
+        const status = o.status ?? 'Νέα';
+        return status !== 'Παραδόθηκε';
+      });
+      setOrders(activeOrders); // Orders tab (excludes delivered)
+      setAllOrdersForDebt(ordersWithCounts); // All orders for debt calculation (includes delivered with debt)
+      setHistOrders(ordersMapped); // History tab (year/group) - includes all orders
       setHistItems(itemsMapped);   // History tab (category/color pie)
 
       // debug
       console.log('[DEBUG] orders:', ordersWithCounts.length, 'items:', itemsMapped.length);
     });
 
-  return () => { cancelled = true; sub?.unsubscribe?.(); };
-}, [detailsOpen, selectedCustomer]);
+  return () => {
+    cancelled = true;
+    sub.unsubscribe();
+  };
+}, [detailsOpen, selectedCustomer?.id]);
+
+// Function to manually reload customer orders and debt data (for immediate refresh after payment)
+const reloadCustomerOrders = React.useCallback(async () => {
+  if (!selectedCustomer || !detailsOpen) return;
+  
+  try {
+    // Fetch orders directly (not reactive)
+    const rows: any[] = await listOrdersByCustomer(selectedCustomer.id, { limit: 1000 });
+    
+    // 1) map orders
+    const ordersMapped = rows.map((r: any) => ({
+      id: r.id,
+      customerId: selectedCustomer.id,
+      paymentMethod: r.paymentMethod ?? '',
+      deposit: r.deposit ?? null,
+      totalAmount: r.totalAmount ?? 0,
+      notes: r.notes ?? null,
+      orderDate: r.orderDate,
+      createdAt: r.createdAt,
+      lastModifiedAt: r.lastModifiedAt,
+      status: r.orderStatus ?? 'Νέα',
+      hasDebt: r.hasDebt ?? false,
+      receiptNumber: r.receiptNumber ?? r?._raw?.receiptNumber ?? r?._raw?.receipt_number ?? null,
+    }));
+
+    //  fetch ALL items for this customer
+    const itemsRows: any[] = await listOrderItemsByCustomer(selectedCustomer.id, { limit: 5000 });
+
+    const itemsMapped = itemsRows.map((r: any) => {
+      const raw = r?._raw ?? {}
+      const orderId =
+        r.order_id ?? r.orderId ?? raw.order_id ?? raw.orderId ?? ''
+         const receiptNumber =
+          r.receiptNumber    ??
+          raw.receiptNumber  ??
+          raw.receipt_number ??
+          null
+
+      return {
+        id: r.id,
+        order_id: normId(orderId),                
+        item_code: r.item_code ?? raw.item_code ?? '',
+        category: r.category ?? raw.category ?? '',
+        color: r.color ?? raw.color ?? '',
+        price: (r.price ?? raw.price) ?? 0,
+        status: r.status ?? raw.status ?? '',
+        storage_status: r.storage_status ?? raw.storage_status ?? '',
+        order_date: r.order_date ?? raw.order_date ?? '',
+        created_at: r.created_at ?? raw.created_at,
+        receiptNumber,
+      }
+    })
+
+    // 3) enrich orders with itemsCount and calculate actual debt from items and payments
+    const byOrder = groupItemsByOrder(itemsMapped);
+    const ordersWithCounts = await Promise.all(ordersMapped.map(async (o) => {
+      const orderItems = byOrder.get(normId(o.id)) || []
+      const itemsTotal = orderItems.reduce((sum: number, item: any) => {
+        const price = parseFloat(String(item.price || 0))
+        return sum + (isNaN(price) ? 0 : price)
+      }, 0)
+      
+      // Get total paid from payments table ONLY
+      let totalPaid = 0
+      try {
+        totalPaid = await getTotalPaidForOrder(o.id)
+        // If no payments found in payments table, check if this is an old order with deposit in order record
+        if (totalPaid === 0 && o.deposit && o.deposit > 0) {
+          // Old order: use deposit from order record (before payments table existed)
+          totalPaid = o.deposit
+        }
+      } catch (err) {
+        console.warn('Failed to fetch payments for order:', o.id, err)
+        // Fallback: use deposit from order record if payments table query fails
+        totalPaid = o.deposit || 0
+      }
+      
+      // Calculate actual remaining debt: items total - total paid (includes deposit + partial payments)
+      const calculatedDebt = o.hasDebt ? Math.max(0, itemsTotal - totalPaid) : 0
+      
+      return {
+        ...o,
+        itemsCount: orderItems.length,
+        calculatedDebt, // Store calculated debt for display
+      };
+    }));
+
+    // 4) set state for both tabs
+    // Filter out delivered orders from the Orders tab (they should only appear in History)
+    const activeOrders = ordersWithCounts.filter(o => {
+      const status = o.status ?? 'Νέα';
+      return status !== 'Παραδόθηκε';
+    });
+    setOrders(activeOrders); // Orders tab (excludes delivered)
+    setAllOrdersForDebt(ordersWithCounts); // All orders for debt calculation (includes delivered with debt)
+    setHistOrders(ordersMapped); // History tab (year/group) - includes all orders
+    setHistItems(itemsMapped);   // History tab (category/color pie)
+  } catch (err) {
+    console.error('Failed to reload customer orders:', err)
+  }
+}, [selectedCustomer?.id, detailsOpen]);
 
 
 function totalsForYear(y: number) {
@@ -1528,14 +1663,50 @@ const [itemEdit, setItemEdit] = useState({
             };
           });
 
-          // itemsCount per order 
+          // itemsCount per order and calculate debt from items
           const byOrder = groupItemsByOrder(itemsMapped);
-          const withCounts = mapped.map(o => ({
-            ...o,
-            itemsCount: byOrder.get(normId(o.id))?.length ?? 0,
+          const withCounts = await Promise.all(mapped.map(async (o) => {
+            const orderItems = byOrder.get(normId(o.id)) || []
+            const itemsTotal = orderItems.reduce((sum: number, item: any) => {
+              const price = parseFloat(String(item.price || 0))
+              return sum + (isNaN(price) ? 0 : price)
+            }, 0)
+            
+            // Get total paid from payments table ONLY
+            let totalPaid = 0
+            try {
+              totalPaid = await getTotalPaidForOrder(o.id)
+              // If no payments found in payments table, check if this is an old order with deposit in order record
+              if (totalPaid === 0 && o.deposit && o.deposit > 0) {
+                // Old order: use deposit from order record (before payments table existed)
+                totalPaid = o.deposit
+              }
+            } catch (err) {
+              console.warn('Failed to fetch payments for order:', o.id, err)
+              // Fallback: use deposit from order record if payments table query fails
+              totalPaid = o.deposit || 0
+            }
+            
+            // Calculate actual remaining debt: items total - total paid (includes deposit + partial payments)
+            const calculatedDebt = o.hasDebt ? Math.max(0, itemsTotal - totalPaid) : 0
+            
+            return {
+              ...o,
+              itemsCount: orderItems.length,
+              calculatedDebt, // Store calculated debt for display
+            };
           }));
 
-          if (!cancelled) setOrders(withCounts);
+          // Filter out delivered orders from the Orders tab (they should only appear in History)
+          const activeOrders = withCounts.filter(o => {
+            const status = o.status ?? 'Νέα';
+            return status !== 'Παραδόθηκε';
+          });
+
+          if (!cancelled) {
+            setOrders(activeOrders); // Active orders for Orders tab
+            setAllOrdersForDebt(withCounts); // All orders for debt calculation (includes delivered with debt)
+          }
         } catch (e) {
           console.error('orders tab load failed', e);
           if (!cancelled) Alert.alert('Σφάλμα', 'Αποτυχία φόρτωσης παραγγελιών.');
@@ -1796,6 +1967,7 @@ async function doDeleteOrderNow(orderId: string) {
 
     // 2) Optimistic UI updates
     setOrders(prev => prev.filter(o => o.id !== orderId))
+    setAllOrdersForDebt(prev => prev.filter(o => o.id !== orderId))
     setHistOrders(prev => prev.filter(o => o.id !== orderId))
     setHistItems(prev => prev.filter(it => normId(it.order_id) !== normId(orderId)))
     setExpandedOrderId(prev => (prev === orderId ? null : prev))
@@ -3251,35 +3423,57 @@ const isWeb = Platform.OS === 'web';
                     )}
 
                     {/* Έχει χρέος */}
-                    {orders.some(o => o.hasDebt) && (
+                    {allOrdersForDebt.some(o => o.hasDebt) && (
                       <View style={styles.debtBox}>
                         <Text style={styles.debtTitle}>Χρέη παραγγελιών</Text>
 
-                        {orders
+                        {allOrdersForDebt
                           .filter(o => o.hasDebt)
-                          .map(o => {
-                            const debtAmount = calculateDebtAmount(o)
+                          .map((o, index) => {
+                            // Use calculatedDebt if available (calculated from items and payments), otherwise fallback
+                            const debtAmount = (o as any).calculatedDebt !== undefined 
+                              ? (o as any).calculatedDebt 
+                              : 0 // Will be calculated from items if needed
+                            
+                            // Debug: Log debt calculation details
+                            console.log('Debt Calculation Debug:', {
+                              orderId: o.id.slice(0, 6).toUpperCase(),
+                              calculatedDebt: (o as any).calculatedDebt,
+                              hasDebt: o.hasDebt,
+                              deposit: o.deposit,
+                              totalAmount: o.totalAmount,
+                              debtAmount,
+                            })
+                            
                             return (
-                            <Pressable
-                              key={o.id}
-                              onPress={() => {
-                                // Show payment confirmation modal instead of redirecting
-                                setDebtOrderToPay(o.id)
-                                setShowDebtPaymentModal(true)
-                              }}
-                              style={styles.debtRow}
-                            >
-                              <View style={styles.debtDot} />
-                              <View style={{ flex: 1 }}>
-                                <Text style={styles.debtText}>
-                                  Η παραγγελία <Text style={styles.debtCode}>#{o.id.slice(0, 6).toUpperCase()}</Text> έχει χρέος!
-                                </Text>
-                                <Text style={{ fontSize: 14, color: '#DC2626', fontWeight: '600', marginTop: 4 }}>
-                                  Ποσό: {fmtMoney(debtAmount)}
-                                </Text>
-                              </View>
-                              <Ionicons name="chevron-forward" size={16} color="#B91C1C" />
-                            </Pressable>
+                              <React.Fragment key={o.id}>
+                                {index > 0 && (
+                                  <>
+                                    <View style={{ height: 8 }} />
+                                    <View style={{ height: 1, backgroundColor: '#FECACA', marginVertical: 4 }} />
+                                    <View style={{ height: 8 }} />
+                                  </>
+                                )}
+                                <Pressable
+                                  onPress={() => {
+                                    // Show payment confirmation modal instead of redirecting
+                                    setDebtOrderToPay(o.id)
+                                    setShowDebtPaymentModal(true)
+                                  }}
+                                  style={styles.debtRow}
+                                >
+                                  <View style={styles.debtDot} />
+                                  <View style={{ flex: 1 }}>
+                                    <Text style={styles.debtText}>
+                                      Η παραγγελία <Text style={styles.debtCode}>#{o.id.slice(0, 6).toUpperCase()}</Text> έχει χρέος!
+                                    </Text>
+                                    <Text style={{ fontSize: 14, color: '#DC2626', fontWeight: '600', marginTop: 4 }}>
+                                      Ποσό: {fmtMoney(debtAmount)}
+                                    </Text>
+                                  </View>
+                                  <Ionicons name="chevron-forward" size={16} color="#B91C1C" />
+                                </Pressable>
+                              </React.Fragment>
                             )
                           })}
                       </View>
@@ -3426,22 +3620,34 @@ const isWeb = Platform.OS === 'web';
                     )}
 
                     {/* ΧΡΕΗ */}
-                    {orders.some(o=>o.hasDebt) && (
+                    {allOrdersForDebt.some(o=>o.hasDebt) && (
                       <View style={styles.debtBox}>
                         <Text style={styles.debtTitle}>Χρέη παραγγελιών</Text>
-                        {orders.filter(o=>o.hasDebt).map(o=>{
-                          const debtAmount = calculateDebtAmount(o)
+                        {allOrdersForDebt.filter(o=>o.hasDebt).map((o, index) => {
+                          // Use calculatedDebt if available (calculated from items and payments), otherwise fallback
+                          const debtAmount = (o as any).calculatedDebt !== undefined 
+                            ? (o as any).calculatedDebt 
+                            : 0 // Will be calculated from items if needed
                           return (
-                          <Pressable key={o.id} onPress={()=>{ setDebtOrderToPay(o.id); setShowDebtPaymentModal(true); }} style={styles.debtRow}>
-                            <View style={styles.debtDot} />
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.debtText}>Η παραγγελία <Text style={styles.debtCode}>#{o.id.slice(0,6).toUpperCase()}</Text> έχει χρέος!</Text>
-                              <Text style={{ fontSize: 14, color: '#DC2626', fontWeight: '600', marginTop: 4 }}>
-                                Ποσό: {fmtMoney(debtAmount)}
-                              </Text>
-                            </View>
-                            <Ionicons name="chevron-forward" size={16} color="#B91C1C" />
-                          </Pressable>
+                            <React.Fragment key={o.id}>
+                              {index > 0 && (
+                                <>
+                                  <View style={{ height: 8 }} />
+                                  <View style={{ height: 1, backgroundColor: '#FECACA', marginVertical: 4 }} />
+                                  <View style={{ height: 8 }} />
+                                </>
+                              )}
+                              <Pressable onPress={()=>{ setDebtOrderToPay(o.id); setShowDebtPaymentModal(true); }} style={styles.debtRow}>
+                                <View style={styles.debtDot} />
+                                <View style={{ flex: 1 }}>
+                                  <Text style={styles.debtText}>Η παραγγελία <Text style={styles.debtCode}>#{o.id.slice(0,6).toUpperCase()}</Text> έχει χρέος!</Text>
+                                  <Text style={{ fontSize: 14, color: '#DC2626', fontWeight: '600', marginTop: 4 }}>
+                                    Ποσό: {fmtMoney(debtAmount)}
+                                  </Text>
+                                </View>
+                                <Ionicons name="chevron-forward" size={16} color="#B91C1C" />
+                              </Pressable>
+                            </React.Fragment>
                           )
                         })}
                       </View>
@@ -3624,6 +3830,7 @@ const isWeb = Platform.OS === 'web';
 
                           onDeletePress={() => askDeleteOrder(item)}
                           receiptNumber={item.receiptNumber}
+                          statusReadOnly={true}
                         />
                       )}
                     />
@@ -4012,11 +4219,12 @@ const isWeb = Platform.OS === 'web';
           // ΌΧΙ = δεν πλήρωσε → Παραδόθηκε + hasDebt: true
           const id = confirmDelivered?.orderId
           if (id) {
-            setOrders(prev =>
-              prev.map(o =>
-                o.id === id ? { ...o, status: 'Παραδόθηκε', hasDebt: true } : o
-              )
-            )
+            // Remove from orders tab (delivered orders only appear in history)
+            setOrders(prev => prev.filter(o => o.id !== id))
+            // Update allOrdersForDebt to reflect the delivered status but keep it for debt calculation
+            setAllOrdersForDebt(prev => prev.map(o => 
+              o.id === id ? { ...o, status: 'Παραδόθηκε', hasDebt: true } : o
+            ))
             try {
               await updateOrder(id, { orderStatus: 'Παραδόθηκε', hasDebt: true }, userId)
               
@@ -4050,11 +4258,48 @@ const isWeb = Platform.OS === 'web';
           // ΝΑΙ = πλήρωσε --> Παραδόθηκε + hasDebt: false
           const id = confirmDelivered?.orderId
           if (id) {
-            setOrders(prev =>
-              prev.map(o =>
-                o.id === id ? { ...o, status: 'Παραδόθηκε', hasDebt: false } : o
-              )
-            )
+            // Calculate remaining amount to pay (items total - already paid)
+            try {
+              const order = allOrdersForDebt.find(o => o.id === id) || orders.find(o => o.id === id)
+              const orderItems = (histItems || []).filter((it: any) => normId(it.order_id) === normId(id))
+              const itemsTotal = orderItems.reduce((sum: number, item: any) => {
+                const price = parseFloat(String(item.price || 0))
+                return sum + (isNaN(price) ? 0 : price)
+              }, 0)
+              
+              // Get total already paid from payments table
+              let totalPaid = 0
+              try {
+                totalPaid = await getTotalPaidForOrder(id)
+              } catch {
+                // Fallback: use deposit from order record if payments table query fails
+                totalPaid = order?.deposit || 0
+              }
+              
+              // Calculate remaining amount to pay (full payment amount)
+              const remainingToPay = Math.max(0, itemsTotal - totalPaid)
+              
+              // Create full payment record if there's remaining amount
+              if (remainingToPay > 0) {
+                await createPayment({
+                  orderId: id,
+                  amount: remainingToPay,
+                  paymentType: 'full',
+                  paymentMethod: order?.paymentMethod || undefined,
+                  createdBy: userId,
+                })
+              }
+            } catch (err) {
+              console.warn('Failed to create full payment record:', err)
+              // Don't fail the order update if payment record creation fails
+            }
+            
+            // Remove from orders tab (delivered orders only appear in history)
+            setOrders(prev => prev.filter(o => o.id !== id))
+            // Update allOrdersForDebt to reflect the delivered status and remove debt
+            setAllOrdersForDebt(prev => prev.map(o => 
+              o.id === id ? { ...o, status: 'Παραδόθηκε', hasDebt: false } : o
+            ))
             try {
               await updateOrder(id, { orderStatus: 'Παραδόθηκε', hasDebt: false }, userId)
               
@@ -4072,6 +4317,9 @@ const isWeb = Platform.OS === 'web';
               } catch (e) {
                 console.error('Failed to remove items from shelves', e)
               }
+              
+              // Reload customer orders to update debt display immediately
+              await reloadCustomerOrders()
             } catch (e) {
               console.error('updateOrder (delivered, paid) failed', e)
               Alert.alert('Σφάλμα', 'Η ενημέρωση κατάστασης απέτυχε.')
@@ -4125,6 +4373,7 @@ const isWeb = Platform.OS === 'web';
         const orderId = confirmReadyForce.orderId
         setConfirmReadyForce(null)
         setOrders(prev => prev.map(o => (o.id === orderId ? { ...o, status: 'Έτοιμη', hasDebt: false } : o)))
+        setAllOrdersForDebt(prev => prev.map(o => (o.id === orderId ? { ...o, status: 'Έτοιμη', hasDebt: false } : o)))
         try {
           await updateOrder(orderId, { orderStatus: 'Έτοιμη', hasDebt: false }, userId)
           if (selectedCustomer) removePendingReturn(selectedCustomer.id, orderId)
@@ -4192,15 +4441,58 @@ const isWeb = Platform.OS === 'web';
                   // Mark as paid (hasDebt: false) and move to history (status: 'Παραδόθηκε')
                   const orderId = debtOrderToPay
                   
-                  // Update local state
-                  setOrders(prev => prev.map(o => 
-                    o.id === orderId 
-                      ? { ...o, status: 'Παραδόθηκε', hasDebt: false } 
-                      : o
+                  // Calculate remaining amount to pay (items total - already paid)
+                  try {
+                    const order = allOrdersForDebt.find(o => o.id === orderId) || orders.find(o => o.id === orderId)
+                    const orderItems = (histItems || []).filter((it: any) => normId(it.order_id) === normId(orderId))
+                    const itemsTotal = orderItems.reduce((sum: number, item: any) => {
+                      const price = parseFloat(String(item.price || 0))
+                      return sum + (isNaN(price) ? 0 : price)
+                    }, 0)
+                    
+                    // Get total already paid from payments table ONLY
+                    let totalPaid = 0
+                    try {
+                      totalPaid = await getTotalPaidForOrder(orderId)
+                      // If no payments found, use deposit from order record (old orders)
+                      if (totalPaid === 0 && order?.deposit && order.deposit > 0) {
+                        totalPaid = order.deposit
+                      }
+                    } catch {
+                      // Fallback: use deposit from order record if payments table query fails
+                      totalPaid = order?.deposit || 0
+                    }
+                    
+                    // Calculate remaining amount to pay (full payment amount)
+                    const remainingToPay = Math.max(0, itemsTotal - totalPaid)
+                    
+                    // Create full payment record if there's remaining amount
+                    if (remainingToPay > 0) {
+                      await createPayment({
+                        orderId,
+                        amount: remainingToPay,
+                        paymentType: 'full',
+                        paymentMethod: order?.paymentMethod || undefined,
+                        createdBy: userId,
+                      })
+                    }
+                  } catch (err) {
+                    console.warn('Failed to create full payment record:', err)
+                    // Don't fail the order update if payment record creation fails
+                  }
+                  
+                  // Remove from orders tab (delivered orders only appear in history)
+                  setOrders(prev => prev.filter(o => o.id !== orderId))
+                  // Update allOrdersForDebt to reflect the delivered status and remove debt
+                  setAllOrdersForDebt(prev => prev.map(o => 
+                    o.id === orderId ? { ...o, status: 'Παραδόθηκε', hasDebt: false } : o
                   ))
 
                   // Update database
                   await updateOrder(orderId, { orderStatus: 'Παραδόθηκε', hasDebt: false }, userId)
+                  
+                  // Reload customer orders to update debt display immediately
+                  await reloadCustomerOrders()
                   
                   // Close modal and reset
                   setShowDebtPaymentModal(false)
@@ -4220,9 +4512,41 @@ const isWeb = Platform.OS === 'web';
 
             {/* 2. Ναι, θα πληρώσω μερικώς */}
             <Pressable
-              onPress={() => {
-                setShowDebtPaymentModal(false)
-                setDebtPartialPaymentModalOpen(true)
+              onPress={async () => {
+                if (!debtOrderToPay) {
+                  setShowDebtPaymentModal(false)
+                  return
+                }
+                
+                // Load payment data before opening modal
+                try {
+                  const order = allOrdersForDebt.find(o => o.id === debtOrderToPay) || orders.find(o => o.id === debtOrderToPay)
+                  
+                  // Get items total for this order
+                  const orderItems = (histItems || []).filter((it: any) => normId(it.order_id) === normId(debtOrderToPay))
+                  const itemsTotal = orderItems.reduce((sum: number, item: any) => {
+                    const price = parseFloat(String(item.price || 0))
+                    return sum + (isNaN(price) ? 0 : price)
+                  }, 0)
+                  
+                  // Get total already paid from payments table
+                  let totalPaid = 0
+                  try {
+                    totalPaid = await getTotalPaidForOrder(debtOrderToPay)
+                  } catch (err) {
+                    console.warn('Failed to fetch payments, using fallback:', err)
+                    // Fallback: use deposit from order record if payments table query fails
+                    totalPaid = order?.deposit || 0
+                  }
+                  
+                  setDebtPartialPaymentItemsTotal(itemsTotal)
+                  setDebtPartialPaymentTotalPaid(totalPaid)
+                  setShowDebtPaymentModal(false)
+                  setDebtPartialPaymentModalOpen(true)
+                } catch (err) {
+                  console.error('Failed to load payment data:', err)
+                  Alert.alert('Σφάλμα', 'Αποτυχία φόρτωσης δεδομένων πληρωμής.')
+                }
               }}
               style={{ backgroundColor: '#F59E0B', paddingVertical: 12, paddingHorizontal: 20, borderRadius: 8, alignItems: 'center' }}
             >
@@ -4249,10 +4573,12 @@ const isWeb = Platform.OS === 'web';
       visible={debtPartialPaymentModalOpen}
       transparent
       animationType="fade"
-      onRequestClose={() => {
-        setDebtPartialPaymentModalOpen(false)
-        setDebtPartialPaymentAmount('')
-      }}
+        onRequestClose={() => {
+          setDebtPartialPaymentModalOpen(false)
+          setDebtPartialPaymentAmount('')
+          setDebtPartialPaymentTotalPaid(0)
+          setDebtPartialPaymentItemsTotal(0)
+        }}
     >
       <Pressable
         style={{
@@ -4265,6 +4591,8 @@ const isWeb = Platform.OS === 'web';
         onPress={() => {
           setDebtPartialPaymentModalOpen(false)
           setDebtPartialPaymentAmount('')
+          setDebtPartialPaymentTotalPaid(0)
+          setDebtPartialPaymentItemsTotal(0)
         }}
       >
         <Pressable
@@ -4282,23 +4610,16 @@ const isWeb = Platform.OS === 'web';
           </Text>
           
           {(() => {
-            const order = orders.find(o => o.id === debtOrderToPay)
+            const order = allOrdersForDebt.find(o => o.id === debtOrderToPay) || orders.find(o => o.id === debtOrderToPay)
+            const itemsTotal = debtPartialPaymentItemsTotal
+            const totalPaid = debtPartialPaymentTotalPaid
+            
+            // The remaining amount to pay is items total minus already paid
+            const amountToPay = Math.max(0, itemsTotal - totalPaid)
             const deposit = order?.deposit || 0
-            const totalAmount = order?.totalAmount || 0
-            // totalAmount is already net of deposit (remaining balance)
-            
-            // Calculate already paid partial payments from notes
-            const existingPartialPayments = order?.notes?.match(/PARTIAL_PAYMENT:(\d+\.?\d*)/g) || []
-            const totalPartialPaid = existingPartialPayments.reduce((sum: number, match: string) => {
-              const amount = parseFloat(match.replace('PARTIAL_PAYMENT:', '')) || 0
-              return sum + amount
-            }, 0)
-            
-            // The remaining amount to pay is totalAmount minus already paid partial payments
-            const amountToPay = Math.max(0, totalAmount - totalPartialPaid)
             const amountToPayStr = amountToPay.toFixed(2)
             const depositStr = deposit > 0 ? deposit.toFixed(2) : null
-            const totalCostWithDeposit = totalAmount + deposit
+            const totalCostWithDeposit = itemsTotal
             
             return (
               <>
@@ -4312,10 +4633,10 @@ const isWeb = Platform.OS === 'web';
                         <Text style={{ fontSize: 14, color: '#6B7280' }}>Προκαταβολή:</Text>
                         <Text style={{ fontSize: 14, color: '#6B7280', fontWeight: '500' }}>-{depositStr} €</Text>
                       </View>
-                      {totalPartialPaid > 0 && (
+                      {totalPaid > deposit && (
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                           <Text style={{ fontSize: 14, color: '#6B7280' }}>Πληρωμένα μερικώς:</Text>
-                          <Text style={{ fontSize: 14, color: '#6B7280', fontWeight: '500' }}>-{totalPartialPaid.toFixed(2)} €</Text>
+                          <Text style={{ fontSize: 14, color: '#6B7280', fontWeight: '500' }}>-{(totalPaid - deposit).toFixed(2)} €</Text>
                         </View>
                       )}
                       <View style={{ borderTopWidth: 1, borderTopColor: '#E5E7EB', marginTop: 8, paddingTop: 8 }}>
@@ -4327,12 +4648,12 @@ const isWeb = Platform.OS === 'web';
                   {!depositStr && (
                     <>
                       <Text style={{ fontSize: 14, color: '#6B7280', marginBottom: 4 }}>Συνολικό ποσό παραγγελίας:</Text>
-                      <Text style={{ fontSize: 20, fontWeight: '600', color: '#1F2A44', marginBottom: totalPartialPaid > 0 ? 8 : 0 }}>{totalAmount.toFixed(2)} €</Text>
-                      {totalPartialPaid > 0 && (
+                      <Text style={{ fontSize: 20, fontWeight: '600', color: '#1F2A44', marginBottom: totalPaid > 0 ? 8 : 0 }}>{itemsTotal.toFixed(2)} €</Text>
+                      {totalPaid > 0 && (
                         <>
                           <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                             <Text style={{ fontSize: 14, color: '#6B7280' }}>Πληρωμένα μερικώς:</Text>
-                            <Text style={{ fontSize: 14, color: '#6B7280', fontWeight: '500' }}>-{totalPartialPaid.toFixed(2)} €</Text>
+                            <Text style={{ fontSize: 14, color: '#6B7280', fontWeight: '500' }}>-{totalPaid.toFixed(2)} €</Text>
                           </View>
                           <View style={{ borderTopWidth: 1, borderTopColor: '#E5E7EB', marginTop: 8, paddingTop: 8 }}>
                             <Text style={{ fontSize: 14, color: '#374151', marginBottom: 4, fontWeight: '600' }}>Υπόλοιπο προς πληρωμή:</Text>
@@ -4412,18 +4733,12 @@ const isWeb = Platform.OS === 'web';
                         return
                       }
 
-                      const order = orders.find(o => o.id === debtOrderToPay)
-                      const totalAmount = order?.totalAmount || 0
+                      // Use pre-loaded payment data
+                      const itemsTotal = debtPartialPaymentItemsTotal
+                      const totalPaid = debtPartialPaymentTotalPaid
                       
-                      // Calculate already paid partial payments from notes
-                      const existingPartialPayments = order?.notes?.match(/PARTIAL_PAYMENT:(\d+\.?\d*)/g) || []
-                      const totalPartialPaid = existingPartialPayments.reduce((sum: number, match: string) => {
-                        const amount = parseFloat(match.replace('PARTIAL_PAYMENT:', '')) || 0
-                        return sum + amount
-                      }, 0)
-                      
-                      // The remaining amount to pay is totalAmount minus already paid partial payments
-                      const remainingToPay = Math.max(0, totalAmount - totalPartialPaid)
+                      // The remaining amount to pay is items total minus already paid
+                      const remainingToPay = Math.max(0, itemsTotal - totalPaid)
                       const newPayment = parseFloat(debtPartialPaymentAmount.replace(',', '.')) || 0
                       
                       if (newPayment <= 0 || newPayment >= remainingToPay) {
@@ -4434,45 +4749,53 @@ const isWeb = Platform.OS === 'web';
                       try {
                         const orderId = debtOrderToPay
                         
+                        // Create payment record in payments table
+                        await createPayment({
+                          orderId,
+                          amount: newPayment,
+                          paymentType: 'partial',
+                          paymentMethod: order?.paymentMethod || null,
+                          createdBy: userId,
+                        })
+                        
                         // Get current order to preserve existing notes
                         const currentOrder = await getOrderById(orderId)
                         const currentNotes = currentOrder.notes || ''
                         
-                        // Remove existing PARTIAL_PAYMENT notes
-                        const cleanedNotes = currentNotes.replace(/PARTIAL_PAYMENT:\d+\.?\d*/g, '').trim()
-                        
-                        // Calculate total paid amount (existing + new payment)
-                        const totalPaidAmount = totalPartialPaid + newPayment
-                        
-                        // Add new partial payment note with total paid amount
-                        const partialPaymentNote = `PARTIAL_PAYMENT:${totalPaidAmount.toFixed(2)}`
-                        const updatedNotes = cleanedNotes 
-                          ? `${cleanedNotes} | ${partialPaymentNote}`
-                          : partialPaymentNote
-
-                        // Update order with partial payment info and keep hasDebt: true
+                        // Update order - keep notes unchanged, keep hasDebt: true
                         await updateOrder(orderId, { 
-                          notes: updatedNotes,
+                          notes: currentNotes, // Keep notes exactly as they are
                           hasDebt: true 
                         }, userId)
                         
                         // Update local state
                         setOrders(prev => prev.map(o => 
                           o.id === orderId 
-                            ? { ...o, notes: updatedNotes, hasDebt: true } 
+                            ? { ...o, notes: currentNotes, hasDebt: true } 
+                            : o
+                        ))
+                        // Also update allOrdersForDebt for debt indicator
+                        setAllOrdersForDebt(prev => prev.map(o => 
+                          o.id === orderId 
+                            ? { ...o, notes: currentNotes, hasDebt: true } 
                             : o
                         ))
                         
                         // Close modal and reset
                         setDebtPartialPaymentModalOpen(false)
                         setDebtPartialPaymentAmount('')
-                        setDebtOrderToPay(null)
+                        setDebtPartialPaymentTotalPaid(0)
+                        setDebtPartialPaymentItemsTotal(0)
                         
                         // Calculate remaining debt
-                        const remainingDebt = Math.max(0, totalAmount - totalPaidAmount)
+                        const newTotalPaid = totalPaid + newPayment
+                        const remainingDebt = Math.max(0, itemsTotal - newTotalPaid)
                         
                         // Show success message
-                        Alert.alert('Επιτυχία', `Η μερική πληρωμή ${newPayment.toFixed(2)} € καταγράφηκε. Συνολικά πληρωμένα: ${totalPaidAmount.toFixed(2)} €. Υπόλοιπο: ${remainingDebt.toFixed(2)} €`)
+                        Alert.alert('Επιτυχία', `Η μερική πληρωμή ${newPayment.toFixed(2)} € καταγράφηκε. Συνολικά πληρωμένα: ${newTotalPaid.toFixed(2)} €. Υπόλοιπο: ${remainingDebt.toFixed(2)} €`)
+                        
+                        // Reload customer orders to update debt display immediately
+                        await reloadCustomerOrders()
                       } catch (e) {
                         console.error('updateOrder failed', e)
                         Alert.alert('Σφάλμα', 'Η ενημέρωση της παραγγελίας απέτυχε.')
@@ -4622,11 +4945,15 @@ const isWeb = Platform.OS === 'web';
                 }
 
                 try {
-                  // Update order status and delivery date
+                  // Get current order to preserve notes
+                  const currentOrder = await getOrderById(deliveryDateModalOrder.orderId);
+                  
+                  // Update order status and delivery date, preserving existing notes
                   await updateOrder(deliveryDateModalOrder.orderId, {
                     orderStatus: 'Προς παράδοση',
                     deliveryDate: finalDeliveryDate,
                     hasDebt: false,
+                    notes: currentOrder.notes || '', // Preserve existing notes
                   }, userId)
 
                   // Update local state

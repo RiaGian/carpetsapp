@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
@@ -20,6 +20,8 @@ import Page from '../components/Page';
 import { listCustomers } from '../services/customer';
 import { createOrderItem, existsItemCode } from '../services/orderItems';
 import { createOrder, NewOrder } from '../services/orders'; // + service insert
+import { createPayment } from '../services/payments';
+import { findActivePickupByCustomer, updatePickup } from '../services/pickups';
 import { useAuth } from '../state/AuthProvider'; // logged-in user
 
 type CustomerRow = {
@@ -144,7 +146,9 @@ const generateSequentialCodes = async (
 };
 
 export default function OrdersScreen() {
-
+  // Get customerId from route params (for pre-selection from pickup)
+  const params = useLocalSearchParams<{ customerId?: string }>();
+  const customerIdFromRoute = params.customerId ? String(params.customerId) : null;
 
   //current user from AuthProvider (refresh done)
   const { user, loading: authLoading } = useAuth();
@@ -152,6 +156,12 @@ export default function OrdersScreen() {
   // customers, ids, modals
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  
+  // Wrapper for setSelectedId to track changes
+  const setSelectedIdWithTracking = (id: string | null) => {
+    setSelectedId(id);
+    setHasUserMadeChanges(true);
+  };
   const [isModalOpen, setModalOpen] = useState(false);
   const [lockedDate, setLockedDate] = useState<string | null>(null);
 
@@ -181,6 +191,19 @@ export default function OrdersScreen() {
     fetchCustomers();
   }, [fetchCustomers]);
 
+  // Pre-select customer from route params will be handled after original values are declared
+
+  // Track unsaved changes
+  const [hasUserMadeChanges, setHasUserMadeChanges] = useState(false);
+  const [unsavedChangesModalOpen, setUnsavedChangesModalOpen] = useState(false);
+  
+  // Store original values to compare for unsaved changes
+  const [originalSelectedId, setOriginalSelectedId] = useState<string | null>(null);
+  const [originalPaymentMethod, setOriginalPaymentMethod] = useState<string | null>(null);
+  const [originalDepositAmount, setOriginalDepositAmount] = useState<string>('');
+  const [originalDepositEnabled, setOriginalDepositEnabled] = useState(false);
+  const [originalOrders, setOriginalOrders] = useState<OrderItem[]>([makeEmptyOrder()]);
+
   useFocusEffect(
     useCallback(() => {
       // refetch κάθε φορά που η οθόνη παίρνει focus (επιστροφή από "Νέος πελάτης")
@@ -195,10 +218,27 @@ export default function OrdersScreen() {
   //pay 
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<string | null>(null);
+  
+  // Wrapper for setPaymentMethod to track changes
+  const setPaymentMethodWithTracking = (method: string | null) => {
+    setPaymentMethod(method);
+    setHasUserMadeChanges(true);
+  };
 
   // pre pay
   const [depositEnabled, setDepositEnabled] = useState(false);
   const [depositAmount, setDepositAmount] = useState<string>('');
+  
+  // Wrapper for deposit changes to track changes
+  const setDepositEnabledWithTracking = (enabled: boolean) => {
+    setDepositEnabled(enabled);
+    setHasUserMadeChanges(true);
+  };
+  
+  const setDepositAmountWithTracking = (amount: string) => {
+    setDepositAmount(amount);
+    setHasUserMadeChanges(true);
+  };
 
   // types of pieces/ order items
   const categoryLabels = ['Χαλί', 'Μοκέτα', 'Πάπλωμα', 'Κουβέρτα', 'Κουρτίνα', 'Διαδρομάκι', 'Φλοκάτι'];
@@ -207,11 +247,48 @@ export default function OrdersScreen() {
   // create orders
   const [orders, setOrders] = useState<OrderItem[]>([makeEmptyOrder()]);
 
+  // Initialize original values when component mounts (after all state is declared)
+  // This runs once on mount to capture initial state
+  const hasInitialized = useRef(false);
+  useEffect(() => {
+    if (!hasInitialized.current) {
+      setOriginalSelectedId(selectedId);
+      setOriginalPaymentMethod(paymentMethod);
+      setOriginalDepositAmount(depositAmount);
+      setOriginalDepositEnabled(depositEnabled);
+      setOriginalOrders(JSON.parse(JSON.stringify(orders))); // Deep copy
+      setHasUserMadeChanges(false);
+      hasInitialized.current = true;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only on mount - intentionally empty to run once
+
+  // Pre-select customer from route params (without tracking changes)
+  // This handles both initial load and late customer loading
+  useEffect(() => {
+    if (customerIdFromRoute && customers.length > 0) {
+      const customerExists = customers.some(c => c.id === customerIdFromRoute);
+      if (customerExists && selectedId !== customerIdFromRoute) {
+        // Set the customer
+        setSelectedId(customerIdFromRoute);
+        // Update originalSelectedId to match ONLY if we haven't started tracking changes yet
+        // This ensures pre-selection doesn't count as a change
+        if (!hasUserMadeChanges && originalSelectedId !== customerIdFromRoute) {
+          setOriginalSelectedId(customerIdFromRoute);
+        }
+      }
+    }
+  }, [customerIdFromRoute, customers, selectedId, originalSelectedId, hasUserMadeChanges]);
+
   const updateOrder = (index: number, patch: Partial<OrderItem>) => {
     setOrders(prev => prev.map((o, i) => (i === index ? { ...o, ...patch } : o)));
+    setHasUserMadeChanges(true);
   };
 
-  const addOrder = () => setOrders(prev => [...prev, makeEmptyOrder()]);
+  const addOrder = () => {
+    setOrders(prev => [...prev, makeEmptyOrder()]);
+    setHasUserMadeChanges(true);
+  };
 
   useEffect(() => {
     const firstDate = orders[0]?.date;
@@ -236,6 +313,7 @@ export default function OrdersScreen() {
       if (prev.length <= 1) return prev; 
       return prev.filter((_, i) => i !== index);
     });
+    setHasUserMadeChanges(true);
   };
 
   // dd/mm/yyyy 
@@ -261,6 +339,58 @@ export default function OrdersScreen() {
   // pieces/ order items
   const [piecesVisible, setPiecesVisible] = useState(false);
   const [pieces, setPieces] = useState<PieceItem[]>([]);
+
+  // Check if there are unsaved changes (after all state is declared)
+  const hasUnsavedChanges = useMemo(() => {
+    if (!hasUserMadeChanges) return false; // No changes if user hasn't interacted yet
+    
+    // Check customer change
+    const customerChanged = selectedId !== originalSelectedId;
+    
+    // Check payment method change
+    const paymentMethodChanged = paymentMethod !== originalPaymentMethod;
+    
+    // Check deposit changes
+    const depositAmountChanged = depositAmount !== originalDepositAmount;
+    const depositEnabledChanged = depositEnabled !== originalDepositEnabled;
+    
+    // Check orders/pieces changes (simplified check - if orders array changed)
+    const ordersChanged = JSON.stringify(orders) !== JSON.stringify(originalOrders);
+    
+    // Check if pieces exist (user added items)
+    const hasPieces = pieces.length > 0;
+    
+    return customerChanged || paymentMethodChanged || depositAmountChanged || 
+           depositEnabledChanged || ordersChanged || hasPieces;
+  }, [hasUserMadeChanges, selectedId, originalSelectedId, paymentMethod, originalPaymentMethod,
+      depositAmount, originalDepositAmount, depositEnabled, originalDepositEnabled,
+      orders, originalOrders, pieces]);
+
+  // Handle back button with unsaved changes check
+  const handleBack = () => {
+    if (hasUnsavedChanges) {
+      setUnsavedChangesModalOpen(true);
+    } else {
+      // No unsaved changes, go back normally
+      try {
+        if ((router as any).canGoBack?.()) router.back();
+        else router.push('/dashboard');
+      } catch {
+        router.push('/dashboard');
+      }
+    }
+  };
+
+  // Handle navigation after saving or discarding changes
+  const proceedWithBack = () => {
+    setUnsavedChangesModalOpen(false);
+    try {
+      if ((router as any).canGoBack?.()) router.back();
+      else router.push('/dashboard');
+    } catch {
+      router.push('/dashboard');
+    }
+  };
 
   // error flags for item codes
   const [codeErrors, setCodeErrors] = useState<Record<number, boolean>>({});
@@ -424,6 +554,7 @@ export default function OrdersScreen() {
 
     setPieces(prev => [...prev, ...newOnes]);
     setPiecesVisible(true);
+    setHasUserMadeChanges(true);
 
     if (typeof index === 'number') {
       setOrders(prev => prev.map((o, k) => (k === index ? makeEmptyOrder() : o)));
@@ -437,6 +568,7 @@ export default function OrdersScreen() {
   // update pieces/ order items
   const updatePiece = (index: number, patch: Partial<PieceItem>) => {
     setPieces(prev => prev.map((p, i) => (i === index ? { ...p, ...patch } : p)));
+    setHasUserMadeChanges(true);
   };
 
   // order item's cost
@@ -449,6 +581,7 @@ export default function OrdersScreen() {
         return { ...p, cost: next.toFixed(2) };
       })
     );
+    setHasUserMadeChanges(true);
   };
 
   // delete order items
@@ -460,6 +593,7 @@ export default function OrdersScreen() {
       }
       return next;
     });
+    setHasUserMadeChanges(true);
   };
 
   const selectedCustomer = useMemo(() => customers.find(c => c.id === selectedId) || null, [customers, selectedId]);
@@ -553,11 +687,10 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
 
 
   const toggleDeposit = () => {
-    setDepositEnabled(prev => {
-      const next = !prev;
-      if (!next) setDepositAmount('');
-      return next;
-    });
+    setDepositEnabledWithTracking(!depositEnabled);
+    if (depositEnabled) {
+      setDepositAmountWithTracking('');
+    }
   };
   const [submitting, setSubmitting] = useState(false);
 
@@ -695,6 +828,35 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
       const orderId: string = created?.id;
       if (!orderId) throw new Error('createOrder did not return id');
 
+      // Create deposit payment record if deposit exists
+      if (deposit > 0) {
+        try {
+          await createPayment({
+            orderId,
+            amount: deposit,
+            paymentType: 'deposit',
+            paymentMethod: paymentMethod || undefined,
+            createdBy: currentUserId,
+          })
+        } catch (err) {
+          console.warn('Failed to create deposit payment record:', err)
+          // Don't fail order creation if payment record creation fails
+        }
+      }
+
+      // If order was created from a pickup (via customerIdFromRoute), mark the pickup as 'done'
+      if (customerIdFromRoute && selectedId === customerIdFromRoute) {
+        try {
+          const pickup = await findActivePickupByCustomer(customerIdFromRoute);
+          if (pickup) {
+            await updatePickup(pickup.id, { status: 'done' }, currentUserId);
+          }
+        } catch (err) {
+          console.warn('Failed to update pickup status:', err);
+          // Don't fail the order creation if pickup update fails
+        }
+      }
+
       // create order items
       const inserts = pieces.map(p => {
         const price = parseFloat((p.cost || '').replace(',', '.')) || 0;
@@ -746,13 +908,21 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
    
 
     // clear
-    setOrders([makeEmptyOrder()]);
+    const emptyOrder = makeEmptyOrder();
+    setOrders([emptyOrder]);
     setPieces([]);
     setPiecesVisible(false);
     setPaymentMethod(null);
     setDepositEnabled(false);
     setDepositAmount('');
     setNotes('');
+    setHasUserMadeChanges(false); // Reset changes tracking after successful save
+    // Reset original values
+    setOriginalSelectedId(null);
+    setOriginalPaymentMethod(null);
+    setOriginalDepositAmount('');
+    setOriginalDepositEnabled(false);
+    setOriginalOrders([emptyOrder]);
 
     // --> dashboard
     router.push('/dashboard');
@@ -761,7 +931,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
 
   return (
     <Page>
-      <AppHeader showBack />
+      <AppHeader showBack onBack={handleBack} />
 
       {/* Scroll and stable header  */}
       <ScrollView
@@ -848,7 +1018,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                     <Pressable
                       style={styles.dropdownItem}
                       onPress={() => {
-                        setPaymentMethod(key);
+                        setPaymentMethodWithTracking(key);
                         clearFieldErr(0, 'paymentMethod'); //  καθάρισε το error μόλις επιλεγεί
                         setPaymentOpen(false);
                       }}
@@ -924,7 +1094,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                 <View style={styles.amountInputWrap}>
                   <TextInput
                     value={depositAmount}
-                    onChangeText={setDepositAmount}
+                    onChangeText={setDepositAmountWithTracking}
                     placeholder="Ποσό προκαταβολής"
                     placeholderTextColor="#9CA3AF"
                     keyboardType={Platform.select({ ios: 'decimal-pad', android: 'numeric', default: 'numeric' })}
@@ -1339,7 +1509,9 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                   </Pressable>
 
                   <View style={styles.pieceInfo}>
-                    <Text style={styles.pieceTitle}>Τεμάχιο {i + 1}</Text>
+                    <Text style={styles.pieceTitle}>
+                      {p.code ? `${p.code}` : `Τεμάχιο ${i + 1}`}
+                    </Text>
                     <Text style={styles.pieceSubtitle}>
                       {Platform.OS === 'web'
                         ? `Κατηγορία: ${p.category ?? '—'}`
@@ -1623,7 +1795,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
                               { height: ROW_HEIGHT, paddingVertical: 0, alignItems: 'center' },
                             ]}
                             onPress={() => {
-                              setSelectedId(c.id);
+                              setSelectedIdWithTracking(c.id);
                                clearFieldErr(0, 'customer');
                               setModalOpen(false);
                             }}
@@ -1759,7 +1931,73 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
           </View>
         </Modal>
 
+      {/* Unsaved Changes Modal */}
+      <Modal
+        visible={unsavedChangesModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setUnsavedChangesModalOpen(false)}
+      >
+        <View style={{
+          flex: 1,
+          backgroundColor: 'rgba(0,0,0,0.4)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          padding: 24,
+        }}>
+          <View style={{
+            backgroundColor: '#fff',
+            borderRadius: 12,
+            padding: 24,
+            width: '90%',
+            maxWidth: 400,
+          }}>
+            <View style={{ marginBottom: 16 }}>
+              <Text style={{ fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 8 }}>
+                Μη Αποθηκευμένες Αλλαγές
+              </Text>
+              <Text style={{ fontSize: 15, color: '#6B7280', lineHeight: 22 }}>
+                Έχετε κάνει αλλαγές στην παραγγελία που δεν έχουν αποθηκευτεί. Αν συνεχίσετε, οι αλλαγές θα χαθούν.
+              </Text>
+            </View>
 
+            <View style={{ gap: 12, marginTop: 20 }}>
+              <Pressable
+                onPress={() => {
+                  setUnsavedChangesModalOpen(false);
+                  // Scroll to save button or highlight it
+                }}
+                style={{
+                  backgroundColor: '#3B82F6',
+                  paddingVertical: 12,
+                  paddingHorizontal: 20,
+                  borderRadius: 8,
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{ color: '#FFFFFF', fontWeight: '600', fontSize: 16 }}>
+                  Επιστροφή για Αποθήκευση
+                </Text>
+              </Pressable>
+
+              <Pressable
+                onPress={proceedWithBack}
+                style={{
+                  backgroundColor: '#F3F4F6',
+                  paddingVertical: 12,
+                  paddingHorizontal: 20,
+                  borderRadius: 8,
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{ color: '#374151', fontWeight: '600', fontSize: 16 }}>
+                  Αγνόηση Αλλαγών και Έξοδος
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
     </Page>
   );
