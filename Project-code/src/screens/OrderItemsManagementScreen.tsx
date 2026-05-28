@@ -179,6 +179,7 @@ export default function OrderItemsManagementScreen() {
   const [allOrderItems, setAllOrderItems] = useState<any[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const [itemsFilter, setItemsFilter] = useState<'all' | 'unwashed' | 'washed'>('all');
+  const [storageFilter, setStorageFilter] = useState<'all' | 'return' | 'keep'>('all');
   const [itemsSearchQuery, setItemsSearchQuery] = useState('');
   const [updatingItemId, setUpdatingItemId] = useState<string | null>(null);
   const [editingItem, setEditingItem] = useState<any | null>(null);
@@ -264,19 +265,68 @@ export default function OrderItemsManagementScreen() {
   const updateItemStatus = React.useCallback(async (itemId: string, newStatus: string) => {
     try {
       setUpdatingItemId(itemId);
+      
+      // Find the item to get order_id
+      const item = allOrderItems.find(it => it.id === itemId);
+      const orderId = item?.order_id;
+      
       await updateOrderItem(itemId, { status: newStatus }, userId);
       
       // Update local state
       setAllOrderItems(prev => prev.map(item => 
         item.id === itemId ? { ...item, status: newStatus } : item
       ));
+      
+      // Check if all items in the order are washed
+      if (orderId && newStatus.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').trim() === 'πλυμενο') {
+        try {
+          const orderItems = await listOrderItemsByOrder(orderId);
+          const allWashed = orderItems.every((it: any) => {
+            const status = String(it.status || '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').trim();
+            return status === 'πλυμενο';
+          });
+          
+          if (allWashed && orderItems.length > 0) {
+            // Get current order status
+            const order = await getOrderById(orderId);
+            const currentStatus = order.orderStatus || '';
+            
+            // Only update if not already "Έτοιμη" or "Προς παράδοση" or "Παραδόθηκε"
+            if (!['Έτοιμη', 'Προς παράδοση', 'Παραδόθηκε'].includes(currentStatus)) {
+              await updateOrder(orderId, { orderStatus: 'Έτοιμη' }, userId);
+              
+              // Get customer name
+              let customerName = '—';
+              if (order.customerId) {
+                try {
+                  const customers = database.get('customers');
+                  const customer: any = await customers.find(order.customerId);
+                  const firstName = customer.firstName || customer._raw?.first_name || '';
+                  const lastName = customer.lastName || customer._raw?.last_name || '';
+                  customerName = `${firstName} ${lastName}`.trim() || '—';
+                } catch (err) {
+                  console.warn('Failed to fetch customer name:', err);
+                }
+              }
+              
+              Alert.alert(
+                'Επιτυχία', 
+                `Η παραγγελία #${orderId.slice(0, 8)} (${customerName}) σηματοδοτήθηκε ως "Έτοιμη" επειδή όλα τα τεμάχια είναι πλυμένα.`
+              );
+            }
+          }
+        } catch (orderErr) {
+          console.warn('Failed to check/update order status:', orderErr);
+          // Don't show error to user, just log it
+        }
+      }
     } catch (err) {
       console.error('Failed to update item status:', err);
       Alert.alert('Σφάλμα', 'Αποτυχία ενημέρωσης κατάστασης τεμαχίου.');
     } finally {
       setUpdatingItemId(null);
     }
-  }, [userId]);
+  }, [userId, allOrderItems]);
 
   // Filter items
   const filteredOrderItems = React.useMemo(() => {
@@ -292,6 +342,19 @@ export default function OrderItemsManagementScreen() {
       filtered = filtered.filter(item => {
         const status = String(item.status || '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').trim();
         return status === 'πλυμενο';
+      });
+    }
+    
+    // Filter by storage status
+    if (storageFilter === 'return') {
+      filtered = filtered.filter(item => {
+        const storageStatus = String(item.storage_status || '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').trim();
+        return storageStatus.includes('επιστροφ') || storageStatus.includes('return');
+      });
+    } else if (storageFilter === 'keep') {
+      filtered = filtered.filter(item => {
+        const storageStatus = String(item.storage_status || '').toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').trim();
+        return storageStatus.includes('φυλαξ') || storageStatus.includes('keep') || storageStatus.includes('storage');
       });
     }
     
@@ -311,7 +374,7 @@ export default function OrderItemsManagementScreen() {
     }
     
     return filtered;
-  }, [allOrderItems, itemsFilter, itemsSearchQuery]);
+  }, [allOrderItems, itemsFilter, storageFilter, itemsSearchQuery]);
 
   return (
     <Page>
@@ -352,6 +415,34 @@ export default function OrderItemsManagementScreen() {
             >
               <Text style={[styles.filterBtnText, itemsFilter === 'washed' && styles.filterBtnTextActive]}>
                 Πλυμένα
+              </Text>
+            </Pressable>
+          </View>
+
+          {/* Storage Status Filter Buttons */}
+          <View style={[styles.filterButtons, { marginTop: 20, marginBottom: 20 }]}>
+            <Pressable
+              style={[styles.filterBtn, storageFilter === 'all' && { backgroundColor: '#F97316', borderColor: '#F97316' }]}
+              onPress={() => setStorageFilter('all')}
+            >
+              <Text style={[styles.filterBtnText, storageFilter === 'all' && { color: '#FFFFFF' }]}>
+                Όλα
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.filterBtn, storageFilter === 'return' && { backgroundColor: '#F97316', borderColor: '#F97316' }]}
+              onPress={() => setStorageFilter('return')}
+            >
+              <Text style={[styles.filterBtnText, storageFilter === 'return' && { color: '#FFFFFF' }]}>
+                Επιστροφή
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.filterBtn, storageFilter === 'keep' && { backgroundColor: '#F97316', borderColor: '#F97316' }]}
+              onPress={() => setStorageFilter('keep')}
+            >
+              <Text style={[styles.filterBtnText, storageFilter === 'keep' && { color: '#FFFFFF' }]}>
+                Φύλαξη
               </Text>
             </Pressable>
           </View>
@@ -473,6 +564,7 @@ export default function OrderItemsManagementScreen() {
           <Text style={styles.footerText}>
             {filteredOrderItems.length} {filteredOrderItems.length === 1 ? 'τεμάχιο' : 'τεμάχια'}
             {itemsFilter !== 'all' && ` (${itemsFilter === 'unwashed' ? 'Άπλυτα' : 'Πλυμένα'})`}
+            {storageFilter !== 'all' && ` · ${storageFilter === 'return' ? 'Επιστροφή' : 'Φύλαξη'}`}
           </Text>
         </View>
       </View>
@@ -523,6 +615,12 @@ function EditItemModal({
   const [area_m2, setAreaM2] = useState('');
   const [price_per_m2, setPricePerM2] = useState('');
 
+  // Check if category has dimensions (only Χαλί, Διαδρομάκι, Μοκέτα)
+  const hasDimensions = React.useMemo(() => {
+    const normalizedCategory = category.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').trim();
+    return ['χαλι', 'διαδρομακι', 'μοκετα'].includes(normalizedCategory);
+  }, [category]);
+
   // Load item data when modal opens
   React.useEffect(() => {
     if (!item) return;
@@ -539,9 +637,9 @@ function EditItemModal({
     // Don't set price here - let the calculation useEffect handle it after dimensions are loaded
   }, [item]);
 
-  // Calculate area_m2 automatically from length × width
+  // Calculate area_m2 automatically from length × width (only for categories with dimensions)
   React.useEffect(() => {
-    if (!item) return;
+    if (!item || !hasDimensions) return;
     
     // If both length and width are provided, calculate area
     if (length_m && width_m) {
@@ -566,12 +664,12 @@ function EditItemModal({
       setAreaM2('');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [length_m, width_m, item]);
+  }, [length_m, width_m, item, hasDimensions]);
 
-  // Calculate price automatically from dimensions - runs on every change
+  // Calculate price automatically from dimensions - runs on every change (only for categories with dimensions)
   React.useEffect(() => {
-    // Skip calculation if item hasn't loaded yet
-    if (!item) return;
+    // Skip calculation if item hasn't loaded yet or category doesn't have dimensions
+    if (!item || !hasDimensions) return;
 
     let calculatedPrice = 0;
 
@@ -599,14 +697,14 @@ function EditItemModal({
       setPrice(calculatedPrice.toFixed(2));
     } else {
       // If no dimensions are available, use the stored price; otherwise show 0.00
-      const hasDimensions = length_m || width_m || area_m2 || price_per_m2;
-      if (!hasDimensions) {
+      const hasDimensionValues = length_m || width_m || area_m2 || price_per_m2;
+      if (!hasDimensionValues) {
         setPrice(String(item.price ?? 0));
       } else {
         setPrice('0.00');
       }
     }
-  }, [length_m, width_m, area_m2, price_per_m2, item]);
+  }, [length_m, width_m, area_m2, price_per_m2, item, hasDimensions]);
 
   const onSubmit = async () => {
     if (!item) return;
@@ -786,73 +884,94 @@ function EditItemModal({
                     <View style={styles.formCol} />
                   </View>
 
-                  {/* Dimensions Section */}
-                  <View style={styles.sectionDivider}>
-                    <Text style={styles.sectionTitle}>Διαστάσεις</Text>
-                  </View>
+                  {/* Dimensions Section - Only show for Χαλί, Διαδρομάκι, Μοκέτα */}
+                  {hasDimensions && (
+                    <>
+                      <View style={styles.sectionDivider}>
+                        <Text style={styles.sectionTitle}>Διαστάσεις</Text>
+                      </View>
 
-                  {/* Row 5: Length & Width */}
-                  <View style={styles.formRow}>
-                    <View style={styles.formCol}>
-                      <Text style={styles.formLabel}>Μήκος (m)</Text>
-                      <TextInput
-                        style={styles.formInput}
-                        value={length_m}
-                        onChangeText={setLengthM}
-                        placeholder="0.00"
-                        keyboardType="decimal-pad"
-                      />
-                    </View>
-                    <View style={styles.formCol}>
-                      <Text style={styles.formLabel}>Πλάτος (m)</Text>
-                      <TextInput
-                        style={styles.formInput}
-                        value={width_m}
-                        onChangeText={setWidthM}
-                        placeholder="0.00"
-                        keyboardType="decimal-pad"
-                      />
-                    </View>
-                  </View>
+                      {/* Row 5: Length & Width */}
+                      <View style={styles.formRow}>
+                        <View style={styles.formCol}>
+                          <Text style={styles.formLabel}>Μήκος (m)</Text>
+                          <TextInput
+                            style={styles.formInput}
+                            value={length_m}
+                            onChangeText={setLengthM}
+                            placeholder="0.00"
+                            keyboardType="decimal-pad"
+                          />
+                        </View>
+                        <View style={styles.formCol}>
+                          <Text style={styles.formLabel}>Πλάτος (m)</Text>
+                          <TextInput
+                            style={styles.formInput}
+                            value={width_m}
+                            onChangeText={setWidthM}
+                            placeholder="0.00"
+                            keyboardType="decimal-pad"
+                          />
+                        </View>
+                      </View>
 
-                  {/* Row 6: Area & Price per m² */}
-                  <View style={styles.formRow}>
-                    <View style={styles.formCol}>
-                      <Text style={styles.formLabel}>Εμβαδόν (m²)</Text>
-                      <TextInput
-                        style={[styles.formInput, styles.formInputReadOnly]}
-                        value={area_m2}
-                        editable={false}
-                        placeholder="0.00"
-                        keyboardType="decimal-pad"
-                      />
-                    </View>
-                    <View style={styles.formCol}>
-                      <Text style={styles.formLabel}>Τιμή ανά m² (€)</Text>
-                      <TextInput
-                        style={[styles.formInput, styles.formInputReadOnly]}
-                        value={price_per_m2}
-                        editable={false}
-                        placeholder="0.00"
-                        keyboardType="decimal-pad"
-                      />
-                    </View>
-                  </View>
+                      {/* Row 6: Area & Price per m² */}
+                      <View style={styles.formRow}>
+                        <View style={styles.formCol}>
+                          <Text style={styles.formLabel}>Εμβαδόν (m²)</Text>
+                          <TextInput
+                            style={[styles.formInput, styles.formInputReadOnly]}
+                            value={area_m2}
+                            editable={false}
+                            placeholder="0.00"
+                            keyboardType="decimal-pad"
+                          />
+                        </View>
+                        <View style={styles.formCol}>
+                          <Text style={styles.formLabel}>Τιμή ανά m² (€)</Text>
+                          <TextInput
+                            style={[styles.formInput, styles.formInputReadOnly]}
+                            value={price_per_m2}
+                            editable={false}
+                            placeholder="0.00"
+                            keyboardType="decimal-pad"
+                          />
+                        </View>
+                      </View>
 
-                  {/* Price (calculated automatically) */}
-                  <View style={styles.formRow}>
-                    <View style={styles.formCol}>
-                      <Text style={styles.formLabel}>Τιμή (€)</Text>
-                      <TextInput
-                        style={[styles.formInput, styles.formInputReadOnly]}
-                        value={price}
-                        editable={false}
-                        placeholder="0.00"
-                        keyboardType="decimal-pad"
-                      />
+                      {/* Price (calculated automatically) */}
+                      <View style={styles.formRow}>
+                        <View style={styles.formCol}>
+                          <Text style={styles.formLabel}>Τιμή (€)</Text>
+                          <TextInput
+                            style={[styles.formInput, styles.formInputReadOnly]}
+                            value={price}
+                            editable={false}
+                            placeholder="0.00"
+                            keyboardType="decimal-pad"
+                          />
+                        </View>
+                        <View style={styles.formCol} />
+                      </View>
+                    </>
+                  )}
+
+                  {/* Price field for non-dimension categories */}
+                  {!hasDimensions && (
+                    <View style={styles.formRow}>
+                      <View style={styles.formCol}>
+                        <Text style={styles.formLabel}>Τιμή (€)</Text>
+                        <TextInput
+                          style={styles.formInput}
+                          value={price}
+                          onChangeText={setPrice}
+                          placeholder="0.00"
+                          keyboardType="decimal-pad"
+                        />
+                      </View>
+                      <View style={styles.formCol} />
                     </View>
-                    <View style={styles.formCol} />
-                  </View>
+                  )}
                 </ScrollView>
 
                 {/* Actions */}
