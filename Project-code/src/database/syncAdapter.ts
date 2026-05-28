@@ -191,67 +191,15 @@ export async function pullChanges(
           .map(record => validateRecord(record, 'updated'))
           .filter(record => record !== null)
         
-        // CRITICAL FIX: Filter out records that already exist locally
-        // This prevents WatermelonDB from trying to create records that were created locally
-        // and then synced to server (which then returns them as "created")
-        const filteredCreated: any[] = []
-        const filteredUpdated: any[] = []
-        
-        // Check which records already exist locally
-        await database.read(async () => {
-          const collection = database.get(tableName)
-          
-          for (const record of validatedCreated) {
-            try {
-              const existing = await collection.find(record.id).catch(() => null)
-              if (!existing) {
-                // Record doesn't exist locally - safe to create
-                filteredCreated.push(record)
-              } else {
-                // Record already exists locally - treat as update instead
-                console.warn(`[SYNC-DEBUG] Record ${record.id} in ${tableName} already exists locally, treating as update instead of create`)
-                filteredUpdated.push(record)
-              }
-            } catch {
-              // If check fails, include it anyway (let WatermelonDB handle it)
-              filteredCreated.push(record)
-            }
-          }
-          
-          for (const record of validatedUpdated) {
-            try {
-              const existing = await collection.find(record.id).catch(() => null)
-              if (existing) {
-                // Record exists - safe to update
-                filteredUpdated.push(record)
-              } else {
-                // Record doesn't exist - treat as create instead
-                console.warn(`[SYNC-DEBUG] Record ${record.id} in ${tableName} doesn't exist locally, treating as create instead of update`)
-                filteredCreated.push(record)
-              }
-            } catch {
-              // If check fails, include it anyway
-              filteredUpdated.push(record)
-            }
-          }
-        })
-        
         changes[tableName] = {
-          created: filteredCreated,
-          updated: filteredUpdated,
+          created: validatedCreated,
+          updated: validatedUpdated,
           deleted: tableData.deleted || [],
         }
         
         // Log deletions for debugging
         if (tableName === 'customers' && tableData.deleted && tableData.deleted.length > 0) {
           console.log(`[SYNC-DEBUG] 🗑️ Pulled ${tableData.deleted.length} customer deletion(s) from server:`, tableData.deleted)
-        }
-        
-        // Log if we filtered any records
-        if (tableName === 'customers') {
-          if (validatedCreated.length !== filteredCreated.length) {
-            console.log(`[SYNC-DEBUG] Filtered ${validatedCreated.length - filteredCreated.length} customer record(s) from created (already exist locally)`)
-          }
         }
       }
     }
