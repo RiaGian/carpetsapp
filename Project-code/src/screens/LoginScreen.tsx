@@ -96,7 +96,7 @@ function TypingText({
 
 /** LoginScreen */
 export default function LoginScreen() {
-  const { signIn } = useAuth()
+  const { signIn } = useAuth() // ✅ ΠΡΟΣΘΗΚΗ
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)

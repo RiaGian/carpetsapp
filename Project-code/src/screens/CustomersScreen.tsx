@@ -28,7 +28,7 @@ import Page from '../components/Page'
 import { logExportHistoryPDF, logViewCustomerHistory } from '../services/activitylog'
 import { createCustomer, deleteCustomer, observeCustomers, updateCustomer } from '../services/customer'
 import { listOrderItemsByCustomer, listOrderItemsByOrder, normId, updateOrderItem } from '../services/orderItems'
-import { deleteOrderCascade, getOrderById, observeOrdersByCustomer, updateOrder } from '../services/orders'
+import { deleteOrderCascade, observeOrdersByCustomer, updateOrder } from '../services/orders'
 import { removeItemFromShelf } from '../services/warehouseItems'
 import { useAuth } from '../state/AuthProvider'
 import { usePreview } from '../state/PreviewProvider'
@@ -129,26 +129,17 @@ function composeNotes(desc: string, receiptNo: string, pricePerSqm: string) {
 }
 
 // Helper function to calculate debt amount from order
-function calculateDebtAmount(order: { totalAmount: number; deposit?: number | null; notes?: string | null; hasDebt?: boolean }): number {
+function calculateDebtAmount(order: { totalAmount: number; notes?: string | null; hasDebt?: boolean }): number {
   if (!order.hasDebt) return 0
   
-  // totalAmount is already the remaining balance (items cost - deposit)
-  // So the debt is the totalAmount minus any partial payments
-  
-  // Check for all partial payments in notes (format: PARTIAL_PAYMENT:XX.XX)
-  // We store the TOTAL paid amount in PARTIAL_PAYMENT, but handle multiple entries for backwards compatibility
-  const partialPaymentMatches = order.notes?.match(/PARTIAL_PAYMENT:(\d+\.?\d*)/g) || []
-  if (partialPaymentMatches.length > 0) {
-    // Sum all partial payments (in case there are multiple entries)
-    const totalPartialPaid = partialPaymentMatches.reduce((sum: number, match: string) => {
-      const amount = parseFloat(match.replace('PARTIAL_PAYMENT:', '')) || 0
-      return sum + amount
-    }, 0)
-    // totalAmount is already net of deposit, so we subtract total partial payments
-    return Math.max(0, order.totalAmount - totalPartialPaid)
+  // Check for partial payment in notes (format: PARTIAL_PAYMENT:XX.XX)
+  const partialPaymentMatch = order.notes?.match(/PARTIAL_PAYMENT:(\d+\.?\d*)/)
+  if (partialPaymentMatch) {
+    const partialPaid = parseFloat(partialPaymentMatch[1]) || 0
+    return Math.max(0, order.totalAmount - partialPaid)
   }
   
-  // If no partial payment, totalAmount is the debt (already net of deposit)
+  // If no partial payment, full amount is debt
   return order.totalAmount
 }
 
@@ -858,8 +849,6 @@ const [confirmDeleteOrder, setConfirmDeleteOrder] = useState<{ orderId: string; 
 // Debt payment confirmation modal
 const [showDebtPaymentModal, setShowDebtPaymentModal] = useState(false)
 const [debtOrderToPay, setDebtOrderToPay] = useState<string | null>(null)
-const [debtPartialPaymentModalOpen, setDebtPartialPaymentModalOpen] = useState(false)
-const [debtPartialPaymentAmount, setDebtPartialPaymentAmount] = useState<string>('')
 
 // Filters state
 type HistoryFilters = {
@@ -1401,7 +1390,7 @@ async function exportHistoryYearPDF(year: number) {
       </html>
     `
 
-    //  WEB ΠΡΩΤΑ — χωρίς printToFileAsync
+    // 🔁 WEB ΠΡΩΤΑ — χωρίς printToFileAsync
     if (Platform.OS === 'web') {
       printHtmlWeb(html); 
       return
@@ -1904,38 +1893,29 @@ async function doDeleteOrderNow(orderId: string) {
     setCities([...cities, ''])
   }
   const addPhone = () => setPhones(prev => [...prev, ''])
-
   const updateAddress = (idx: number, val: string) =>
     setAddresses(prev => prev.map((a, i) => (i === idx ? val : a)))
-  
   const updatePhone = (idx: number, val: string) =>
     setPhones(prev => prev.map((p, i) => (i === idx ? val : p)))
-
   const removeAddress = (index: number) => {
     const newAddresses = addresses.filter((_, i) => i !== index)
     const newCities = cities.filter((_, i) => i !== index)
     setAddresses(newAddresses)
     setCities(newCities)
   }
-
   const removePhone = (idx: number) => setPhones(prev => prev.filter((_, i) => i !== idx))
 
   // INSERT new customer (as-is)
   async function handleSaveCustomer() {
     const cleanPhones = phones.map(p => p.trim()).filter(Boolean)
     const cleanAddresses = addresses.map(a => a.trim()).filter(Boolean)
-    const cleanCities    = cities.map(c => (c || '').trim())
+    const cleanCities    = cities.map(c => c.trim()) 
     const cleanAfm = afm.trim()
-    
-    // address & city goes "together"
-     const hasAddressAndCity = addresses.some((addr, idx) =>
-        addr.trim() && (cities[idx] || '').trim()
-      )
 
     const nextErrors = {
       firstName: !firstName.trim(),
       lastName: !lastName.trim(),
-      addresses: !hasAddressAndCity,
+      addresses: cleanAddresses.length === 0,
       phones: cleanPhones.length === 0,
     }
     setErrors(nextErrors)
@@ -1996,18 +1976,14 @@ async function doDeleteOrderNow(orderId: string) {
       setTimeout(() => {
         Alert.alert('OK', 'Ο πελάτης προστέθηκε.')
       }, 100)
-        } catch (err: any) {
-          const msg = (err?.message ?? String(err)).toString().toLowerCase()
-
-          if (msg.includes('αφμ') || msg.includes('afm')) {
-
-            setAfmError('Υπάρχει ήδη πελάτης με αυτό το ΑΦΜ.')
-            return
-          }
-
-          Alert.alert('Σφάλμα', 'Κάτι πήγε στραβά. Δοκίμασε ξανά.')
+      } catch (err: any) {
+        const msg = (err?.message ?? String(err)).toString()
+        if (msg.toLowerCase().includes('αφμ')) {
+          setAfmError(msg)   
+          return
         }
-
+        Alert.alert('Σφάλμα', 'Κάτι πήγε στραβά. Δοκίμασε ξανά.')
+      }
     }
 
 
@@ -2756,7 +2732,7 @@ const isWeb = Platform.OS === 'web';
               {/* Διευθύνσεις */}
               <View style={styles.group}>
                 <View style={styles.groupHeader}>
-                  <Text style={styles.label}>Διεύθυνση, Πόλη *</Text>
+                  <Text style={styles.label}>Διευθύνση, Πόλη *</Text>
                   <TouchableOpacity onPress={addAddress} style={styles.linkBtn}>
                     <Text style={styles.linkBtnText}>+ Προσθήκη</Text>
                   </TouchableOpacity>
@@ -2791,18 +2767,8 @@ const isWeb = Platform.OS === 'web';
                     {/* Πόλη */}
                     <TextInput
                       value={cities[idx] || ''}
-                      onChangeText={(v) => {
-                        updateCity(idx, v)
-                      
-                        if (errors.addresses && v.trim()) {
-                          setErrors((s) => ({ ...s, addresses: false }))
-                        }
-                      }}
-                      style={[
-                        styles.input,
-                        { flex: 0.8 },
-                        errors.addresses && idx === 0 && styles.inputError, 
-                      ]}
+                      onChangeText={(v) => updateCity(idx, v)}
+                      style={[styles.input, { flex: 0.8 }]}
                       placeholder="Πόλη"
                       placeholderTextColor={colors.muted}
                       autoCapitalize="words"
@@ -2822,7 +2788,7 @@ const isWeb = Platform.OS === 'web';
                 ))}
 
                 {errors.addresses && (
-                  <Text style={styles.errorText}>Πρέπει να προσθέσεις τουλάχιστον μία διεύθυνση και πόλη.</Text>
+                  <Text style={styles.errorText}>Πρέπει να προσθέσεις τουλάχιστον μία διεύθυνση.</Text>
                 )}
               </View>
 
@@ -2928,7 +2894,7 @@ const isWeb = Platform.OS === 'web';
                     placeholder="9 ψηφία"
                     placeholderTextColor={colors.muted}
                     maxLength={9}
-                    //  off
+                    // 🔒 off
                     autoComplete="off"
                     {...Platform.select({
                       ios:     { textContentType: 'none' as any },
@@ -2937,7 +2903,7 @@ const isWeb = Platform.OS === 'web';
                     })}
                   />
                   {afmError ? (
-                    <Text style={{ color: 'red', marginTop: 4, fontSize: 11 }}>{afmError}</Text>
+                    <Text style={{ color: 'red', marginTop: 4, fontSize: 11 }}>Το ΑΦΜ πρέπει να έχει 9 ψηφία.</Text>
                   ) : null}
                 </View>
 
@@ -4137,358 +4103,53 @@ const isWeb = Platform.OS === 'web';
     />
 
     {/* Debt Payment Confirmation Modal */}
-    <Modal
+    <ConfirmModal
       visible={showDebtPaymentModal}
-      transparent
-      animationType="fade"
-      onRequestClose={() => {
+      title="Επιβεβαίωση Πληρωμής"
+      message={
+        debtOrderToPay
+          ? `Η παραγγελία #${debtOrderToPay.slice(0, 6).toUpperCase()} έχει πληρωθεί τελικά;`
+          : 'Η παραγγελία έχει πληρωθεί τελικά;'
+      }
+      confirmText="Ναι, Πληρώθηκε"
+      cancelText="Ακύρωση"
+      onConfirm={async () => {
+        if (!debtOrderToPay) {
+          setShowDebtPaymentModal(false)
+          setDebtOrderToPay(null)
+          return
+        }
+
+        try {
+          // Mark as paid (hasDebt: false) and move to history (status: 'Παραδόθηκε')
+          const orderId = debtOrderToPay
+          
+          // Update local state
+          setOrders(prev => prev.map(o => 
+            o.id === orderId 
+              ? { ...o, status: 'Παραδόθηκε', hasDebt: false } 
+              : o
+          ))
+
+          // Update database
+          await updateOrder(orderId, { orderStatus: 'Παραδόθηκε', hasDebt: false }, userId)
+          
+          // Close modal and reset
+          setShowDebtPaymentModal(false)
+          setDebtOrderToPay(null)
+          
+          // Show success message
+          Alert.alert('Επιτυχία', 'Η παραγγελία σηματοδοτήθηκε ως πληρωμένη και μεταφέρθηκε στο ιστορικό.')
+        } catch (e) {
+          console.error('updateOrder failed', e)
+          Alert.alert('Σφάλμα', 'Η ενημέρωση της παραγγελίας απέτυχε.')
+        }
+      }}
+      onCancel={() => {
         setShowDebtPaymentModal(false)
         setDebtOrderToPay(null)
       }}
-    >
-      <Pressable
-        style={{
-          flex: 1,
-          backgroundColor: 'rgba(0,0,0,0.4)',
-          justifyContent: 'center',
-          alignItems: 'center',
-          padding: 24,
-        }}
-        onPress={() => {
-          setShowDebtPaymentModal(false)
-          setDebtOrderToPay(null)
-        }}
-      >
-        <Pressable
-          style={{
-            backgroundColor: '#fff',
-            borderRadius: 12,
-            padding: 24,
-            width: '90%',
-            maxWidth: 360,
-          }}
-          onPress={(e) => e.stopPropagation()}
-        >
-          <Text style={{ fontSize: 18, fontWeight: '600', marginBottom: 12, textAlign: 'center' }}>
-            Επιβεβαίωση Πληρωμής
-          </Text>
-          <Text style={{ fontSize: 16, textAlign: 'center', marginBottom: 24, color: '#374151' }}>
-            {debtOrderToPay
-              ? `Η παραγγελία #${debtOrderToPay.slice(0, 6).toUpperCase()} έχει πληρωθεί τελικά;`
-              : 'Η παραγγελία έχει πληρωθεί τελικά;'}
-          </Text>
-
-          <View style={{ gap: 12 }}>
-            {/* 1. Ναι, Πληρώθηκε */}
-            <Pressable
-              onPress={async () => {
-                if (!debtOrderToPay) {
-                  setShowDebtPaymentModal(false)
-                  setDebtOrderToPay(null)
-                  return
-                }
-
-                try {
-                  // Mark as paid (hasDebt: false) and move to history (status: 'Παραδόθηκε')
-                  const orderId = debtOrderToPay
-                  
-                  // Update local state
-                  setOrders(prev => prev.map(o => 
-                    o.id === orderId 
-                      ? { ...o, status: 'Παραδόθηκε', hasDebt: false } 
-                      : o
-                  ))
-
-                  // Update database
-                  await updateOrder(orderId, { orderStatus: 'Παραδόθηκε', hasDebt: false }, userId)
-                  
-                  // Close modal and reset
-                  setShowDebtPaymentModal(false)
-                  setDebtOrderToPay(null)
-                  
-                  // Show success message
-                  Alert.alert('Επιτυχία', 'Η παραγγελία σηματοδοτήθηκε ως πληρωμένη και μεταφέρθηκε στο ιστορικό.')
-                } catch (e) {
-                  console.error('updateOrder failed', e)
-                  Alert.alert('Σφάλμα', 'Η ενημέρωση της παραγγελίας απέτυχε.')
-                }
-              }}
-              style={{ backgroundColor: '#DC2626', paddingVertical: 12, paddingHorizontal: 20, borderRadius: 8, alignItems: 'center' }}
-            >
-              <Text style={{ color: 'white', fontWeight: '600' }}>Ναι, Πληρώθηκε</Text>
-            </Pressable>
-
-            {/* 2. Ναι, θα πληρώσω μερικώς */}
-            <Pressable
-              onPress={() => {
-                setShowDebtPaymentModal(false)
-                setDebtPartialPaymentModalOpen(true)
-              }}
-              style={{ backgroundColor: '#F59E0B', paddingVertical: 12, paddingHorizontal: 20, borderRadius: 8, alignItems: 'center' }}
-            >
-              <Text style={{ color: 'white', fontWeight: '600' }}>Ναι, θα πληρώσω μερικώς</Text>
-            </Pressable>
-
-            {/* 3. Ακύρωση */}
-            <Pressable
-              onPress={() => {
-                setShowDebtPaymentModal(false)
-                setDebtOrderToPay(null)
-              }}
-              style={{ backgroundColor: '#F3F4F6', paddingVertical: 12, paddingHorizontal: 20, borderRadius: 8, alignItems: 'center' }}
-            >
-              <Text style={{ color: '#374151', fontWeight: '600' }}>Ακύρωση</Text>
-            </Pressable>
-          </View>
-        </Pressable>
-      </Pressable>
-    </Modal>
-
-    {/* Debt Partial Payment Modal */}
-    <Modal
-      visible={debtPartialPaymentModalOpen}
-      transparent
-      animationType="fade"
-      onRequestClose={() => {
-        setDebtPartialPaymentModalOpen(false)
-        setDebtPartialPaymentAmount('')
-      }}
-    >
-      <Pressable
-        style={{
-          flex: 1,
-          backgroundColor: 'rgba(0,0,0,0.4)',
-          justifyContent: 'center',
-          alignItems: 'center',
-          padding: 24,
-        }}
-        onPress={() => {
-          setDebtPartialPaymentModalOpen(false)
-          setDebtPartialPaymentAmount('')
-        }}
-      >
-        <Pressable
-          style={{
-            backgroundColor: '#fff',
-            borderRadius: 12,
-            padding: 24,
-            width: '90%',
-            maxWidth: 360,
-          }}
-          onPress={(e) => e.stopPropagation()}
-        >
-          <Text style={{ fontSize: 18, fontWeight: '600', marginBottom: 12, textAlign: 'center' }}>
-            Μερική Πληρωμή
-          </Text>
-          
-          {(() => {
-            const order = orders.find(o => o.id === debtOrderToPay)
-            const deposit = order?.deposit || 0
-            const totalAmount = order?.totalAmount || 0
-            // totalAmount is already net of deposit (remaining balance)
-            
-            // Calculate already paid partial payments from notes
-            const existingPartialPayments = order?.notes?.match(/PARTIAL_PAYMENT:(\d+\.?\d*)/g) || []
-            const totalPartialPaid = existingPartialPayments.reduce((sum: number, match: string) => {
-              const amount = parseFloat(match.replace('PARTIAL_PAYMENT:', '')) || 0
-              return sum + amount
-            }, 0)
-            
-            // The remaining amount to pay is totalAmount minus already paid partial payments
-            const amountToPay = Math.max(0, totalAmount - totalPartialPaid)
-            const amountToPayStr = amountToPay.toFixed(2)
-            const depositStr = deposit > 0 ? deposit.toFixed(2) : null
-            const totalCostWithDeposit = totalAmount + deposit
-            
-            return (
-              <>
-                {/* Show total order amount and deposit info */}
-                <View style={{ marginBottom: 16 }}>
-                  {depositStr && (
-                    <>
-                      <Text style={{ fontSize: 14, color: '#6B7280', marginBottom: 4 }}>Συνολικό κόστος:</Text>
-                      <Text style={{ fontSize: 20, fontWeight: '600', color: '#1F2A44', marginBottom: 8 }}>{totalCostWithDeposit.toFixed(2)} €</Text>
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                        <Text style={{ fontSize: 14, color: '#6B7280' }}>Προκαταβολή:</Text>
-                        <Text style={{ fontSize: 14, color: '#6B7280', fontWeight: '500' }}>-{depositStr} €</Text>
-                      </View>
-                      {totalPartialPaid > 0 && (
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                          <Text style={{ fontSize: 14, color: '#6B7280' }}>Πληρωμένα μερικώς:</Text>
-                          <Text style={{ fontSize: 14, color: '#6B7280', fontWeight: '500' }}>-{totalPartialPaid.toFixed(2)} €</Text>
-                        </View>
-                      )}
-                      <View style={{ borderTopWidth: 1, borderTopColor: '#E5E7EB', marginTop: 8, paddingTop: 8 }}>
-                        <Text style={{ fontSize: 14, color: '#374151', marginBottom: 4, fontWeight: '600' }}>Υπόλοιπο προς πληρωμή:</Text>
-                        <Text style={{ fontSize: 20, fontWeight: '600', color: '#DC2626' }}>{amountToPayStr} €</Text>
-                      </View>
-                    </>
-                  )}
-                  {!depositStr && (
-                    <>
-                      <Text style={{ fontSize: 14, color: '#6B7280', marginBottom: 4 }}>Συνολικό ποσό παραγγελίας:</Text>
-                      <Text style={{ fontSize: 20, fontWeight: '600', color: '#1F2A44', marginBottom: totalPartialPaid > 0 ? 8 : 0 }}>{totalAmount.toFixed(2)} €</Text>
-                      {totalPartialPaid > 0 && (
-                        <>
-                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                            <Text style={{ fontSize: 14, color: '#6B7280' }}>Πληρωμένα μερικώς:</Text>
-                            <Text style={{ fontSize: 14, color: '#6B7280', fontWeight: '500' }}>-{totalPartialPaid.toFixed(2)} €</Text>
-                          </View>
-                          <View style={{ borderTopWidth: 1, borderTopColor: '#E5E7EB', marginTop: 8, paddingTop: 8 }}>
-                            <Text style={{ fontSize: 14, color: '#374151', marginBottom: 4, fontWeight: '600' }}>Υπόλοιπο προς πληρωμή:</Text>
-                            <Text style={{ fontSize: 20, fontWeight: '600', color: '#DC2626' }}>{amountToPayStr} €</Text>
-                          </View>
-                        </>
-                      )}
-                    </>
-                  )}
-                </View>
-
-                {/* Paid amount input */}
-                <View style={{ marginBottom: 16 }}>
-                  <Text style={{ fontSize: 14, color: '#374151', marginBottom: 8 }}>Ποσό που πληρώθηκε:</Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 8, paddingHorizontal: 12 }}>
-                    <TextInput
-                      value={debtPartialPaymentAmount}
-                      onChangeText={(text) => {
-                        // Only allow numbers, comma, and dot
-                        const cleaned = text.replace(/[^\d.,]/g, '')
-                        setDebtPartialPaymentAmount(cleaned)
-                      }}
-                      placeholder="0.00"
-                      keyboardType="decimal-pad"
-                      inputMode="decimal"
-                      style={{ flex: 1, fontSize: 16, paddingVertical: 10 }}
-                    />
-                    <Text style={{ fontSize: 16, color: '#6B7280', marginLeft: 8 }}>€</Text>
-                  </View>
-                </View>
-
-                {/* Calculate and show debt */}
-                {debtPartialPaymentAmount && (() => {
-                  const remainingToPay = parseFloat(amountToPayStr) || 0
-                  const newPayment = parseFloat(debtPartialPaymentAmount.replace(',', '.')) || 0
-                  const debtAfterPayment = remainingToPay - newPayment
-                  // Valid if payment is > 0 and < remainingToPay (not equal, to force full payment via "Ναι, Πληρώθηκε")
-                  const isValid = newPayment > 0 && newPayment < remainingToPay
-                  
-                  return (
-                    <View style={{ marginBottom: 20, padding: 12, backgroundColor: '#F9FAFB', borderRadius: 8 }}>
-                      <Text style={{ fontSize: 14, color: '#6B7280', marginBottom: 4 }}>Υπόλοιπο (χρέος) μετά την πληρωμή:</Text>
-                      <Text style={{ fontSize: 18, fontWeight: '600', color: isValid ? '#DC2626' : '#9CA3AF' }}>
-                        {isValid ? `${debtAfterPayment.toFixed(2)} €` : '—'}
-                      </Text>
-                      {newPayment >= remainingToPay && (
-                        <Text style={{ fontSize: 12, color: '#DC2626', marginTop: 4 }}>
-                          Για πλήρη πληρωμή χρησιμοποιήστε το &quot;Ναι, Πληρώθηκε&quot;. Το ποσό πρέπει να είναι μικρότερο από {amountToPayStr} €
-                        </Text>
-                      )}
-                      {newPayment <= 0 && debtPartialPaymentAmount && (
-                        <Text style={{ fontSize: 12, color: '#DC2626', marginTop: 4 }}>
-                          Το ποσό πρέπει να είναι μεγαλύτερο από 0
-                        </Text>
-                      )}
-                    </View>
-                  )
-                })()}
-
-                {/* Action buttons */}
-                <View style={{ flexDirection: 'row', gap: 12 }}>
-                  <Pressable
-                    onPress={() => {
-                      setDebtPartialPaymentModalOpen(false)
-                      setDebtPartialPaymentAmount('')
-                      setShowDebtPaymentModal(true)
-                    }}
-                    style={{ flex: 1, backgroundColor: '#F3F4F6', paddingVertical: 10, borderRadius: 8, alignItems: 'center' }}
-                  >
-                    <Text style={{ color: '#374151', fontWeight: '600' }}>Ακύρωση</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={async () => {
-                      if (!debtOrderToPay) {
-                        setDebtPartialPaymentModalOpen(false)
-                        setDebtPartialPaymentAmount('')
-                        return
-                      }
-
-                      const order = orders.find(o => o.id === debtOrderToPay)
-                      const totalAmount = order?.totalAmount || 0
-                      
-                      // Calculate already paid partial payments from notes
-                      const existingPartialPayments = order?.notes?.match(/PARTIAL_PAYMENT:(\d+\.?\d*)/g) || []
-                      const totalPartialPaid = existingPartialPayments.reduce((sum: number, match: string) => {
-                        const amount = parseFloat(match.replace('PARTIAL_PAYMENT:', '')) || 0
-                        return sum + amount
-                      }, 0)
-                      
-                      // The remaining amount to pay is totalAmount minus already paid partial payments
-                      const remainingToPay = Math.max(0, totalAmount - totalPartialPaid)
-                      const newPayment = parseFloat(debtPartialPaymentAmount.replace(',', '.')) || 0
-                      
-                      if (newPayment <= 0 || newPayment >= remainingToPay) {
-                        Alert.alert('Σφάλμα', `Το ποσό πρέπει να είναι μεταξύ 0.01 και ${(remainingToPay - 0.01).toFixed(2)} €. Για πλήρη πληρωμή χρησιμοποιήστε το "Ναι, Πληρώθηκε".`)
-                        return
-                      }
-
-                      try {
-                        const orderId = debtOrderToPay
-                        
-                        // Get current order to preserve existing notes
-                        const currentOrder = await getOrderById(orderId)
-                        const currentNotes = currentOrder.notes || ''
-                        
-                        // Remove existing PARTIAL_PAYMENT notes
-                        const cleanedNotes = currentNotes.replace(/PARTIAL_PAYMENT:\d+\.?\d*/g, '').trim()
-                        
-                        // Calculate total paid amount (existing + new payment)
-                        const totalPaidAmount = totalPartialPaid + newPayment
-                        
-                        // Add new partial payment note with total paid amount
-                        const partialPaymentNote = `PARTIAL_PAYMENT:${totalPaidAmount.toFixed(2)}`
-                        const updatedNotes = cleanedNotes 
-                          ? `${cleanedNotes} | ${partialPaymentNote}`
-                          : partialPaymentNote
-
-                        // Update order with partial payment info and keep hasDebt: true
-                        await updateOrder(orderId, { 
-                          notes: updatedNotes,
-                          hasDebt: true 
-                        }, userId)
-                        
-                        // Update local state
-                        setOrders(prev => prev.map(o => 
-                          o.id === orderId 
-                            ? { ...o, notes: updatedNotes, hasDebt: true } 
-                            : o
-                        ))
-                        
-                        // Close modal and reset
-                        setDebtPartialPaymentModalOpen(false)
-                        setDebtPartialPaymentAmount('')
-                        setDebtOrderToPay(null)
-                        
-                        // Calculate remaining debt
-                        const remainingDebt = Math.max(0, totalAmount - totalPaidAmount)
-                        
-                        // Show success message
-                        Alert.alert('Επιτυχία', `Η μερική πληρωμή ${newPayment.toFixed(2)} € καταγράφηκε. Συνολικά πληρωμένα: ${totalPaidAmount.toFixed(2)} €. Υπόλοιπο: ${remainingDebt.toFixed(2)} €`)
-                      } catch (e) {
-                        console.error('updateOrder failed', e)
-                        Alert.alert('Σφάλμα', 'Η ενημέρωση της παραγγελίας απέτυχε.')
-                      }
-                    }}
-                    style={{ flex: 1, backgroundColor: '#F59E0B', paddingVertical: 10, borderRadius: 8, alignItems: 'center' }}
-                  >
-                    <Text style={{ color: 'white', fontWeight: '600' }}>Επιβεβαίωση</Text>
-                  </Pressable>
-                </View>
-              </>
-            )
-          })()}
-        </Pressable>
-      </Pressable>
-    </Modal>
+    />
 
     {/* Delivery Date/Time Modal */}
     <Modal

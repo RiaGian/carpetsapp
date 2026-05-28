@@ -590,46 +590,39 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
 
   // (INSERT) - create order + insert order_items
   const onCreateOrder = async () => {
-  try {
-    if (submitting) return;
+    try {
+      if (submitting) return;
 
-    // === validation για Πελάτη & Πληρωμή ===
-    let hasError = false;
+      // check if customer is selected
+      if (!selectedId) {
+        flagFieldErr(0, { customer: 'required' }); 
+        Alert.alert('Προσοχή', 'Παρακαλώ επιλέξτε πελάτη.');
+        return;
+      } else {
+        clearFieldErr(0, 'customer'); // clear if chosen
+      }
 
-    // Πελάτης υποχρεωτικός
-    if (!selectedId) {
-      flagFieldErr(0, { customer: 'required' });
-      hasError = true;
-    } else {
-      clearFieldErr(0, 'customer');
-    }
+      if (pieces.length === 0) {
+        Alert.alert('Προσοχή', 'Η παραγγελία πρέπει να περιέχει τουλάχιστον 1 τεμάχιο.');
+        return;
+      }
 
-    // Πληρωμή υποχρεωτική
-    if (!paymentMethod) {
-      flagFieldErr(0, { paymentMethod: 'required' });
-      hasError = true;
-    } else {
-      clearFieldErr(0, 'paymentMethod');
-    }
+      // cheack if payment method is selected
+      if (!paymentMethod) {
+        flagFieldErr(0, { paymentMethod: 'required' });
+        Alert.alert('Προσοχή', 'Παρακαλώ επιλέξτε τρόπο πληρωμής.');
+        setSubmitting(false);
+        return;
+      } else {
+        clearFieldErr(0, 'paymentMethod');
+      }
 
-    // Αν λείπει είτε ο πελάτης είτε η πληρωμή (ή και τα δύο)
-    if (hasError) {
-      Alert.alert('Προσοχή', 'Παρακαλώ συμπληρώστε τα πεδία Πελάτης και Πληρωμή.');
-      return;
-    }
-
-    // Τουλάχιστον 1 τεμάχιο
-    if (pieces.length === 0) {
-      Alert.alert('Προσοχή', 'Η παραγγελία πρέπει να περιέχει τουλάχιστον 1 τεμάχιο.');
-      return;
-    }
-
-    // check if user is logged in
-    if (!user?.id) {
-      Alert.alert('Προσοχή', 'Δεν υπάρχει συνδεδεμένος χρήστης.');
-      return;
-    }
-    const currentUserId = user.id;
+      // check if user is logged in
+      if (!user?.id) {
+        Alert.alert('Προσοχή', 'Δεν υπάρχει συνδεδεμένος χρήστης.');
+        return;
+      }
+      const currentUserId = user.id; 
 
       // dd/mm/yyy
       const orderDateDefault = (() => {
@@ -679,8 +672,7 @@ const goNext = () => setPage(p => Math.min(totalPages, p + 1));
 
       // === Δημιουργία παραγγελίας ===
       const payload: NewOrder = {
-        customerId: selectedId!,
-
+        customerId: selectedId,
         paymentMethod: paymentMethod ?? '',
         deposit,
         totalAmount,
