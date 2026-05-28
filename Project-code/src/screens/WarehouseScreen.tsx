@@ -71,6 +71,7 @@ export default function WarehouseScreen() {
   const [showShelfDetail, setShowShelfDetail] = useState(false);
   const [selectedShelfDetail, setSelectedShelfDetail] = useState<ShelfData | null>(null);
   const [showOverview, setShowOverview] = useState(false)
+  const [showItemsModal, setShowItemsModal] = useState(false);
 
   const [shelfSearchIndexById, setShelfSearchIndexById] = useState<Record<string, string>>({});
   const [shelfSearchIndexByCode, setShelfSearchIndexByCode] = useState<Record<string, string>>({});
@@ -312,7 +313,7 @@ export default function WarehouseScreen() {
 
           <Pressable
             style={styles.previewBtn}
-            onPress={() => router.push('/orderitems' as any)}
+            onPress={() => setShowItemsModal(true)}
           >
             <Ionicons name="list" size={18} color={colors.primary} />
             <Text style={styles.previewBtnText}>Τεμάχια</Text>
@@ -359,7 +360,7 @@ export default function WarehouseScreen() {
           <View style={styles.mobileActionsRow}>
             <Pressable
               style={[styles.previewBtn, { marginRight: 8 }]}
-              onPress={() => router.push('/orderitems' as any)}
+              onPress={() => setShowItemsModal(true)}
             >
               <Ionicons name="list" size={18} color={colors.primary} />
               <Text style={styles.previewBtnText}>Τεμάχια</Text>
@@ -574,6 +575,10 @@ export default function WarehouseScreen() {
       }}
     />
 
+    <ItemsModal
+      visible={showItemsModal}
+      onClose={() => setShowItemsModal(false)}
+    />
 
     {/* Success Message */}
     {showSuccess && (

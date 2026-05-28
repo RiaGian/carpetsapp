@@ -52,7 +52,6 @@ export default function DashboardScreen() {
   const [historyItemsPreview, setHistoryItemsPreview] = useState<HistoryItem[]>([]);
   const [historyOrdersPreview, setHistoryOrdersPreview] = useState<HistoryOrder[]>([]);
   const [activeOrdersPreview, setActiveOrdersPreview] = useState<any[]>([]);
-  const [activeOrdersTotal, setActiveOrdersTotal] = useState<number>(0);
   const [readyForDeliveryOrders, setReadyForDeliveryOrders] = useState<any[]>([]);
   const [pickups, setPickups] = useState<any[]>([]);
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string>(
@@ -69,8 +68,6 @@ export default function DashboardScreen() {
   const [pickupSearchQuery, setPickupSearchQuery] = useState('');
   const [pickupDebouncedQuery, setPickupDebouncedQuery] = useState('');
   const previousCustomerCountRef = useRef<number>(0);
-  const [pickupCustomersPage, setPickupCustomersPage] = useState(1);
-  const pickupCustomersPerPage = 10;
   
   const [creatingPickup, setCreatingPickup] = useState(false);
 
@@ -135,11 +132,8 @@ export default function DashboardScreen() {
   // Live observe active orders (not delivered)
   useFocusEffect(
     useCallback(() => {
-      const sub = observeActiveOrders(1000).subscribe((rows: any[]) => {
-        // Set total count
-        setActiveOrdersTotal(rows.length);
-        
-        // Transform to preview format with customer names (only first 10 for display)
+      const sub = observeActiveOrders(50).subscribe((rows: any[]) => {
+        // Transform to preview format with customer names
         const ordersPreview = rows.slice(0, 10).map((r: any) => {
           const customer = r.customer?._raw || r.customer || {};
           const customerName = customer.first_name && customer.last_name
@@ -223,12 +217,11 @@ export default function DashboardScreen() {
     }, [])
   );
 
-  // Reset search and pagination when modal closes
+  // Reset search when modal closes
   React.useEffect(() => {
     if (!pickupModalOpen) {
       setPickupSearchQuery('');
       setPickupDebouncedQuery('');
-      setPickupCustomersPage(1);
     }
   }, [pickupModalOpen]);
 
@@ -261,20 +254,6 @@ export default function DashboardScreen() {
       return hay.includes(nq);
     });
   }, [pickupDebouncedQuery, pickupCustomers]);
-
-  // Paginate filtered customers
-  const paginatedPickupCustomers = React.useMemo(() => {
-    const startIndex = (pickupCustomersPage - 1) * pickupCustomersPerPage;
-    const endIndex = startIndex + pickupCustomersPerPage;
-    return filteredPickupCustomers.slice(startIndex, endIndex);
-  }, [filteredPickupCustomers, pickupCustomersPage, pickupCustomersPerPage]);
-
-  const totalPickupCustomersPages = Math.ceil(filteredPickupCustomers.length / pickupCustomersPerPage);
-
-  // Reset to page 1 when search query changes
-  React.useEffect(() => {
-    setPickupCustomersPage(1);
-  }, [pickupDebouncedQuery]);
 
   // Live observe ready for delivery orders (for calendar)
   useFocusEffect(
@@ -530,6 +509,7 @@ export default function DashboardScreen() {
   const goActivityLog = () => router.push('/activitylog');
   const goHistory     = () => router.push('/history');
   const goActiveOrders = () => router.push('/activeorders' as any);
+  const openItemsModal = () => router.push('/orderitems');
 
   const CARDS = [
     { key: 'customers', title: 'Πελάτες', bg: '#E9F2FF', icon: 'people-outline', onPress: goCustomers },
@@ -550,6 +530,15 @@ export default function DashboardScreen() {
       >
 
       <View ref={ref} style={styles.content}>
+        {/* Items Management Button */}
+        <Pressable
+          onPress={openItemsModal}
+          style={styles.itemsManagementButton}
+        >
+          <Ionicons name="layers-outline" size={Platform.OS !== 'web' ? 18 : 20} color="#FFFFFF" />
+          <Text style={styles.itemsManagementButtonText}>Διαχείριση Τεμαχίων</Text>
+        </Pressable>
+
         {/* Πάνω 4 κάρτες */}
         <View
           style={[
@@ -581,7 +570,6 @@ export default function DashboardScreen() {
               warehousePreview={c.key === 'warehouse' ? warehousePreview : null}
               activityCounts={activityCounts}
               activeOrdersPreview={c.key === 'activeorders' ? activeOrdersPreview : null}
-              activeOrdersTotal={c.key === 'activeorders' ? activeOrdersTotal : null}
             />
           ))}
         </View>
@@ -593,7 +581,6 @@ export default function DashboardScreen() {
             <StatCard title="Τεμάχια στην Αποθήκη" value={String(warehouseActiveCount)} color="#F5A5C0" />
             <StatCard title="Καταγραφές Log" value={String(activityTotal)} color="#A3E3BB" />
             <StatCard title="Σύνολο Δεδομένων" value={String(totalData)} color="#C3B2F7" />
-            <StatCard title="Ενεργές Παραγγελίες" value={String(activeOrdersTotal)} color="#FFD89B" />
           </View>
         ) : (
           <>
@@ -604,9 +591,6 @@ export default function DashboardScreen() {
             <View style={styles.statsRow}>
               <StatCard title={`Τεμάχια στην\nΑποθήκη`} value={String(warehouseActiveCount)} color="#F5A5C0" />
               <StatCard title={`Σύνολο\nΔεδομένων`} value={String(totalData)} color="#C3B2F7" />
-            </View>
-            <View style={styles.statsRow}>
-              <StatCard title={`Ενεργές\nΠαραγγελίες`} value={String(activeOrdersTotal)} color="#FFD89B" />
             </View>
           </>
         )}
@@ -1045,9 +1029,8 @@ export default function DashboardScreen() {
                         </Text>
                       </View>
                     ) : filteredPickupCustomers.length > 0 ? (
-                      <>
-                        <ScrollView style={styles.customerList} nestedScrollEnabled>
-                          {paginatedPickupCustomers.map((customer) => (
+                      <ScrollView style={styles.customerList} nestedScrollEnabled>
+                        {filteredPickupCustomers.map((customer) => (
                           <TouchableOpacity
                             key={customer.id}
                             onPress={() => {
@@ -1083,37 +1066,8 @@ export default function DashboardScreen() {
                               <Ionicons name="checkmark-circle" size={20} color="#3B82F6" />
                             )}
                           </TouchableOpacity>
-                          ))}
-                        </ScrollView>
-                        {/* Pagination Controls */}
-                        {totalPickupCustomersPages > 1 && (
-                          <View style={styles.paginationContainer}>
-                            <TouchableOpacity
-                              onPress={() => setPickupCustomersPage(prev => Math.max(1, prev - 1))}
-                              disabled={pickupCustomersPage === 1}
-                              style={[
-                                styles.paginationButton,
-                                pickupCustomersPage === 1 && styles.paginationButtonDisabled
-                              ]}
-                            >
-                              <Ionicons name="chevron-back" size={20} color={pickupCustomersPage === 1 ? "#9CA3AF" : "#3B82F6"} />
-                            </TouchableOpacity>
-                            <Text style={styles.paginationText}>
-                              Σελίδα {pickupCustomersPage} από {totalPickupCustomersPages}
-                            </Text>
-                            <TouchableOpacity
-                              onPress={() => setPickupCustomersPage(prev => Math.min(totalPickupCustomersPages, prev + 1))}
-                              disabled={pickupCustomersPage === totalPickupCustomersPages}
-                              style={[
-                                styles.paginationButton,
-                                pickupCustomersPage === totalPickupCustomersPages && styles.paginationButtonDisabled
-                              ]}
-                            >
-                              <Ionicons name="chevron-forward" size={20} color={pickupCustomersPage === totalPickupCustomersPages ? "#9CA3AF" : "#3B82F6"} />
-                            </TouchableOpacity>
-                          </View>
-                        )}
-                      </>
+                        ))}
+                      </ScrollView>
                     ) : null}
                     {pickupCustomerId && (
                       <View style={styles.selectedCustomerContainer}>
@@ -1271,7 +1225,7 @@ export default function DashboardScreen() {
 }
 
 // dashboard card
-function DashboardCard({ kind, title, bg, icon, onPress, isWide, customersPreview, historyItemsPreview, historyOrdersPreview, activityCounts, warehousePreview, activeOrdersPreview, activeOrdersTotal }: any) {
+function DashboardCard({ kind, title, bg, icon, onPress, isWide, customersPreview, historyItemsPreview, historyOrdersPreview, activityCounts, warehousePreview, activeOrdersPreview }: any) {
   const { previews } = usePreview();
   const effectivePreview = customersPreview ?? previews.customers;
   const [hovered, setHovered] = useState(false);
@@ -1404,11 +1358,7 @@ function DashboardCard({ kind, title, bg, icon, onPress, isWide, customersPrevie
 
         {kind === 'activeorders' && (
           <View style={[styles.hminiClip, Platform.OS !== 'web' && { maxHeight: 120 }]}>
-            <ActiveOrdersMiniCard 
-              onPressOpenOrders={onPress} 
-              ordersPreview={activeOrdersPreview || []} 
-              totalCount={activeOrdersTotal || 0}
-            />
+            <ActiveOrdersMiniCard onPressOpenOrders={onPress} ordersPreview={activeOrdersPreview || []} />
           </View>
         )}
       </LinearGradient>
@@ -1560,11 +1510,9 @@ function ActivityMiniCard({
 function ActiveOrdersMiniCard({
   onPressOpenOrders,
   ordersPreview,
-  totalCount = 0,
 }: {
   onPressOpenOrders?: () => void;
   ordersPreview: any[];
-  totalCount?: number;
 }) {
   const isMobile = Platform.OS !== 'web'; // true σε iOS/Android, false σε web
 
@@ -1583,7 +1531,7 @@ function ActiveOrdersMiniCard({
       <View style={styles.wminiHeader}>
         <View style={{ flex: 1 }} />
         <View style={styles.wminiBadge}>
-          <Text style={styles.wminiBadgeText}>{totalCount} παραγγελίες</Text>
+          <Text style={styles.wminiBadgeText}>{ordersPreview.length} παραγγελίες</Text>
         </View>
       </View>
 
@@ -1733,6 +1681,36 @@ const SOFT_BORDER_MOBILE = Platform.OS === 'web' ? {} : {
 
 const styles = StyleSheet.create({
   content: { flex: 1, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'flex-start' },
+  itemsManagementButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#F97316',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    marginBottom: 20,
+    ...(Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } },
+      android: { elevation: 3 },
+      web: { boxShadow: '0 4px 6px rgba(0,0,0,0.1)' } as any,
+    }) as object),
+
+    ...(Platform.OS !== 'web' && {
+      paddingVertical: 10,
+      paddingHorizontal: 14,
+      borderRadius: 10,
+      marginBottom: 4,
+      gap: 6,
+    }),
+  },
+  itemsManagementButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+    ...(Platform.OS !== 'web' && { fontSize: 14 }),
+  },
   grid: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1841,13 +1819,7 @@ const styles = StyleSheet.create({
   },
 
   statCard: {
-    ...(Platform.OS === 'web' ? {
-      width: '18%',
-      flex: 'none',
-      marginHorizontal: 8,
-    } : {
-      flex: 1,
-    }),
+    flex: 1,
     borderRadius: 16,
     paddingVertical: 18,
     paddingHorizontal: 14,
@@ -2640,27 +2612,6 @@ wminiShelfEmptyText: { color: '#6B7280' },
     fontSize: 12,
     color: '#6B7280',
     marginTop: 2,
-  },
-  paginationContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 16,
-    paddingVertical: 12,
-    gap: 16,
-  },
-  paginationButton: {
-    padding: 8,
-    borderRadius: 8,
-    backgroundColor: '#F3F4F6',
-  },
-  paginationButtonDisabled: {
-    opacity: 0.5,
-  },
-  paginationText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#374151',
   },
   noResultsContainer: {
     padding: 20,
