@@ -204,9 +204,9 @@ export async function pullChanges(
           const collection = database.get(tableName)
           
           for (const record of validatedCreated) {
-            // CRITICAL: Skip records that are marked as deleted
+            // CRITICAL: Skip records that are marked as deleted by server
             if (deletedIds.has(record.id)) {
-              console.warn(`[SYNC-DEBUG] ⚠️ Skipping record ${record.id} in ${tableName} - it's marked as deleted`)
+              console.warn(`[SYNC-DEBUG] ⚠️ Skipping record ${record.id} in ${tableName} - it's in server's deleted array`)
               continue
             }
             
@@ -216,36 +216,57 @@ export async function pullChanges(
                 // Record doesn't exist locally - safe to create
                 filteredCreated.push(record)
               } else {
+                // Check if record is marked as deleted locally
+                const raw = (existing as any)?._raw
+                const localStatus = raw?._status
+                
+                if (localStatus === 'deleted') {
+                  // Record is marked as deleted locally - skip it completely
+                  console.warn(`[SYNC-DEBUG] ⚠️ Skipping record ${record.id} in ${tableName} - it's marked as deleted locally`)
+                  continue
+                }
+                
                 // Record already exists locally - treat as update instead
                 console.warn(`[SYNC-DEBUG] Record ${record.id} in ${tableName} already exists locally, treating as update instead of create`)
                 filteredUpdated.push(record)
               }
             } catch {
-              // If check fails, include it anyway (let WatermelonDB handle it)
-              filteredCreated.push(record)
+              // If check fails, skip it to be safe
+              console.warn(`[SYNC-DEBUG] ⚠️ Error checking record ${record.id} in ${tableName}, skipping`)
             }
           }
           
           for (const record of validatedUpdated) {
-            // CRITICAL: Skip records that are marked as deleted
+            // CRITICAL: Skip records that are marked as deleted by server
             if (deletedIds.has(record.id)) {
-              console.warn(`[SYNC-DEBUG] ⚠️ Skipping record ${record.id} in ${tableName} - it's marked as deleted`)
+              console.warn(`[SYNC-DEBUG] ⚠️ Skipping record ${record.id} in ${tableName} - it's in server's deleted array`)
               continue
             }
             
             try {
               const existing = await collection.find(record.id).catch(() => null)
-              if (existing) {
-                // Record exists - safe to update
-                filteredUpdated.push(record)
-              } else {
-                // Record doesn't exist - treat as create instead
-                console.warn(`[SYNC-DEBUG] Record ${record.id} in ${tableName} doesn't exist locally, treating as create instead of update`)
-                filteredCreated.push(record)
+              if (!existing) {
+                // Check if we should create it or skip it
+                // If server says updated but record doesn't exist, it might have been deleted
+                console.warn(`[SYNC-DEBUG] Record ${record.id} in ${tableName} doesn't exist locally (was deleted?), skipping update`)
+                continue
               }
-            } catch {
-              // If check fails, include it anyway
+              
+              // Check if record is marked as deleted locally
+              const raw = (existing as any)?._raw
+              const localStatus = raw?._status
+              
+              if (localStatus === 'deleted') {
+                // Record is marked as deleted locally - skip it completely
+                console.warn(`[SYNC-DEBUG] ⚠️ Skipping record ${record.id} in ${tableName} - it's marked as deleted locally`)
+                continue
+              }
+              
+              // Record exists - safe to update
               filteredUpdated.push(record)
+            } catch {
+              // If check fails, skip it to be safe
+              console.warn(`[SYNC-DEBUG] ⚠️ Error checking record ${record.id} in ${tableName}, skipping`)
             }
           }
         })
@@ -411,6 +432,10 @@ export async function pushChanges(
       } catch {
         // Not JSON, use as-is
       }
+      
+      console.error('[SYNC-DEBUG] ❌ Push failed with status:', response.status)
+      console.error('[SYNC-DEBUG] ❌ Error response:', errorText)
+      console.error('[SYNC-DEBUG] ❌ Error JSON:', errorJson)
       
       throw new Error(`Push failed (${response.status}): ${errorJson?.message || errorJson?.error || errorText}`)
     }

@@ -67,7 +67,7 @@ async function checkNetworkStatus(): Promise<boolean> {
     clearTimeout(timeoutId)
     // If we get any response (even 404), we're online
 
-    console.log('[DEBUG] checkNetworkStatus: fetch OK on', Platform.OS)
+    // console.log('[DEBUG] checkNetworkStatus: fetch OK on', Platform.OS)
     return true
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -195,7 +195,7 @@ async function performSync(): Promise<void> {
  */
 async function hasAuthToken(): Promise<boolean> {
   const token = await storage.getItem('auth:token')
-  console.log('[AUTO-SYNC][DEBUG] hasAuthToken: auth:token =', token)
+  // console.log('[AUTO-SYNC][DEBUG] hasAuthToken: auth:token =', token)
 
   if (token) return true
 
