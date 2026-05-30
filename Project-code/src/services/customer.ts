@@ -340,11 +340,17 @@ export async function deleteCustomer(id: string, userIdForLog: string = 'system'
   let phoneRows: any[] = []
   let addressRows: any[] = []
 
+  // Step 1: Mark customer and related records as deleted in WatermelonDB
   await database.write(async () => {
     const rec: any = await customers.find(id)
 
     console.log('[DELETE-DEBUG] Customer BEFORE markAsDeleted:', rec._raw)
 
+    if (!rec) {
+      throw new Error(`Customer with id ${id} not found`)
+    }
+
+    // Save data for logging before deletion
     deletedData = {
       firstName: rec.firstName,
       lastName:  rec.lastName,
@@ -355,6 +361,7 @@ export async function deleteCustomer(id: string, userIdForLog: string = 'system'
       createdAt: rec.createdAt,
     }
 
+    // Get related records before marking as deleted
     const phonesCollection = database.get('customer_phones')
     const addressesCollection = database.get('customer_addresses')
 
@@ -362,26 +369,38 @@ export async function deleteCustomer(id: string, userIdForLog: string = 'system'
     addressRows = await addressesCollection.query(Q.where('customer_id', id)).fetch()
 
     // Mark related records as deleted (for sync)
-    for (const r of phoneRows) await r.markAsDeleted()
-    for (const r of addressRows) await r.markAsDeleted()
+    // This ensures phone/address deletions are also synced
+    for (const r of phoneRows) {
+      await r.markAsDeleted()
+    }
+    for (const r of addressRows) {
+      await r.markAsDeleted()
+    }
 
-    // Mark customer as deleted (for sync) - this will be pushed to server
-    // WatermelonDB will track this deletion and sync it automatically
+    // Mark customer as deleted (for sync)
+    // WatermelonDB will track this deletion and include it in sync
+    // When synchronize() is called, it will collect this ID in the 'deleted' array
     await rec.markAsDeleted()
 
     console.log('[DELETE-DEBUG] Customer AFTER markAsDeleted:', rec._raw)
   })
 
-  // Trigger sync immediately to push deletion to server
+  // Step 2: Trigger sync immediately to push deletion to server
+  // This ensures the deletion is synced right away, not waiting for periodic sync
   try {
-    await new Promise(resolve => setTimeout(resolve, 200))
+    // Small delay to ensure WatermelonDB has processed the deletion
+    await new Promise(resolve => setTimeout(resolve, 300))
+    
     const { manualSync } = await import('./autoSyncManager')
-    await manualSync()
+    const syncResult = await manualSync()
+    
+    console.log(`[DELETE] Customer ${id} deletion sync result:`, syncResult)
   } catch (syncError) {
-    // Don't throw - auto-sync will handle it
+    // Don't throw - auto-sync will handle it later
+    console.warn('[DELETE] Immediate sync failed, will be handled by auto-sync:', syncError)
   }
 
-  // Logs
+  // Step 3: Log the deletion (best-effort, don't block)
   try {
     for (const r of phoneRows) {
       await logDeleteCustomerPhone(userIdForLog, id, r.phone_number)
@@ -390,9 +409,9 @@ export async function deleteCustomer(id: string, userIdForLog: string = 'system'
       await logDeleteCustomerAddress(userIdForLog, id, r.address)
     }
     await logDeleteCustomer(userIdForLog, id, deletedData)
-    console.log('logDeleteCustomer OK')
+    console.log(`[DELETE] Customer ${id} deletion logged successfully`)
   } catch (err) {
-    console.warn('logDeleteCustomer failed:', err)
+    console.warn('[DELETE] Logging failed (non-critical):', err)
   }
 }
 
@@ -488,31 +507,8 @@ export async function updateCustomer(id: string, data: UpdateCustomer, userIdFor
         notes:     rec.notes,
       }
     })
-    
-    // Ensure record is marked for sync (force if needed)
-    const customers = database.get('customers')
-    const updatedRec = await customers.find(id)
-    const rawFinal = (updatedRec as any)._raw
-    
-    if (rawFinal?._status !== 'updated') {
-      await database.write(async () => {
-        const recToForce = await customers.find(id)
-        await recToForce.update((r: any) => {
-          r.lastModifiedAt = Date.now()
-        })
-      })
-    }
-         } catch (dbError) {
-           throw new Error(`Failed to update customer in database: ${dbError instanceof Error ? dbError.message : String(dbError)}`)
-         }
-
-  // Trigger sync immediately to push changes to server
-  try {
-    await new Promise(resolve => setTimeout(resolve, 200))
-    const { manualSync } = await import('./autoSyncManager')
-    await manualSync()
-  } catch (syncError) {
-    // Don't throw - auto-sync will handle it
+  } catch (dbError) {
+    throw new Error(`Failed to update customer in database: ${dbError instanceof Error ? dbError.message : String(dbError)}`)
   }
 
   // Activity log
